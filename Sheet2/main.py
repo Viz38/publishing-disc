@@ -2505,16 +2505,19 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
     final_raw_data = ""
     base_prompt_for_summery = row[38]
 
-    if raw_data_beat_soup:
-        final_raw_data = raw_data_beat_soup
-    elif raw_data_play_wright:
-        final_raw_data = raw_data_play_wright
-    elif raw_data_selenium:
-        final_raw_data = raw_data_selenium
-    elif raw_data_google_api:
-        final_raw_data = raw_data_google_api
-    elif raw_data_platform:
-        final_raw_data = raw_data_platform
+    # Check Col AF (raw_data_beat_soup) first; fallback to Col AL (row[37]) if empty
+    if raw_data_beat_soup and safe_str(raw_data_beat_soup).strip():
+        final_raw_data = safe_str(raw_data_beat_soup).strip()
+    elif len(row) > 37 and safe_str(row[37]).strip():
+        final_raw_data = safe_str(row[37]).strip()
+    elif raw_data_play_wright and safe_str(raw_data_play_wright).strip():
+        final_raw_data = safe_str(raw_data_play_wright).strip()
+    elif raw_data_selenium and safe_str(raw_data_selenium).strip():
+        final_raw_data = safe_str(raw_data_selenium).strip()
+    elif raw_data_google_api and safe_str(raw_data_google_api).strip():
+        final_raw_data = safe_str(raw_data_google_api).strip()
+    elif raw_data_platform and safe_str(raw_data_platform).strip():
+        final_raw_data = safe_str(raw_data_platform).strip()
 
     if len(final_raw_data) > 48000:
         final_raw_data = final_raw_data[:48000]
@@ -2537,6 +2540,9 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
     
     # ******************************* Gemini output for - Summery ***********************
 
+    # Summary status: SUCCESS, NO_RAW_DATA, or FAILED (written to Col AN / 40)
+    summary_status = ""
+
     # Smart auto-resume: check if NIM summary already exists in row (Col 41 / index 41 or index 40)
     existing_summary = ""
     if len(row) > 41 and safe_str(row[41]).strip() and safe_str(row[41]).strip() != safe_str(if_pred_base_prompt).strip():
@@ -2546,7 +2552,12 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
 
     if existing_summary:
         output_data_summery = existing_summary
-        logging.info(f"Smart auto-resume: reusing existing summary for {domain} (length {len(output_data_summery)})")
+        summary_status = safe_str(row[39]).strip() if (len(row) > 39 and safe_str(row[39]).strip()) else "SUCCESS"
+        logging.info(f"Smart auto-resume: reusing existing summary for {domain} (length {len(output_data_summery)}) with status {summary_status}")
+    elif not final_raw_data:
+        output_data_summery = ""
+        summary_status = "NO_RAW_DATA"
+        logging.info(f"No raw data found in Col AF or Col AL for {domain}. Marking summary status NO_RAW_DATA.")
     elif input_data_summery:
         input_data_summery = Utility_Replace_Response(input_data_summery, base_prompt_for_summery, replacable_char)
         input_data_summery = Utility_Replace_Response(domain, input_data_summery, replacable_char_Domain)
@@ -2586,9 +2597,14 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
             logging.error(f"Issue during Summary extraction pipeline for domain {domain}: {error}")
             output_data_summery = ""
 
+        if output_data_summery and output_data_summery.strip():
+            summary_status = "SUCCESS"
+        else:
+            summary_status = "FAILED"
+
     if mode == "phase2":
         output_data = [
-            final_raw_data, base_prompt_for_summery, input_data_summery, output_data_summery,
+            final_raw_data, base_prompt_for_summery, summary_status, output_data_summery,
             "", "", "", "", "",
             "", "", "", "", "", "", "",
             "", "", "", "", "", "", "", "", "", "", "",
@@ -3094,7 +3110,7 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
     #******************************************** Prepare Output ******************************************************************
 
 
-    output_data = [final_raw_data, base_prompt_for_summery, input_data_summery, output_data_summery, base_prompt_for_if,
+    output_data = [final_raw_data, base_prompt_for_summery, summary_status, output_data_summery, base_prompt_for_if,
                     input_data_for_if, output_data_if, output_data_if_name, output_data_if_id,
                     input_sumry_for_if_validation, base_prompt_for_if_validation, input_data_for_if_validation,
                     output_data_if_validation, input_sumry_for_feed, base_prompt_for_feed, input_data_for_feed,
@@ -3379,20 +3395,32 @@ async def Integrated_Process_domain(
                 mode=mode
             )
 
-            # Unpack AI Engine Outputs
+            # Unpack AI Engine Outputs (Col AN receives summary_status, Col AO receives output_data_summery)
             final_raw_data = AI_Engine_Output_Result[0]
             base_prompt_for_summery = "" #AI_Engine_Output_Result[1]
-            input_data_summery = "" #AI_Engine_Output_Result[2]
+            summary_status = AI_Engine_Output_Result[2]
             output_data_summery = AI_Engine_Output_Result[3]
 
-            base_prompt_for_if = AI_Engine_Output_Result[4]
+            if mode == "phase2":
+                phase2_data = [[summary_status, output_data_summery]]
+                await write_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, phase2_data, row, 40)
+                return {
+                    "tc_status": tc_status,
+                    "domain": domain,
+                    "row": row,
+                    "summary_status": summary_status,
+                    "summary": output_data_summery,
+                    "rowData": rowData
+                }
+
+            base_prompt_for_if = ""  # Col AP write back skipped per requirement
             input_data_for_if = AI_Engine_Output_Result[5]
             output_data_if = AI_Engine_Output_Result[6]
             output_data_if_name = AI_Engine_Output_Result[7]
             output_data_if_id = AI_Engine_Output_Result[8]
 
             input_sumry_for_if_validation = AI_Engine_Output_Result[9]
-            base_prompt_for_if_validation = AI_Engine_Output_Result[10]
+            base_prompt_for_if_validation = ""  # Col AV write back skipped per requirement
             input_data_for_if_validation = AI_Engine_Output_Result[11]
             output_data_if_validation = AI_Engine_Output_Result[12]
 
@@ -3425,14 +3453,14 @@ async def Integrated_Process_domain(
                 engineClearedTime = safe_str(rowData[20])
                 engineTimeTaken = rowData[22] if len(rowData) > 22 else ""
 
-            # Prepare sheet write array (Ending at Col BQ, Col BR to CP omitted per requirement)
+            # Prepare sheet write array (Col AN receives summary_status, Col AO receives output_data_summery)
             if EXTRACTING_SHEET_NAME == CF_EXTRACTING_SHEET_NAME:
                 AI_Engine_Result_Array.append([
                     enginePickedTime, engineClearedTime, engineClearedStatus, engineTimeTaken, 
                     tc_job_id, tc_job_gen_time, tc_status, tc_final_url, tc_s3_html, tc_s3_markdown, 
                     tc_http_status, tc_signals, scrappingBeautySoup, scrappingPlaywright, scrappingSelenium, 
                     scrappingGoogleAPI, scrappingTracxnPF, rowData[36], "", base_prompt_for_summery, 
-                    input_data_summery, output_data_summery, base_prompt_for_if, input_data_for_if, 
+                    summary_status, output_data_summery, base_prompt_for_if, input_data_for_if, 
                     output_data_if, output_data_if_name, output_data_if_id, input_sumry_for_if_validation, 
                     base_prompt_for_if_validation, input_data_for_if_validation, output_data_if_validation, 
                     input_sumry_for_feed, base_prompt_for_feed, input_data_for_feed, output_data_feed, 
@@ -3445,7 +3473,7 @@ async def Integrated_Process_domain(
                     tc_job_id, tc_job_gen_time, tc_status, tc_final_url, tc_s3_html, tc_s3_markdown, 
                     tc_http_status, tc_signals, scrappingBeautySoup, scrappingPlaywright, scrappingSelenium, 
                     scrappingGoogleAPI, scrappingTracxnPF, rowData[36], "", base_prompt_for_summery, 
-                    input_data_summery, output_data_summery, base_prompt_for_if_validation, 
+                    summary_status, output_data_summery, base_prompt_for_if_validation, 
                     input_data_for_if_validation, output_data_if_validation, input_sumry_for_if_validation, 
                     base_prompt_for_if, input_data_for_if, output_data_if, output_data_if_name, 
                     output_data_if_id, input_sumry_for_feed, base_prompt_for_feed, input_data_for_feed, 
