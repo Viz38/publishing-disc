@@ -25,8 +25,6 @@ function onOpen() {
   ui.createMenu('🚀 Tracxn Menu (Filter-V2)')
     .addItem('▶️ Run Pipeline', 'uiStartRun')
     .addSeparator()
-    .addItem('⚡ Run Daily Auto-Trigger (Row 3)', 'triggerDailyDiscoveryRun')
-    .addSeparator()
     .addItem('🚦 Check Status', 'uiCheckStatus')
     .addItem('📊 Check Health', 'uiCheckHealth')
     .addSeparator()
@@ -72,7 +70,16 @@ function uiStartRun(resumeOnly = false) {
   htmlContent += '<div id="selected-worker-label" style="background:#f0f9ff;color:#0369a1;padding:10px 12px;border-radius:8px;font-weight:600;margin-bottom:14px;font-size:13px;">✅ <span id="selected-name"></span></div>';
 
   htmlContent += '<label style="display:block;font-weight:600;font-size:13px;color:#475569;margin-bottom:6px;">🔢 Start Row</label>';
-  htmlContent += '<input type="number" id="startRow" value="4" min="2" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px;">';
+  htmlContent += '<input type="number" id="startRow" value="4" min="2" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px;margin-bottom:14px;">';
+
+  htmlContent += '<label style="display:block;font-weight:600;font-size:13px;color:#475569;margin-bottom:6px;">⚙️ Execution Phase / Mode</label>';
+  htmlContent += '<select id="runMode" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13.5px;background:white;color:#1e293b;font-weight:500;">';
+  htmlContent += '<option value="full">🚀 1: Full Run Mode (Smart Auto-Resume)</option>';
+  htmlContent += '<option value="phase1">🕷️ 2: Phase 1 Only: Tech Crawler Only</option>';
+  htmlContent += '<option value="phase2">🧠 3: Phase 2 Only: NIM Summary Generation</option>';
+  htmlContent += '<option value="phase3">🔮 4: Phase 3 Only: Gemini Predictions</option>';
+  htmlContent += '<option value="phase4">📝 5: Phase 4 Only: Tracxn Write API</option>';
+  htmlContent += '</select>';
 
   htmlContent += '<div id="phase-box" style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:12px;margin-top:14px;">';
   htmlContent += '<div style="font-weight:600;color:#1e40af;font-size:13px;">Target: Filter-V2 Pipeline</div>';
@@ -186,6 +193,7 @@ function uiStartRun(resumeOnly = false) {
   htmlContent += '  const startRow = parseInt(document.getElementById("startRow").value) || 4;';
   htmlContent += '  const selected = document.querySelector("input[name=workerChoice]:checked");';
   htmlContent += '  const workerUrl = selected ? selected.value : "auto";';
+  htmlContent += '  const runMode = document.getElementById("runMode") ? document.getElementById("runMode").value : "full";';
   htmlContent += '  document.getElementById("setup-view").style.display = "none";';
   htmlContent += '  showProgress();';
   htmlContent += '  google.script.run.withSuccessHandler(function(res){';
@@ -198,7 +206,7 @@ function uiStartRun(resumeOnly = false) {
   htmlContent += '  }).withFailureHandler(function(err){';
   htmlContent += '    document.getElementById("status-text").textContent = "❌ " + (err.message || err);';
   htmlContent += '    document.getElementById("status-text").style.color = "#dc2626";';
-  htmlContent += '  }).executeRunFromUi(startRow, workerUrl);';
+  htmlContent += '  }).executeRunFromUi(startRow, workerUrl, runMode, false);';
   htmlContent += '}';
 
   htmlContent += 'function showProgress(){';
@@ -363,7 +371,7 @@ function findIdleWorker_() {
   return candidates[0].worker;
 }
 
-function executeRunFromUi(startRow, chosenWorkerUrl) {
+function executeRunFromUi(startRow, chosenWorkerUrl, mode = 'full', silent = false) {
   let targetWorker = null;
   let rerouteNotice = null;
 
@@ -434,9 +442,11 @@ function executeRunFromUi(startRow, chosenWorkerUrl) {
   PropertiesService.getDocumentProperties().setProperty(CONFIG.ACTIVE_WORKER_PROP + '_NAME', targetWorker.name);
   if (rerouteNotice) {
     PropertiesService.getDocumentProperties().setProperty(CONFIG.ACTIVE_WORKER_PROP + '_REROUTE', rerouteNotice);
-    try {
-      SpreadsheetApp.getActiveSpreadsheet().toast(rerouteNotice, '⚡ Rerouted to Idle Device', 8);
-    } catch(e) {}
+    if (!silent) {
+      try {
+        SpreadsheetApp.getActiveSpreadsheet().toast(rerouteNotice, '⚡ Rerouted to Idle Device', 8);
+      } catch(e) {}
+    }
   } else {
     PropertiesService.getDocumentProperties().deleteProperty(CONFIG.ACTIVE_WORKER_PROP + '_REROUTE');
   }
@@ -448,7 +458,7 @@ function executeRunFromUi(startRow, chosenWorkerUrl) {
     headers: { 'Authorization': 'Bearer ' + CONFIG.AUTH_TOKEN },
     payload: JSON.stringify({ 
       start_row: startRow, 
-      mode: 'full', 
+      mode: mode, 
       sheet_id: SpreadsheetApp.getActiveSpreadsheet().getId()
     }),
     muteHttpExceptions: true
@@ -469,17 +479,14 @@ function executeRunFromUi(startRow, chosenWorkerUrl) {
 /**
  * Dedicated Daily Automated Trigger Function
  * Automatically balances and selects an idle production worker (5321 / 5080)
- * and starts the pipeline from Row 3 and below.
+ * and starts the pipeline from Row 3 and below in silent headless mode.
  * Select this function when configuring Time-driven Triggers in Google Apps Script.
  */
 function triggerDailyDiscoveryRun() {
-  Logger.log('⏰ Starting daily automated discovery run (startRow=3, auto worker selection)...');
+  Logger.log('⏰ Starting daily automated discovery run (startRow=3, auto worker selection, silent headless)...');
   try {
-    const result = executeRunFromUi(3, 'auto');
+    const result = executeRunFromUi(3, 'auto', 'full', true);
     Logger.log('✅ Automated pipeline run successfully dispatched to ' + result.workerName + ' (' + result.workerUrl + ')');
-    try {
-      SpreadsheetApp.getActiveSpreadsheet().toast('Pipeline started on ' + result.workerName + ' (Row 3+)', '🚀 Daily Trigger Active', 10);
-    } catch(e) {}
     return result;
   } catch(err) {
     Logger.log('❌ Automated daily trigger failed: ' + err.message);

@@ -580,7 +580,8 @@ async def Nvidia_API_ASYNC(promptMsg, token_rotator: NIMKeyManager = None, max_a
     global _nim_use_unverified_ssl
     system_instruction = "You are a professional website information extractor and summarizer."
     if max_attempts is None:
-        max_attempts = token_rotator.total_tokens * 2 if token_rotator else 5
+        tt = getattr(token_rotator, "total_tokens", None)
+        max_attempts = int(tt) * 2 if isinstance(tt, (int, float)) else 5
 
     payload = {
         "model": Nvidia_Base_Model,
@@ -2476,7 +2477,7 @@ except Exception as _e:
 
 
 
-async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_SHEET_NAME,cache_id_IF_Prediction,token_IF_Prediction,date_IF_Prediction,status_IF_Prediction,exp_date_IF_Prediction,  config_funnel_prompt,config_funnel_id_prompt,config_funnel_name_prompt,config_funnel_name_Feed_Cached_prompt,config_funnel_name_Feed_Cached_API_Token,config_funnel_name_Feed_Cached_Model,config_funnel_name_Feed_Cached_Gen_Date,config_funnel_name_Feed_Cached_Final_Status,token_rotator):
+async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_SHEET_NAME,cache_id_IF_Prediction,token_IF_Prediction,date_IF_Prediction,status_IF_Prediction,exp_date_IF_Prediction,  config_funnel_prompt,config_funnel_id_prompt,config_funnel_name_prompt,config_funnel_name_Feed_Cached_prompt,config_funnel_name_Feed_Cached_API_Token,config_funnel_name_Feed_Cached_Model,config_funnel_name_Feed_Cached_Gen_Date,config_funnel_name_Feed_Cached_Final_Status,token_rotator,mode="full"):
 
     start_time = datetime.datetime.now()
     today_date = datetime.datetime.now()
@@ -2564,7 +2565,17 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
     
     # ******************************* Gemini output for - Summery ***********************
 
-    if input_data_summery:
+    # Smart auto-resume: check if NIM summary already exists in row (Col 41 / index 41 or index 40)
+    existing_summary = ""
+    if len(row) > 41 and safe_str(row[41]).strip() and safe_str(row[41]).strip() != safe_str(if_pred_base_prompt).strip():
+        existing_summary = safe_str(row[41]).strip()
+    elif len(row) > 40 and safe_str(row[40]).strip() and safe_str(row[40]).strip() != safe_str(base_prompt_for_summery).strip() and not safe_str(row[40]).strip().startswith("http"):
+        existing_summary = safe_str(row[40]).strip()
+
+    if existing_summary:
+        output_data_summery = existing_summary
+        logging.info(f"Smart auto-resume: reusing existing summary for {domain} (length {len(output_data_summery)})")
+    elif input_data_summery:
         input_data_summery = Utility_Replace_Response(input_data_summery, base_prompt_for_summery, replacable_char)
         input_data_summery = Utility_Replace_Response(domain, input_data_summery, replacable_char_Domain)
 
@@ -2603,6 +2614,17 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
             logging.error(f"Issue during Summary extraction pipeline for domain {domain}: {error}")
             output_data_summery = ""
 
+    if mode == "phase2":
+        output_data = [
+            final_raw_data, base_prompt_for_summery, input_data_summery, output_data_summery,
+            "", "", "", "", "",
+            "", "", "", "", "", "", "",
+            "", "", "", "", "", "", "", "", "", "", "",
+            summary_input_Token, summary_thought_Token, summary_cache_Token, summary_output_Token, summary_total_Token, summary_llm_model,
+            *[""] * 18
+        ]
+        return output_data
+
     # logging.info("First Gemini Result Feed - ")# + output_data_summery)
 
 # **************************************************************************************************************
@@ -2615,7 +2637,22 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
     output_data_if_name = ""
     output_data_if_id = ""
 
-    if EXTRACTING_SHEET_NAME == CF_EXTRACTING_SHEET_NAME :
+    input_data_for_if_validation = ""
+    input_sumry_for_if_validation = ""
+    base_prompt_for_if_validation = ""
+    output_data_if_validation = ""
+
+    input_sumry_for_feed = ""
+    base_prompt_for_feed = ""
+    input_data_for_feed = ""
+    output_data_feed = ""
+
+    final_feed_name = ""
+    final_feed_id = ""
+    final_pub_funnel_name = ""
+    final_pub_funnel_id = ""
+
+    if EXTRACTING_SHEET_NAME != IF_EXTRACTING_SHEET_NAME:
 
         # ******************************* Gemini output for - IF ***********************
         input_data_for_if = output_data_summery  # Summery Input will be the Input for Second Query
@@ -2986,98 +3023,99 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
 
     #********************************************* Write API - Industry Funnel ************************************************
 
-    if EXTRACTING_SHEET_NAME == CF_EXTRACTING_SHEET_NAME and output_data_if_validation and   "Yes" not in output_data_if_validation :
-            tag_status_if = await Domain_HashTag_async(domain, Wrong_Validated_IF_Tag_Name, token)  
+    if mode not in ("phase2", "phase3"):
+        if EXTRACTING_SHEET_NAME == CF_EXTRACTING_SHEET_NAME and output_data_if_validation and   "Yes" not in output_data_if_validation :
+                tag_status_if = await Domain_HashTag_async(domain, Wrong_Validated_IF_Tag_Name, token)  
 
-            print("Validation Came NO with Tag Status : " ,tag_status_if)
-
-            cf_if_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
-
-            if cf_if_status == "TRUE":
-                cf_if_status = "DONE"
-            elif source_funnel_id :
-                # logging.info(f"This Domain will be escalated as in ESCALATED, Result :- {output_data_if}")
-
-                # cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id,filter_id,source_funnel_id, "ESCALATED", comment, Wrong_Validation_COMMENT) 
-
-                cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id,filter_id,source_funnel_id, "MARKED_FOR_LATER", Wrong_Validation_COMMENT,token)  
+                print("Validation Came NO with Tag Status : " ,tag_status_if)
 
                 cf_if_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
 
                 if cf_if_status == "TRUE":
                     cf_if_status = "DONE"
+                elif source_funnel_id :
+                    # logging.info(f"This Domain will be escalated as in ESCALATED, Result :- {output_data_if}")
 
-    if EXTRACTING_SHEET_NAME == IF_EXTRACTING_SHEET_NAME and output_data_if_validation == "Different IF Found" :
-            tag_status_if = await Domain_HashTag_async(domain, Wrong_Validated_Feed_Tag_Name, token)  
+                    # cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id,filter_id,source_funnel_id, "ESCALATED", comment, Wrong_Validation_COMMENT) 
 
-            cf_if_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
+                    cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id,filter_id,source_funnel_id, "MARKED_FOR_LATER", Wrong_Validation_COMMENT,token)  
 
-            if cf_if_status == "TRUE":
-                cf_if_status = "DONE"
-            elif source_funnel_id :
+                    cf_if_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
+
+                    if cf_if_status == "TRUE":
+                        cf_if_status = "DONE"
+
+        if EXTRACTING_SHEET_NAME == IF_EXTRACTING_SHEET_NAME and output_data_if_validation == "Different IF Found" :
+                tag_status_if = await Domain_HashTag_async(domain, Wrong_Validated_Feed_Tag_Name, token)  
+
+                cf_if_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
+
+                if cf_if_status == "TRUE":
+                    cf_if_status = "DONE"
+                elif source_funnel_id :
+                    # logging.info(f"This Domain will be escalated as in ESCALATED, Result :- {output_data_if}")
+
+                    cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, industry_funnel_id, filter_group_id,filter_id,industry_funnel_id, "MARKED_FOR_LATER", Wrong_Validation_COMMENT,token) #DiscoveryCentralFunctions.WriteAPI_Domain_Funnel_With_Tab(domain_profile_id, source_funnel_id,source_funnel_id, filter_group_id, filter_id, "ESCALATED", comment, token, 10)  #Need to define/implement
+                    cf_if_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
+
+                    if cf_if_status == "TRUE":
+                        cf_if_status = "DONE"
+
+
+
+        if (EXTRACTING_SHEET_NAME == CF_EXTRACTING_SHEET_NAME and  "Yes" in output_data_if_validation) or (EXTRACTING_SHEET_NAME == IF_EXTRACTING_SHEET_NAME and output_data_if_validation != "Different IF Found" ) :
+
+            if source_funnel_id and industry_funnel_id:
+                # print("Domain For HashTag : ",domain)
+                tag_status_if = await Domain_HashTag_async(domain, tag_name_if, token)  
+                # DiscoveryCentralFunctions.Domain_HashTag(domain, tag_name_if, token) #Need to define/implement
+                # logging.info(f"This Domain will Sucessfully Move to this Funnel :- {output_data_if_name}")
+
+                cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id,filter_id,industry_funnel_id, "MOVED_OUT", comment, token)
+                #DiscoveryCentralFunctions.WriteAPI_Domain_Funnel_With_Tab(domain_profile_id, source_funnel_id,industry_funnel_id, filter_group_id, filter_id, cf_if_action, comment, token, 10) #Need to define/implement
+                cf_if_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
+
+                if cf_if_status == "TRUE":
+                    cf_if_status = "DONE"
+            elif source_funnel_id and (not industry_funnel_id and (output_data_if == "22" or "MARKED_IRRELEVANT" in output_data_if)):
+                # logging.info(f"This Domain will be Rejected as in MARKED_IRRELEVANT, Result :- {output_data_if}")
+
+                cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id,filter_id,source_funnel_id, "MARKED_IRRELEVANT", comment, token)
+                #DiscoveryCentralFunctions.WriteAPI_Domain_Funnel_With_Tab(domain_profile_id, source_funnel_id,source_funnel_id, filter_group_id, filter_id, "MARKED_IRRELEVANT", comment, token, 10) #Need to define/implement
+
+                cf_if_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
+
+                if cf_if_status == "TRUE":
+                    cf_if_status = "DONE"
+            elif source_funnel_id and (not industry_funnel_id and (output_data_if == "23" or "ESCALATED" in output_data_if)):
                 # logging.info(f"This Domain will be escalated as in ESCALATED, Result :- {output_data_if}")
 
-                cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, industry_funnel_id, filter_group_id,filter_id,industry_funnel_id, "MARKED_FOR_LATER", Wrong_Validation_COMMENT,token) #DiscoveryCentralFunctions.WriteAPI_Domain_Funnel_With_Tab(domain_profile_id, source_funnel_id,source_funnel_id, filter_group_id, filter_id, "ESCALATED", comment, token, 10)  #Need to define/implement
+                cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id,filter_id,source_funnel_id, "ESCALATED", comment, token) #DiscoveryCentralFunctions.WriteAPI_Domain_Funnel_With_Tab(domain_profile_id, source_funnel_id,source_funnel_id, filter_group_id, filter_id, "ESCALATED", comment, token, 10)  #Need to define/implement
+                cf_if_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
+
+                if cf_if_status == "TRUE":
+                    cf_if_status = "DONE"
+            else:
+                # print(f"This Domain will be Snoozed as in SNOOZED, Result :- {output_data_if}")
+                cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id,filter_id,source_funnel_id, "SNOOZED", comment, token)
+                #DiscoveryCentralFunctions.WriteAPI_Domain_Funnel_With_Tab(domain_profile_id, source_funnel_id,source_funnel_id, filter_group_id, filter_id, "SNOOZED", comment, token, 10)  #Need to define/implement
                 cf_if_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
 
                 if cf_if_status == "TRUE":
                     cf_if_status = "DONE"
 
+        #********************************************* Write API - Publish Funnel ************************************************
 
+        if industry_funnel_id and publish_funnel_id:
+            tag_status_pf = await Domain_HashTag_async(domain, tag_name_pf, token) 
+            #DiscoveryCentralFunctions.Domain_HashTag(domain, tag_name_pf, token) #Need to define/implement
 
-    if (EXTRACTING_SHEET_NAME == CF_EXTRACTING_SHEET_NAME and  "Yes" in output_data_if_validation) or (EXTRACTING_SHEET_NAME == IF_EXTRACTING_SHEET_NAME and output_data_if_validation != "Different IF Found" ) :
+            if_pf_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, industry_funnel_id,filter_group_id, filter_id,publish_funnel_id,if_pf_action, comment, token) 
+            #DiscoveryCentralFunctions.WriteAPI_Domain_Funnel_With_Tab(domain_profile_id, industry_funnel_id,publish_funnel_id, filter_group_id, filter_id, if_pf_action, comment, token, 10) #Need to define/implement
+            if_pf_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
 
-        if source_funnel_id and industry_funnel_id:
-            # print("Domain For HashTag : ",domain)
-            tag_status_if = await Domain_HashTag_async(domain, tag_name_if, token)  
-            # DiscoveryCentralFunctions.Domain_HashTag(domain, tag_name_if, token) #Need to define/implement
-            # logging.info(f"This Domain will Sucessfully Move to this Funnel :- {output_data_if_name}")
-
-            cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id,filter_id,industry_funnel_id, "MOVED_OUT", comment, token)
-            #DiscoveryCentralFunctions.WriteAPI_Domain_Funnel_With_Tab(domain_profile_id, source_funnel_id,industry_funnel_id, filter_group_id, filter_id, cf_if_action, comment, token, 10) #Need to define/implement
-            cf_if_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
-
-            if cf_if_status == "TRUE":
-                cf_if_status = "DONE"
-        elif source_funnel_id and (not industry_funnel_id and (output_data_if == "22" or "MARKED_IRRELEVANT" in output_data_if)):
-            # logging.info(f"This Domain will be Rejected as in MARKED_IRRELEVANT, Result :- {output_data_if}")
-
-            cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id,filter_id,source_funnel_id, "MARKED_IRRELEVANT", comment, token)
-            #DiscoveryCentralFunctions.WriteAPI_Domain_Funnel_With_Tab(domain_profile_id, source_funnel_id,source_funnel_id, filter_group_id, filter_id, "MARKED_IRRELEVANT", comment, token, 10) #Need to define/implement
-
-            cf_if_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
-
-            if cf_if_status == "TRUE":
-                cf_if_status = "DONE"
-        elif source_funnel_id and (not industry_funnel_id and (output_data_if == "23" or "ESCALATED" in output_data_if)):
-            # logging.info(f"This Domain will be escalated as in ESCALATED, Result :- {output_data_if}")
-
-            cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id,filter_id,source_funnel_id, "ESCALATED", comment, token) #DiscoveryCentralFunctions.WriteAPI_Domain_Funnel_With_Tab(domain_profile_id, source_funnel_id,source_funnel_id, filter_group_id, filter_id, "ESCALATED", comment, token, 10)  #Need to define/implement
-            cf_if_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
-
-            if cf_if_status == "TRUE":
-                cf_if_status = "DONE"
-        else:
-            # print(f"This Domain will be Snoozed as in SNOOZED, Result :- {output_data_if}")
-            cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id,filter_id,source_funnel_id, "SNOOZED", comment, token)
-            #DiscoveryCentralFunctions.WriteAPI_Domain_Funnel_With_Tab(domain_profile_id, source_funnel_id,source_funnel_id, filter_group_id, filter_id, "SNOOZED", comment, token, 10)  #Need to define/implement
-            cf_if_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
-
-            if cf_if_status == "TRUE":
-                cf_if_status = "DONE"
-
-    #********************************************* Write API - Publish Funnel ************************************************
-
-    if industry_funnel_id and publish_funnel_id:
-        tag_status_pf = await Domain_HashTag_async(domain, tag_name_pf, token) 
-        #DiscoveryCentralFunctions.Domain_HashTag(domain, tag_name_pf, token) #Need to define/implement
-
-        if_pf_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, industry_funnel_id,filter_group_id, filter_id,publish_funnel_id,if_pf_action, comment, token) 
-        #DiscoveryCentralFunctions.WriteAPI_Domain_Funnel_With_Tab(domain_profile_id, industry_funnel_id,publish_funnel_id, filter_group_id, filter_id, if_pf_action, comment, token, 10) #Need to define/implement
-        if_pf_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
-
-        if if_pf_status == "TRUE":
-            if_pf_status = "DONE"
+            if if_pf_status == "TRUE":
+                if_pf_status = "DONE"
 
     # inbetween_sheet.update_acell("B7", dstart + i) #Save point for next execution.
 
@@ -3145,7 +3183,8 @@ async def Integrated_Process_domain(
     config_funnel_name_Feed_Cached_prompt, config_funnel_name_Feed_Cached_API_Token, 
     config_funnel_name_Feed_Cached_Model, config_funnel_name_Feed_Cached_Gen_Date, 
     config_funnel_name_Feed_Cached_Final_Status, token_rotator,
-    created_timestamp=None
+    created_timestamp=None,
+    mode="full"
 ):
     async with semaphore:
         try:
@@ -3252,6 +3291,26 @@ async def Integrated_Process_domain(
 
             body_results = home_body if home_body else ["Website is not working."]
 
+            if mode == "phase1":
+                phase1_data = [[
+                    tc_job_id, tc_job_gen_time, tc_status, tc_final_url,
+                    tc_s3_html, tc_s3_markdown, tc_http_status, tc_signals,
+                    scrappingBeautySoup
+                ]]
+                await write_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, phase1_data, row, 24)
+                return {
+                    "tc_status": tc_status,
+                    "domain": domain,
+                    "row": row,
+                    "tc_job_id": tc_job_id,
+                    "rowData": [
+                        *rowData[:23], tc_job_id, tc_job_gen_time, tc_status, tc_final_url,
+                        tc_s3_html, tc_s3_markdown, tc_http_status, tc_signals, scrappingBeautySoup,
+                        *rowData[32:]
+                    ],
+                    "body": body_results
+                }
+
             AI_Engine_Result_Array = []
             Domain = rowData[0]
             skip_done = False
@@ -3344,7 +3403,8 @@ async def Integrated_Process_domain(
                 config_funnel_id_prompt, config_funnel_name_prompt,
                 config_funnel_name_Feed_Cached_prompt, config_funnel_name_Feed_Cached_API_Token,
                 config_funnel_name_Feed_Cached_Model, config_funnel_name_Feed_Cached_Gen_Date,
-                config_funnel_name_Feed_Cached_Final_Status,token_rotator
+                config_funnel_name_Feed_Cached_Final_Status,token_rotator,
+                mode=mode
             )
 
             # Unpack AI Engine Outputs
@@ -3382,12 +3442,16 @@ async def Integrated_Process_domain(
             tag_status_pf = AI_Engine_Output_Result[26]
 
             # Once write API (last step) is completed, update Col U with current date and time (format: 12/Oct/2026 15:00:14)
-            finishing_time_Format = datetime.datetime.now()
-            engineClearedTime = finishing_time_Format.strftime("%d/%b/%Y %H:%M:%S")
-            engineTimeTaken = (finishing_time_Format - picking_time_Format).total_seconds()
+            if mode == "full":
+                finishing_time_Format = datetime.datetime.now()
+                engineClearedTime = finishing_time_Format.strftime("%d/%b/%Y %H:%M:%S")
+                engineTimeTaken = (finishing_time_Format - picking_time_Format).total_seconds()
 
-            if not engineClearedStatus:
-                engineClearedStatus = "To be checked"
+                if not engineClearedStatus:
+                    engineClearedStatus = "To be checked"
+            else:
+                engineClearedTime = safe_str(rowData[20])
+                engineTimeTaken = rowData[22] if len(rowData) > 22 else ""
 
             # Prepare sheet write array
             if EXTRACTING_SHEET_NAME == CF_EXTRACTING_SHEET_NAME:
@@ -3457,6 +3521,7 @@ async def Integrated_Extract_domains(
     config_funnel_name_Feed_Cached_Final_Status,
     token_rotator,
     start_row_num=4,
+    mode="full",
 ):
 
     pf_data = await read_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, start_row=start_row_num)
@@ -3512,6 +3577,7 @@ async def Integrated_Extract_domains(
                             config_funnel_name_Feed_Cached_Gen_Date,
                             config_funnel_name_Feed_Cached_Final_Status,
                             token_rotator,
+                            mode=mode,
                         )
                     )
                     tasks.append(task)
@@ -3608,7 +3674,8 @@ async def Integrated_Extract_domains(
                                 config_funnel_name_Feed_Cached_Gen_Date,
                                 config_funnel_name_Feed_Cached_Final_Status,
                                 token_rotator,
-                                created_timestamp=c_ts
+                                created_timestamp=c_ts,
+                                mode=mode
                             )
                         else:
                             still_pending.append(item)
@@ -3841,34 +3908,38 @@ async def main():
             Nvidia_Base_Model = model_to_pick
 
         # Extraction & Prediction Phase
-        try:
-            await Integrated_Extract_domains(
-                client,
-                active_sheet_id,
-                CF_EXTRACTING_SHEET_NAME,
-                cache_id_IF_Prediction,
-                token_IF_Prediction,
-                date_IF_Prediction,
-                status_IF_Prediction,
-                exp_date_IF_Prediction,
-                config_funnel_prompt,
-                config_funnel_id_prompt,
-                config_funnel_name_prompt,
-                config_funnel_name_Feed_Cached_prompt,
-                config_funnel_name_Feed_Cached_API_Token,
-                config_funnel_name_Feed_Cached_Model,
-                config_funnel_name_Feed_Cached_Gen_Date,
-                config_funnel_name_Feed_Cached_Final_Status,
-                token_rotator=token_rotator,
-                start_row_num=start_row_arg,
-            )
-            logging.info("Integrated_Extract_domains phase completed.")
-        except Exception as e:
-            logging.error(f"Error in Integrated_Extract_domains: {e}")
-            raise
+        if mode_arg != "phase4":
+            try:
+                await Integrated_Extract_domains(
+                    client,
+                    active_sheet_id,
+                    CF_EXTRACTING_SHEET_NAME,
+                    cache_id_IF_Prediction,
+                    token_IF_Prediction,
+                    date_IF_Prediction,
+                    status_IF_Prediction,
+                    exp_date_IF_Prediction,
+                    config_funnel_prompt,
+                    config_funnel_id_prompt,
+                    config_funnel_name_prompt,
+                    config_funnel_name_Feed_Cached_prompt,
+                    config_funnel_name_Feed_Cached_API_Token,
+                    config_funnel_name_Feed_Cached_Model,
+                    config_funnel_name_Feed_Cached_Gen_Date,
+                    config_funnel_name_Feed_Cached_Final_Status,
+                    token_rotator=token_rotator,
+                    start_row_num=start_row_arg,
+                    mode=mode_arg
+                )
+                logging.info(f"Integrated_Extract_domains phase ({mode_arg}) completed.")
+            except Exception as e:
+                logging.error(f"Error in Integrated_Extract_domains: {e}")
+                raise
+        else:
+            logging.info("Phase 4 mode: skipping Integrated_Extract_domains phase.")
 
         # Review & Rejection Write API Phase
-        if not os.path.exists(STOP_FILE):
+        if mode_arg in ("full", "phase4") and not os.path.exists(STOP_FILE):
             logging.info("***************** Review & Write API Phase Started *******************")
             try:
                 await Process_Review_Caller(client, mainheaders, active_sheet_id, CF_EXTRACTING_SHEET_NAME, start_row_num=start_row_arg)
