@@ -1,0 +1,34 @@
+# Testing and Temp Scripts (Mandatory rule)
+Temp_Test/
+
+# Changelog (Do not send to remote)
+CHANGELOG.md
+
+# State & Orchestration runtime files
+.progress.json
+.progress.json.tmp.*
+.stop_requested
+*.lock
+.*.json
+
+# Logs
+Logs/
+*.log
+*.logs
+
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Environment and sensitive keys
+.env
+*.json
+!credentials_template.json
+.venv/
+env/
+venv/
+
+# macOS artifacts
+.DS_Store
