@@ -61,29 +61,152 @@ log() {
 
 echo -e "\n--- Session Started: $(date) ---" >> "$LOG_FILE"
 
-# Ensure dependencies on Ubuntu
-if [[ "$OS" == "Linux" ]]; then
-    for cmd in screen lsof cloudflared curl; do
-        if ! command -v $cmd &>/dev/null; then
-            echo -e "\033[1;33m⚠️  $cmd is missing. Installing...\033[0m"
-            log "INFO" "Installing missing dependency: $cmd"
-            if [[ "$cmd" == "cloudflared" ]]; then
-                echo -e "   ▶ Downloading cloudflared..."
-                curl -L --output /tmp/cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb >> "$SETUP_LOG" 2>&1
-                sudo dpkg -i /tmp/cloudflared.deb >> "$SETUP_LOG" 2>&1
+ensure_system_dependencies() {
+    local ARCH=$(uname -m 2>/dev/null || echo "x86_64")
+    log "INFO" "Ensuring system dependencies (OS: $OS, Arch: $ARCH)"
+
+    if [[ "$OS" == "Linux" ]]; then
+        local CF_DEB_ARCH="amd64"
+        local CF_RPM_ARCH="x86_64"
+        case "$ARCH" in
+            x86_64|amd64)
+                CF_DEB_ARCH="amd64"
+                CF_RPM_ARCH="x86_64"
+                ;;
+            aarch64|arm64)
+                CF_DEB_ARCH="arm64"
+                CF_RPM_ARCH="aarch64"
+                ;;
+            armv7l|armhf)
+                CF_DEB_ARCH="arm"
+                CF_RPM_ARCH="armhf"
+                ;;
+            *)
+                CF_DEB_ARCH="amd64"
+                CF_RPM_ARCH="x86_64"
+                ;;
+        esac
+
+        # 1. Debian / Ubuntu family (apt-get)
+        if command -v apt-get &>/dev/null; then
+            local missing_cmds=()
+            for cmd in git screen lsof curl; do
+                if ! command -v $cmd &>/dev/null; then
+                    missing_cmds+=("$cmd")
+                fi
+            done
+            if ! dpkg -s ca-certificates &>/dev/null; then
+                missing_cmds+=("ca-certificates")
+            fi
+            if [ ${#missing_cmds[@]} -gt 0 ]; then
+                echo -e "${YELLOW}⚠️  Installing missing packages (${missing_cmds[*]})...${NC}"
+                log "INFO" "Installing packages: ${missing_cmds[*]}"
+                sudo apt-get update >> "$SETUP_LOG" 2>&1
+                sudo apt-get install -y "${missing_cmds[@]}" >> "$SETUP_LOG" 2>&1
+            fi
+
+            local dev_pkgs=()
+            if ! dpkg -s build-essential &>/dev/null; then dev_pkgs+=("build-essential"); fi
+            if ! dpkg -s python3-dev &>/dev/null; then dev_pkgs+=("python3-dev"); fi
+            if ! dpkg -s python3-venv &>/dev/null; then dev_pkgs+=("python3-venv"); fi
+            if [ ${#dev_pkgs[@]} -gt 0 ]; then
+                echo -e "${YELLOW}⚠️  Installing build & Python tools (${dev_pkgs[*]})...${NC}"
+                log "INFO" "Installing dev tools: ${dev_pkgs[*]}"
+                sudo apt-get update >> "$SETUP_LOG" 2>&1
+                sudo apt-get install -y "${dev_pkgs[@]}" >> "$SETUP_LOG" 2>&1
+            fi
+
+            if ! command -v cloudflared &>/dev/null; then
+                echo -e "${YELLOW}⚠️  Installing cloudflared ($CF_DEB_ARCH)...${NC}"
+                log "INFO" "Installing cloudflared ($CF_DEB_ARCH)"
+                curl -L --output /tmp/cloudflared.deb "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${CF_DEB_ARCH}.deb" >> "$SETUP_LOG" 2>&1
+                sudo dpkg -i /tmp/cloudflared.deb >> "$SETUP_LOG" 2>&1 || sudo apt-get install -f -y >> "$SETUP_LOG" 2>&1
                 rm -f /tmp/cloudflared.deb
-            else
-                sudo apt-get update >> "$SETUP_LOG" 2>&1 && sudo apt-get install -y $cmd >> "$SETUP_LOG" 2>&1
+            fi
+
+        # 2. Red Hat / CentOS / Fedora / Rocky / AlmaLinux family (dnf / yum)
+        elif command -v dnf &>/dev/null || command -v yum &>/dev/null; then
+            local PKG_MGR="dnf"
+            command -v dnf &>/dev/null || PKG_MGR="yum"
+            local missing_cmds=()
+            for cmd in git screen lsof curl; do
+                if ! command -v $cmd &>/dev/null; then
+                    missing_cmds+=("$cmd")
+                fi
+            done
+            if ! command -v gcc &>/dev/null; then missing_cmds+=("gcc" "gcc-c++" "make"); fi
+            if ! rpm -q python3-devel &>/dev/null; then missing_cmds+=("python3-devel"); fi
+            if ! rpm -q ca-certificates &>/dev/null; then missing_cmds+=("ca-certificates"); fi
+
+            if [ ${#missing_cmds[@]} -gt 0 ]; then
+                echo -e "${YELLOW}⚠️  Installing missing packages (${missing_cmds[*]})...${NC}"
+                log "INFO" "Installing packages: ${missing_cmds[*]}"
+                sudo $PKG_MGR install -y "${missing_cmds[@]}" >> "$SETUP_LOG" 2>&1
+            fi
+
+            if ! command -v cloudflared &>/dev/null; then
+                echo -e "${YELLOW}⚠️  Installing cloudflared ($CF_RPM_ARCH)...${NC}"
+                log "INFO" "Installing cloudflared ($CF_RPM_ARCH)"
+                curl -L --output /tmp/cloudflared.rpm "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${CF_RPM_ARCH}.rpm" >> "$SETUP_LOG" 2>&1
+                sudo rpm -i /tmp/cloudflared.rpm >> "$SETUP_LOG" 2>&1 || sudo $PKG_MGR install -y /tmp/cloudflared.rpm >> "$SETUP_LOG" 2>&1
+                rm -f /tmp/cloudflared.rpm
+            fi
+
+        # 3. Arch Linux family (pacman)
+        elif command -v pacman &>/dev/null; then
+            local missing_cmds=()
+            for cmd in git screen lsof curl; do
+                if ! command -v $cmd &>/dev/null; then
+                    missing_cmds+=("$cmd")
+                fi
+            done
+            if ! command -v gcc &>/dev/null; then missing_cmds+=("base-devel"); fi
+            if ! command -v python3 &>/dev/null; then missing_cmds+=("python" "python-pip"); fi
+            if [ ${#missing_cmds[@]} -gt 0 ]; then
+                echo -e "${YELLOW}⚠️  Installing missing packages (${missing_cmds[*]})...${NC}"
+                log "INFO" "Installing packages: ${missing_cmds[*]}"
+                sudo pacman -Sy --noconfirm "${missing_cmds[@]}" >> "$SETUP_LOG" 2>&1
+            fi
+
+            if ! command -v cloudflared &>/dev/null; then
+                echo -e "${YELLOW}⚠️  Installing cloudflared binary ($CF_DEB_ARCH)...${NC}"
+                log "INFO" "Installing cloudflared binary ($CF_DEB_ARCH)"
+                sudo curl -L --output /usr/local/bin/cloudflared "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${CF_DEB_ARCH}" >> "$SETUP_LOG" 2>&1
+                sudo chmod +x /usr/local/bin/cloudflared 2>/dev/null
             fi
         fi
-    done
 
-    if ! dpkg -s build-essential &>/dev/null; then
-        echo -e "\033[1;33m⚠️  build-essential is missing. Installing...\033[0m"
-        log "INFO" "Installing build-essential"
-        sudo apt-get update >> "$SETUP_LOG" 2>&1 && sudo apt-get install -y build-essential python3-dev >> "$SETUP_LOG" 2>&1
+    elif [[ "$OS" == "Darwin" ]]; then
+        if ! command -v git &>/dev/null; then
+            echo -e "${YELLOW}⚠️  git is missing on macOS. Prompting installation...${NC}"
+            if command -v brew &>/dev/null; then
+                brew install git >> "$SETUP_LOG" 2>&1
+            else
+                xcode-select --install 2>/dev/null || true
+            fi
+        fi
+
+        if ! command -v cloudflared &>/dev/null; then
+            echo -e "${YELLOW}⚠️  cloudflared is missing on macOS.${NC}"
+            if command -v brew &>/dev/null; then
+                echo -e "   ▶ Installing cloudflared via Homebrew..."
+                brew install cloudflared >> "$SETUP_LOG" 2>&1
+            else
+                local MAC_ARCH="arm64"
+                [[ "$ARCH" == "x86_64" ]] && MAC_ARCH="amd64"
+                echo -e "   ▶ Downloading cloudflared for macOS ($MAC_ARCH)..."
+                curl -L --output /tmp/cloudflared.tgz "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-${MAC_ARCH}.tgz" >> "$SETUP_LOG" 2>&1
+                tar -xzf /tmp/cloudflared.tgz -C /tmp/ >> "$SETUP_LOG" 2>&1
+                sudo mv /tmp/cloudflared /usr/local/bin/cloudflared 2>/dev/null || mv /tmp/cloudflared "$HOME/.local/bin/cloudflared" 2>/dev/null
+                chmod +x /usr/local/bin/cloudflared 2>/dev/null || chmod +x "$HOME/.local/bin/cloudflared" 2>/dev/null
+                rm -f /tmp/cloudflared.tgz
+            fi
+        fi
     fi
-fi
+}
+
+ensure_system_dependencies
+
 
 FOLDERS=("Sheet1" "Sheet2" "Sheet3" "Sheet4")
 PORTS=(8769 8770 8771 8772)
@@ -701,6 +824,7 @@ while true; do
     read -p "Option [1-10]: " opt
     case $opt in
         1)
+            ensure_system_dependencies
             if [ -z "$PYTHON_CMD" ]; then echo -e "${RED}Error: No Python 3.10+ found!${NC}"; sleep 3; continue; fi
 
             export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
@@ -726,6 +850,11 @@ while true; do
             [ ! -f "$BASE_DIR/.venv/bin/python" ] && uv venv "$BASE_DIR/.venv" --python "$PYTHON_CMD" --clear > /dev/null 2>&1
             echo -e "   ▶ Installing dependencies via uv..."
             uv sync --python "$BASE_DIR/.venv/bin/python" >> "$SETUP_LOG" 2>&1
+
+            if [ -f "$BASE_DIR/.venv/bin/camoufox" ]; then
+                echo -e "   ▶ Pre-fetching Camoufox stealth browser binaries..."
+                "$BASE_DIR/.venv/bin/camoufox" fetch >> "$SETUP_LOG" 2>&1 || true
+            fi
 
             for f in "${FOLDERS[@]}"; do
                 mkdir -p "$BASE_DIR/$f/Logs"

@@ -25,7 +25,10 @@ dependencies = [
     "requests",
     "httpx",
     "uvicorn[standard]",
-    "pytest"
+    "pytest",
+    "scrapling",
+    "camoufox",
+    "playwright"
 ]
 
 [tool.uv]
