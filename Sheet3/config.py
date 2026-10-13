@@ -47,6 +47,7 @@ class Settings:
     To_Review_TAG_NAME: str = "bu_llm_domainformanualreview"
     Wrong_Validated_IF_Tag_Name: str = "bu_llm_domainwrong_if_validation"
     Wrong_Validated_Feed_Tag_Name: str = "bu_llm_domainwrong_feed_validation"
+    Discovery_Processing_TAG_NAME: str = "bu_llm_discovery_processing"
     COMMENT: str = "This is a Write API Movement by Gemini"
     Wrong_Validation_COMMENT: str = "This is a Write API Movement by Gemini(Marked for Manager review)"
 

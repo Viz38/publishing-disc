@@ -139,6 +139,7 @@ Config_Sheet_ID = settings.Config_Sheet_ID
 To_Review_TAG_NAME = "bu_llm_domainformanualreview" #"domainformanualreview"
 Wrong_Validated_IF_Tag_Name = "bu_llm_domainwrong_if_validation" #"domainwrong_if_validation"
 Wrong_Validated_Feed_Tag_Name = "bu_llm_domainwrong_feed_validation" #"domainwrong_feed_validation"
+Discovery_Processing_TAG_NAME = "bu_llm_discovery_processing"
 COMMENT = "This is a Write API Movement by Gemini"
 Wrong_Validation_COMMENT = "This is a Write API Movement by Gemini(Marked for Manager review)"
 
@@ -3105,6 +3106,9 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
             if if_pf_status == "TRUE":
                 if_pf_status = "DONE"
 
+        # Add discovery processing hashtag at the end of Tracxn write API execution
+        await Domain_HashTag_async(domain, Discovery_Processing_TAG_NAME, token)
+
     # inbetween_sheet.update_acell("B7", dstart + i) #Save point for next execution.
 
     #******************************************** Prepare Output ******************************************************************
@@ -3744,6 +3748,9 @@ async def Process_Review_domain(session, row, row_number, client, semaphore,SHEE
                     cf_if_time = get_ist_timestamp()
                     if cf_if_status == "TRUE":
                         cf_if_status = "DONE"
+
+                # Add discovery processing hashtag at the end of review write API execution
+                await Domain_HashTag_async(domain, Discovery_Processing_TAG_NAME, TOKEN)
 
             # Prepare output data
             output_row = [
