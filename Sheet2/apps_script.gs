@@ -22,14 +22,14 @@ const CONFIG = {
 
 function onOpen() {
   const ui = SpreadsheetApp.getUi();
-  ui.createMenu('🚀 Tracxn Menu (CF-2)')
-    .addItem('▶️ Run Pipeline', 'uiStartRun')
+  ui.createMenu('\uD83D\uDE80 Discovery Engine (CF-2)')
+    .addItem('\u25B6\uFE0F Run Pipeline', 'uiStartRun')
     .addSeparator()
-    .addItem('🚦 Check Status', 'uiCheckStatus')
-    .addItem('📊 Check Health', 'uiCheckHealth')
+    .addItem('\uD83D\uDEA6 Check Status', 'uiCheckStatus')
+    .addItem('\uD83D\uDCCA Check Health', 'uiCheckHealth')
     .addSeparator()
-    .addItem("🧹 Clean Sheet", "cleanSheet")
-    .addItem("⚠️ Force Reset", "forceReset")
+    .addItem("\uD83E\uDDF9 Clean Sheet", "cleanSheet")
+    .addItem("\u26A0\uFE0F Force Reset", "forceReset")
     .addToUi();
 }
 
@@ -48,7 +48,7 @@ function uiStartRun(resumeOnly = false) {
   htmlContent += '</head><body>';
 
   htmlContent += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;padding-bottom:14px;border-bottom:1px solid #e2e8f0;">';
-  htmlContent += '<h1 style="font-size:17px;font-weight:700;margin:0;color:#0f172a;">🚀 CF-2 Pipeline</h1>';
+  htmlContent += '<h1 style="font-size:17px;font-weight:700;margin:0;color:#0f172a;">\uD83D\uDE80 Discovery Engine (CF-2)</h1>';
   htmlContent += '<span style="font-size:12px;background:#e0f2fe;color:#0369a1;padding:4px 8px;border-radius:6px;font-weight:600;">Discovery AI - CF-2 (Nandan Domains DB)</span>';
   htmlContent += '</div>';
 
@@ -60,25 +60,25 @@ function uiStartRun(resumeOnly = false) {
   htmlContent += '</div>';
 
   htmlContent += '<div style="display:flex;gap:10px;">';
-  htmlContent += '<button id="fetch-btn" onclick="fetchStatuses()" class="btn-secondary" style="flex:1;">🔄 Refresh Status</button>';
-  htmlContent += '<button id="next-btn" onclick="goToSetup()" class="btn-primary" style="flex:1;" disabled>Next →</button>';
+  htmlContent += '<button id="fetch-btn" onclick="fetchStatuses()" class="btn-secondary" style="flex:1;">\uD83D\uDD04 Refresh Status</button>';
+  htmlContent += '<button id="next-btn" onclick="goToSetup()" class="btn-primary" style="flex:1;" disabled>Next \u2192</button>';
   htmlContent += '</div></div>';
 
   // Step 2: Setup
   htmlContent += '<div id="setup-view" style="display:none;">';
   htmlContent += '<div style="background:white;border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin-bottom:16px;">';
-  htmlContent += '<div id="selected-worker-label" style="background:#f0f9ff;color:#0369a1;padding:10px 12px;border-radius:8px;font-weight:600;margin-bottom:14px;font-size:13px;">✅ <span id="selected-name"></span></div>';
+  htmlContent += '<div id="selected-worker-label" style="background:#f0f9ff;color:#0369a1;padding:10px 12px;border-radius:8px;font-weight:600;margin-bottom:14px;font-size:13px;">\u2705 <span id="selected-name"></span></div>';
 
-  htmlContent += '<label style="display:block;font-weight:600;font-size:13px;color:#475569;margin-bottom:6px;">🔢 Start Row</label>';
+  htmlContent += '<label style="display:block;font-weight:600;font-size:13px;color:#475569;margin-bottom:6px;">\uD83D\uDD22 Start Row</label>';
   htmlContent += '<input type="number" id="startRow" value="4" min="2" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px;margin-bottom:14px;">';
 
-  htmlContent += '<label style="display:block;font-weight:600;font-size:13px;color:#475569;margin-bottom:6px;">⚙️ Execution Phase / Mode</label>';
+  htmlContent += '<label style="display:block;font-weight:600;font-size:13px;color:#475569;margin-bottom:6px;">\u2699\uFE0F Execution Phase / Mode</label>';
   htmlContent += '<select id="runMode" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13.5px;background:white;color:#1e293b;font-weight:500;">';
-  htmlContent += '<option value="full">🚀 1: Full Run Mode (Smart Auto-Resume)</option>';
-  htmlContent += '<option value="phase1">🕷️ 2: Phase 1 Only: Tech Crawler Only</option>';
-  htmlContent += '<option value="phase2">🧠 3: Phase 2 Only: NIM Summary Generation</option>';
-  htmlContent += '<option value="phase3">🔮 4: Phase 3 Only: Gemini Predictions</option>';
-  htmlContent += '<option value="phase4">📝 5: Phase 4 Only: Tracxn Write API</option>';
+  htmlContent += '<option value="full">\uD83D\uDE80 1: Full Run Mode (Smart Auto-Resume)</option>';
+  htmlContent += '<option value="phase1">\uD83D\uDD77\uFE0F 2: Phase 1 Only: Tech Crawler Only</option>';
+  htmlContent += '<option value="phase2">\uD83E\uDDE0 3: Phase 2 Only: NIM Summary Generation</option>';
+  htmlContent += '<option value="phase3">\uD83D\uDD2E 4: Phase 3 Only: Gemini Predictions</option>';
+  htmlContent += '<option value="phase4">\uD83D\uDCDD 5: Phase 4 Only: Tracxn Write API</option>';
   htmlContent += '</select>';
 
   htmlContent += '<div id="phase-box" style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:12px;margin-top:14px;">';
@@ -87,8 +87,8 @@ function uiStartRun(resumeOnly = false) {
   htmlContent += '</div></div>';
 
   htmlContent += '<div style="display:flex;gap:10px;">';
-  htmlContent += '<button onclick="goToWorkers()" class="btn-secondary" style="flex:1;">← Back</button>';
-  htmlContent += '<button onclick="runPipeline()" class="btn-primary" style="flex:2;">▶️ Start Pipeline</button>';
+  htmlContent += '<button onclick="goToWorkers()" class="btn-secondary" style="flex:1;">\u2190 Back</button>';
+  htmlContent += '<button onclick="runPipeline()" class="btn-primary" style="flex:2;">\u25B6\uFE0F Start Pipeline</button>';
   htmlContent += '</div></div>';
 
   // Step 3: Progress
@@ -107,12 +107,12 @@ function uiStartRun(resumeOnly = false) {
   htmlContent += '</div>';
 
   htmlContent += '<div id="completion-info" style="display:none;background:#f0fdf4;border:1px solid #86efac;border-radius:10px;padding:14px;text-align:center;margin-top:16px;">';
-  htmlContent += '<strong style="color:#166534;font-size:14px;">✨ Run Completed</strong>';
+  htmlContent += '<strong style="color:#166534;font-size:14px;">\u2728 Run Completed</strong>';
   htmlContent += '<div id="completion-msg" style="margin-top:6px;color:#15803d;font-size:12.5px;"></div>';
   htmlContent += '</div>';
 
   htmlContent += '<div style="display:flex;gap:10px;margin-top:20px;">';
-  htmlContent += '<button id="stop-btn" onclick="cancelRun()" style="flex:1;padding:12px;background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;border-radius:8px;font-weight:600;cursor:pointer;">⏹️ Stop Pipeline</button>';
+  htmlContent += '<button id="stop-btn" onclick="cancelRun()" style="flex:1;padding:12px;background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;border-radius:8px;font-weight:600;cursor:pointer;">\u23F9\uFE0F Stop Pipeline</button>';
   htmlContent += '<button onclick="google.script.host.close()" class="btn-secondary" style="flex:1;">Close</button>';
   htmlContent += '</div></div>';
 
@@ -156,17 +156,17 @@ function uiStartRun(resumeOnly = false) {
 
   htmlContent += 'function fetchStatuses(){';
   htmlContent += '  const urls = workersList.filter(w => w.url !== "auto").map(w => w.url);';
-  htmlContent += '  document.getElementById("fetch-btn").textContent = "⏳ Checking...";';
+  htmlContent += '  document.getElementById("fetch-btn").textContent = "\u23F3 Checking...";';
   htmlContent += '  google.script.run.withSuccessHandler(function(results){';
-  htmlContent += '    document.getElementById("fetch-btn").textContent = "🔄 Refresh Status";';
+  htmlContent += '    document.getElementById("fetch-btn").textContent = "\uD83D\uDD04 Refresh Status";';
   htmlContent += '    results.forEach(r => {';
   htmlContent += '      const w = workersList.find(x => x.url === r.url);';
   htmlContent += '      if(w) {';
   htmlContent += '        if(!r.isOnline) { w.statusHtml = "Offline"; }';
-  htmlContent += '        else if(w.isTesting) { w.statusHtml = r.isIdle ? "🟢 Idle (Testing Only)" : "🟡 Running (Testing Only)"; }';
-  htmlContent += '        else if(r.isAtCapacity) { w.statusHtml = "🔴 At Capacity (" + r.device_active_sheets + "/2 active - will reroute)"; }';
-  htmlContent += '        else if(!r.isIdle) { w.statusHtml = "🟡 Busy (" + r.device_active_sheets + "/2 active)"; }';
-  htmlContent += '        else { w.statusHtml = "🟢 Idle (" + r.device_active_sheets + "/2 active)"; }';
+  htmlContent += '        else if(w.isTesting) { w.statusHtml = r.isIdle ? "\uD83D\uDFE2 Idle (Testing Only)" : "\uD83D\uDFE1 Running (Testing Only)"; }';
+  htmlContent += '        else if(r.isAtCapacity) { w.statusHtml = "\uD83D\uDD34 At Capacity (" + r.device_active_sheets + "/2 active - will reroute)"; }';
+  htmlContent += '        else if(!r.isIdle) { w.statusHtml = "\uD83D\uDFE1 Busy (" + r.device_active_sheets + "/2 active)"; }';
+  htmlContent += '        else { w.statusHtml = "\uD83D\uDFE2 Idle (" + r.device_active_sheets + "/2 active)"; }';
   htmlContent += '      }';
   htmlContent += '    });';
   htmlContent += '    renderWorkers();';
@@ -204,7 +204,7 @@ function uiStartRun(resumeOnly = false) {
   htmlContent += '    }';
   htmlContent += '    startPolling();';
   htmlContent += '  }).withFailureHandler(function(err){';
-  htmlContent += '    document.getElementById("status-text").textContent = "❌ " + (err.message || err);';
+  htmlContent += '    document.getElementById("status-text").textContent = "\u274C " + (err.message || err);';
   htmlContent += '    document.getElementById("status-text").style.color = "#dc2626";';
   htmlContent += '  }).executeRunFromUi(startRow, workerUrl, runMode, false);';
   htmlContent += '}';
@@ -236,12 +236,12 @@ function uiStartRun(resumeOnly = false) {
   htmlContent += '  const cur = s.progress_current || 0;';
   htmlContent += '  const pct = total > 0 ? Math.round((cur / total) * 100) : 0;';
   htmlContent += '  if(s.active){';
-  htmlContent += '    if(s.is_stopping) sText.textContent = "⏳ Stopping process...";';
-  htmlContent += '    else sText.textContent = "⚡ Running (Row " + cur + " of " + total + ")...";';
+  htmlContent += '    if(s.is_stopping) sText.textContent = "\u23F3 Stopping process...";';
+  htmlContent += '    else sText.textContent = "\u26A1 Running (Row " + cur + " of " + total + ")...";';
   htmlContent += '  } else {';
-  htmlContent += '    if(s.status === "stopped"){ pFill.style.background = "#eab308"; sText.textContent = "⏹️ Stopped"; compMsg.textContent = "Pipeline stopped by user."; }';
-  htmlContent += '    else if(s.status === "failed"){ pFill.style.background = "#ef4444"; sText.textContent = "❌ Failed"; compMsg.textContent = "Process encountered an error."; }';
-  htmlContent += '    else { pFill.style.background = "#10b981"; sText.textContent = "✅ Completed!"; compMsg.textContent = "All domains processed."; }';
+  htmlContent += '    if(s.status === "stopped"){ pFill.style.background = "#eab308"; sText.textContent = "\u23F9\uFE0F Stopped"; compMsg.textContent = "Pipeline stopped by user."; }';
+  htmlContent += '    else if(s.status === "failed"){ pFill.style.background = "#ef4444"; sText.textContent = "\u274C Failed"; compMsg.textContent = "Process encountered an error."; }';
+  htmlContent += '    else { pFill.style.background = "#10b981"; sText.textContent = "\u2705 Completed!"; compMsg.textContent = "All domains processed."; }';
   htmlContent += '  }';
   htmlContent += '  pFill.style.width = pct + "%";';
   htmlContent += '  document.getElementById("count-text").textContent = cur + " / " + total + " rows (" + pct + "%)";';
@@ -253,7 +253,7 @@ function uiStartRun(resumeOnly = false) {
   htmlContent += 'function cancelRun(){';
   htmlContent += '  const btn = document.getElementById("stop-btn");';
   htmlContent += '  if(!isStopping){';
-  htmlContent += '    if(btn){ btn.textContent = "⏳ Stopping..."; btn.disabled = true; }';
+  htmlContent += '    if(btn){ btn.textContent = "\u23F3 Stopping..."; btn.disabled = true; }';
   htmlContent += '    google.script.run.withSuccessHandler(function(){ pollProgress(); }).executeCancelFromUi();';
   htmlContent += '    isStopping = true;';
   htmlContent += '  }';
@@ -262,14 +262,14 @@ function uiStartRun(resumeOnly = false) {
   htmlContent += '</script></body></html>';
 
   const html = HtmlService.createHtmlOutput(htmlContent).setWidth(430).setHeight(460);
-  SpreadsheetApp.getUi().showModalDialog(html, '🚀 CF-2 Pipeline Wizard');
+  SpreadsheetApp.getUi().showModalDialog(html, '\uD83D\uDE80 Discovery Engine - CF-2 Wizard');
 }
 
 function uiCheckStatus() {
   const s = getStatusJson();
   const ui = SpreadsheetApp.getUi();
   const worker = PropertiesService.getDocumentProperties().getProperty(CONFIG.ACTIVE_WORKER_PROP + '_NAME') || 'None';
-  ui.alert('🚦 Status: ' + s.status.toUpperCase() + '\nWorker: ' + worker + '\nProgress: ' + (s.progress_current || 0) + '/' + (s.progress_total || 0));
+  ui.alert('\uD83D\uDEA6 Status: ' + s.status.toUpperCase() + '\nWorker: ' + worker + '\nProgress: ' + (s.progress_current || 0) + '/' + (s.progress_total || 0));
 }
 
 function uiCheckHealth() {
@@ -284,13 +284,13 @@ function uiCheckHealth() {
     } catch(e) {}
     return { name: w.name, isOnline: isOnline };
   });
-  let htmlContent = '<html><body style="font-family:Inter,sans-serif;padding:16px;"><h3>📊 CF-2 Fleet Health</h3>';
+  let htmlContent = '<html><body style="font-family:Inter,sans-serif;padding:16px;"><h3>\uD83D\uDCCA Discovery Engine Fleet Health (CF-2)</h3>';
   results.forEach(r => {
-    htmlContent += '<p>' + (r.isOnline ? '✅ ' : '❌ ') + '<strong>' + r.name + '</strong>: ' + (r.isOnline ? 'Online' : 'Offline') + '</p>';
+    htmlContent += '<p>' + (r.isOnline ? '\u2705 ' : '\u274C ') + '<strong>' + r.name + '</strong>: ' + (r.isOnline ? 'Online' : 'Offline') + '</p>';
   });
   htmlContent += '</body></html>';
   const html = HtmlService.createHtmlOutput(htmlContent).setWidth(380).setHeight(320);
-  SpreadsheetApp.getUi().showModalDialog(html, '📊 CF-2 Fleet Health');
+  SpreadsheetApp.getUi().showModalDialog(html, '\uD83D\uDCCA Discovery Engine Fleet Health (CF-2)');
 }
 
 function uiCheckHealthServer() {
@@ -424,7 +424,7 @@ function executeRunFromUi(startRow, chosenWorkerUrl, mode = 'full', silent = fal
               const reason = (chosenStatus && chosenStatus.device_active_sheets >= 2)
                 ? 'device reached capacity (' + chosenStatus.device_active_sheets + '/2 sheets active)'
                 : 'device is busy running this sheet';
-              rerouteNotice = '⚠️ ' + selected.name + ' ' + reason + '. Automatically rerouted to idle worker ' + alt.name + '.';
+              rerouteNotice = '\u26A0\uFE0F ' + selected.name + ' ' + reason + '. Automatically rerouted to idle worker ' + alt.name + '.';
               break;
             }
           }
@@ -444,7 +444,7 @@ function executeRunFromUi(startRow, chosenWorkerUrl, mode = 'full', silent = fal
     PropertiesService.getDocumentProperties().setProperty(CONFIG.ACTIVE_WORKER_PROP + '_REROUTE', rerouteNotice);
     if (!silent) {
       try {
-        SpreadsheetApp.getActiveSpreadsheet().toast(rerouteNotice, '⚡ Rerouted to Idle Device', 8);
+        SpreadsheetApp.getActiveSpreadsheet().toast(rerouteNotice, '\u26A1 Rerouted to Idle Device', 8);
       } catch(e) {}
     }
   } else {
@@ -483,13 +483,13 @@ function executeRunFromUi(startRow, chosenWorkerUrl, mode = 'full', silent = fal
  * Select this function when configuring Time-driven Triggers in Google Apps Script.
  */
 function triggerDailyDiscoveryRun() {
-  Logger.log('⏰ Starting daily automated discovery run (startRow=3, auto worker selection, silent headless)...');
+  Logger.log('\u23F0 Starting daily automated discovery run (startRow=3, auto worker selection, silent headless)...');
   try {
     const result = executeRunFromUi(3, 'auto', 'full', true);
-    Logger.log('✅ Automated pipeline run successfully dispatched to ' + result.workerName + ' (' + result.workerUrl + ')');
+    Logger.log('\u2705 Automated pipeline run successfully dispatched to ' + result.workerName + ' (' + result.workerUrl + ')');
     return result;
   } catch(err) {
-    Logger.log('❌ Automated daily trigger failed: ' + err.message);
+    Logger.log('\u274C Automated daily trigger failed: ' + err.message);
     throw err;
   }
 }
@@ -519,10 +519,10 @@ function executeCancelFromUi() {
 }
 
 function cleanSheet() {
-  SpreadsheetApp.getActiveSpreadsheet().toast("🧹 Cleaning completed.");
+  SpreadsheetApp.getActiveSpreadsheet().toast("\uD83E\uDDF9 Cleaning completed.");
 }
 
 function forceReset() {
   PropertiesService.getDocumentProperties().deleteAllProperties();
-  SpreadsheetApp.getActiveSpreadsheet().toast("✅ All cache cleared.");
+  SpreadsheetApp.getActiveSpreadsheet().toast("\u2705 All cache cleared.");
 }

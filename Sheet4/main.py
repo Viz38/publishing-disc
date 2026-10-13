@@ -309,6 +309,7 @@ def open_sheet_with_fallback(client, sheet_id: str):
 
 
 async def read_sheet_data(client, SHEET_ID, sheet_name, start_row=4, start_col=1):
+    logging.info(f"Opening sheet {SHEET_ID} [{sheet_name}] to load rows starting from row {start_row}...")
     is_pipe = is_pipeline_sheet(SHEET_ID)
     primary_mgr = await get_gspread_client()
     backup_mgr = await get_gspread_client_backup()
@@ -335,11 +336,18 @@ async def read_sheet_data(client, SHEET_ID, sheet_name, start_row=4, start_col=1
         sheet = await gc.open_by_key(SHEET_ID)
 
     worksheet = await sheet.worksheet(sheet_name)
+    logging.info(f"Downloading rows from worksheet [{sheet_name}]...")
     if hasattr(worksheet, "get_values"):
         data = await worksheet.get_values()
     else:
         data = await worksheet.get_all_values()
-    return data[max(0, start_row - 1):]  # Return rows starting from start_row
+
+    raw_total = len(data) if data else 0
+    sliced_data = data[max(0, start_row - 1):] if data else []
+    logging.info(f"Retrieved {raw_total} total rows from [{sheet_name}]. Sliced {len(sliced_data)} rows starting from row {start_row}.")
+    if not sliced_data and raw_total > 0:
+        logging.warning(f"⚠️ start_row={start_row} is beyond the total rows ({raw_total}) in worksheet [{sheet_name}]! No domains to process.")
+    return sliced_data
 
 
 async def write_sheet_data(client, SHEET_ID, sheet_name, data, start_row, start_col=4):
