@@ -133,7 +133,8 @@ IF_EXTRACTING_SHEET_NAME = "IF_Engine_Database"
 
 CREDENTIALS_FILE = settings.CREDENTIALS_FILE
 MAX_WORKERS = 10  # Adjusted for better async processing
-BATCH_SIZE = 10  # Adjusted for better async processing
+BATCH_SIZE = settings.BATCH_SIZE  # Default 100 rows per batch
+_WORKSHEET_CACHE = {}
 Config_Sheet_ID = settings.Config_Sheet_ID
 
 To_Review_TAG_NAME = "bu_llm_domainformanualreview" #"domainformanualreview"
@@ -352,6 +353,11 @@ async def read_sheet_data(client, SHEET_ID, sheet_name, start_row=4, start_col=1
 
 
 async def write_sheet_data(client, SHEET_ID, sheet_name, data, start_row, start_col=4):
+    if not data or not data[0]:
+        return
+    cache_key = (str(SHEET_ID).strip(), str(sheet_name).strip())
+    worksheet = _WORKSHEET_CACHE.get(cache_key)
+
     is_pipe = is_pipeline_sheet(SHEET_ID)
     primary_mgr = await get_gspread_client()
     backup_mgr = await get_gspread_client_backup()
@@ -361,28 +367,44 @@ async def write_sheet_data(client, SHEET_ID, sheet_name, data, start_row, start_
     else:
         first_mgr, second_mgr = (backup_mgr or primary_mgr), (primary_mgr if backup_mgr else None)
 
-    sheet = None
-    if first_mgr:
-        try:
-            gc = await first_mgr.authorize()
-            sheet = await gc.open_by_key(SHEET_ID)
-        except Exception as e:
-            if second_mgr:
-                logging.warning(f"First async client failed for sheet {SHEET_ID} ({e}). Retrying with fallback...")
-                gc = await second_mgr.authorize()
+    if worksheet is None:
+        sheet = None
+        if first_mgr:
+            try:
+                gc = await first_mgr.authorize()
                 sheet = await gc.open_by_key(SHEET_ID)
-            else:
-                raise
-    elif second_mgr:
-        gc = await second_mgr.authorize()
-        sheet = await gc.open_by_key(SHEET_ID)
+            except Exception as e:
+                if second_mgr:
+                    logging.warning(f"First async client failed for sheet {SHEET_ID} ({e}). Retrying with fallback...")
+                    gc = await second_mgr.authorize()
+                    sheet = await gc.open_by_key(SHEET_ID)
+                else:
+                    raise
+        elif second_mgr:
+            gc = await second_mgr.authorize()
+            sheet = await gc.open_by_key(SHEET_ID)
 
-    worksheet = await sheet.worksheet(sheet_name)
+        worksheet = await sheet.worksheet(sheet_name)
+        _WORKSHEET_CACHE[cache_key] = worksheet
+
     cell_range = f"{get_column_letter(start_col)}{start_row}:{get_column_letter(start_col + len(data[0]) - 1)}{start_row + len(data) - 1}"
     try:
-        await worksheet.update(values=data, range_name=cell_range, value_input_option='USER_ENTERED')
-    except TypeError:
-        await worksheet.update(cell_range, data, value_input_option='USER_ENTERED')
+        try:
+            await worksheet.update(values=data, range_name=cell_range, value_input_option='USER_ENTERED')
+        except TypeError:
+            await worksheet.update(cell_range, data, value_input_option='USER_ENTERED')
+    except Exception as update_err:
+        logging.warning(f"Worksheet update failed ({update_err}). Invalidating cache and retrying...")
+        _WORKSHEET_CACHE.pop(cache_key, None)
+        sheet = None
+        gc = await (second_mgr or first_mgr).authorize() if second_mgr else await first_mgr.authorize()
+        sheet = await gc.open_by_key(SHEET_ID)
+        worksheet = await sheet.worksheet(sheet_name)
+        _WORKSHEET_CACHE[cache_key] = worksheet
+        try:
+            await worksheet.update(values=data, range_name=cell_range, value_input_option='USER_ENTERED')
+        except TypeError:
+            await worksheet.update(cell_range, data, value_input_option='USER_ENTERED')
 
 
 # ****************************** Data Cleaning ************************************************************************
@@ -560,7 +582,7 @@ def sanitize_summary_output(raw_output: str) -> str:
 
 _nim_use_unverified_ssl = False
 
-async def Nvidia_API_ASYNC(promptMsg, token_rotator: NIMKeyManager = None, max_attempts: int = None):
+async def Nvidia_API_ASYNC(promptMsg, token_rotator: NIMKeyManager = None, max_attempts: int = None, session: aiohttp.ClientSession = None):
     global _nim_use_unverified_ssl
     system_instruction = "You are a professional website information extractor and summarizer."
     if max_attempts is None:
@@ -603,9 +625,13 @@ async def Nvidia_API_ASYNC(promptMsg, token_rotator: NIMKeyManager = None, max_a
             "Accept": "application/json"
         }
 
+        close_sess = False
+        active_sess = session
+        if active_sess is None:
+            active_sess = aiohttp.ClientSession()
+            close_sess = True
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(Nvidia_Endpoint, headers=headers, json=payload, timeout=timeout, ssl=ssl_ctx) as resp:
+            async with active_sess.post(Nvidia_Endpoint, headers=headers, json=payload, timeout=timeout, ssl=ssl_ctx) as resp:
 
                     # ?? 200 OK ??
                     if resp.status == 200:
@@ -767,7 +793,7 @@ async def Gemini_API_ASYNC_Live_And_Working(promptMsg, Gemini_Token=GEMINI_TOKEN
         return ""
 
 # async def Gemini_API_WAIT_AND_HOLD(promptMsg, Gemini_Token="YOUR_TOKEN", timeout_limit=60):
-async def Gemini_API_ASYNC(promptMsg, Gemini_Token=GEMINI_TOKEN, timeout_limit=60):
+async def Gemini_API_ASYNC(promptMsg, Gemini_Token=GEMINI_TOKEN, timeout_limit=60, session: aiohttp.ClientSession = None):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key={Gemini_Token}"
 
     formData = {
@@ -789,10 +815,13 @@ async def Gemini_API_ASYNC(promptMsg, Gemini_Token=GEMINI_TOKEN, timeout_limit=6
         "model" : ""
     }
 
-    try :
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            # The 'await' here ensures the process holds until completion
-            async with session.post(url, headers=headers, json=formData) as response:
+    close_sess = False
+    active_sess = session
+    if active_sess is None:
+        active_sess = aiohttp.ClientSession(timeout=timeout)
+        close_sess = True
+    try:
+        async with active_sess.post(url, headers=headers, json=formData, timeout=timeout) as response:
                 if response.status == 200:
                     json_res = await response.json()
 
@@ -816,9 +845,15 @@ async def Gemini_API_ASYNC(promptMsg, Gemini_Token=GEMINI_TOKEN, timeout_limit=6
     except Exception as e:
         print(f"Unexpected error: {e}")
         return ""
+    finally:
+        if close_sess:
+            try:
+                await active_sess.close()
+            except Exception:
+                pass
     
 
-async def Gemini_API_WITH_CACHE(user_input_msg, Gemini_Token, cache_name, timeout_limit=60):
+async def Gemini_API_WITH_CACHE(user_input_msg, Gemini_Token, cache_name, timeout_limit=60, session: aiohttp.ClientSession = None):
     # Model must match the one used to create the cache
     model_id = "gemini-3.1-flash-lite"
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent?key={Gemini_Token}"
@@ -1628,7 +1663,7 @@ def get_api_result(payload=None, api_url="https://platform.tracxn.com/api/2.2/do
         return {'error': str(e)}
 
 
-async def get_api_result_async(payload=None, api_url="https://platform.tracxn.com/api/2.2/domains", method='POST', token=Tracxn_API_Token):
+async def get_api_result_async(payload=None, api_url="https://platform.tracxn.com/api/2.2/domains", method='POST', token=Tracxn_API_Token, session: aiohttp.ClientSession = None):
     if token == '':
         print("Please pass the Token as it is mandatory for this project")
         return
@@ -1649,22 +1684,31 @@ async def get_api_result_async(payload=None, api_url="https://platform.tracxn.co
     if 'dataset' not in payload:
         payload['dataset'] = 'internal'
 
+    close_sess = False
+    active_sess = session
+    if active_sess is None:
+        active_sess = aiohttp.ClientSession()
+        close_sess = True
     try:
-        async with aiohttp.ClientSession() as session:
-            if method.upper() == 'POST':
-                async with session.post(api_url, json=payload, headers=headers) as response:
-                    response.raise_for_status()
-                    return await response.json()
-            elif method.upper() == 'PUT':
-                async with session.put(api_url, json=payload, headers=headers) as response:
-                    response.raise_for_status()
-                    return await response.json()
-            else:
-                raise ValueError("Invalid HTTP method. Use 'POST' or 'PUT'.")
-    
+        if method.upper() == 'POST':
+            async with active_sess.post(api_url, json=payload, headers=headers) as response:
+                response.raise_for_status()
+                return await response.json()
+        elif method.upper() == 'PUT':
+            async with active_sess.put(api_url, json=payload, headers=headers) as response:
+                response.raise_for_status()
+                return await response.json()
+        else:
+            raise ValueError("Invalid HTTP method. Use 'POST' or 'PUT'.")
     except aiohttp.ClientError as e:
         print(f"Error in getting API result: {e}")
         return {'error': str(e)}
+    finally:
+        if close_sess:
+            try:
+                await active_sess.close()
+            except Exception:
+                pass
     
 
 #**************************** Tag Addition ***********************************
@@ -1724,11 +1768,11 @@ def Domain_HashTag(domain, newtag='NO', token=Tracxn_API_Token):
         else:
             return 'YES'
 
-async def Domain_HashTag_async(domain, newtag='NO', token=Tracxn_API_Token):
+async def Domain_HashTag_async(domain, newtag='NO', token=Tracxn_API_Token, session: aiohttp.ClientSession = None):
     payload = {"filter": {"domain": [domain]}, "dataset": "internal"}
     api_url = "https://platform.tracxn.com/api/2.2/domains"
 
-    response = await get_api_result_async(payload, api_url, 'POST', token)
+    response = await get_api_result_async(payload, api_url, 'POST', token, session=session)
 
     if response and response.get("result") and response["result"][0] is not None:
         result = response["result"][0]
@@ -1759,7 +1803,7 @@ async def Domain_HashTag_async(domain, newtag='NO', token=Tracxn_API_Token):
         Payload = {"id": domainprofileid, "keywords": {"value": {"HASHTAGS": hashtags}}, "dataset": "internal"}
         API_URL = f"https://platform.tracxn.com/data/entities/2.0/domain-profile?domain={domain}&tab=COMPANY_PROFILE"
 
-        writestatus = await get_api_result_async(Payload, API_URL, 'PUT', token)
+        writestatus = await get_api_result_async(Payload, API_URL, 'PUT', token, session=session)
 
         if "errorCode" in writestatus and writestatus["errorCode"] is not None and writestatus["errorCode"] != 400000000 and writestatus["message"] is not None:
             return 'NO'
@@ -1809,7 +1853,7 @@ async def Domain_HashTag_Remove_async(domain, remove_tag='NO', token=Tracxn_API_
         }
 
         update_url = f"https://platform.tracxn.com/data/entities/2.0/domain-profile?domain={domain}&tab=COMPANY_PROFILE"
-        write_status = await get_api_result_async(update_payload, update_url, 'PUT', token)
+        write_status = await get_api_result_async(update_payload, update_url, 'PUT', token, session=session)
 
         if (
             "errorCode" in write_status and write_status["errorCode"] is not None
@@ -1865,7 +1909,7 @@ def WriteAPI_Domain_Funnel(domainProfileId, source_funnelID, filterGroupId,filte
     # print('retdata', retdata)
     return retdata
 
-async def WriteAPI_Domain_Funnel_async(domainProfileId, source_funnelID, filterGroupId, filterId, dest_Funnel, status, comments, token = Tracxn_API_Token):
+async def WriteAPI_Domain_Funnel_async(domainProfileId, source_funnelID, filterGroupId, filterId, dest_Funnel, status, comments, token = Tracxn_API_Token, session: aiohttp.ClientSession = None):
     if domainProfileId == "" or source_funnelID == '' or dest_Funnel == '' or status == '':
         return 'FALSE'
 
@@ -2450,7 +2494,7 @@ except Exception as _e:
 
 
 
-async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_SHEET_NAME,cache_id_IF_Prediction,token_IF_Prediction,date_IF_Prediction,status_IF_Prediction,exp_date_IF_Prediction,  config_funnel_prompt,config_funnel_id_prompt,config_funnel_name_prompt,config_funnel_name_Feed_Cached_prompt,config_funnel_name_Feed_Cached_API_Token,config_funnel_name_Feed_Cached_Model,config_funnel_name_Feed_Cached_Gen_Date,config_funnel_name_Feed_Cached_Final_Status,token_rotator,mode="full"):
+async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_SHEET_NAME,cache_id_IF_Prediction,token_IF_Prediction,date_IF_Prediction,status_IF_Prediction,exp_date_IF_Prediction,  config_funnel_prompt,config_funnel_id_prompt,config_funnel_name_prompt,config_funnel_name_Feed_Cached_prompt,config_funnel_name_Feed_Cached_API_Token,config_funnel_name_Feed_Cached_Model,config_funnel_name_Feed_Cached_Gen_Date,config_funnel_name_Feed_Cached_Final_Status,token_rotator,mode="full",session=None):
 
     start_time = datetime.datetime.now()
     today_date = datetime.datetime.now()
@@ -2565,7 +2609,7 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
 
         try:
             # 1. Primary Attempt: NVIDIA API Call
-            output_data_summery = await Nvidia_API_ASYNC(input_data_summery, token_rotator=token_rotator)
+            output_data_summery = await Nvidia_API_ASYNC(input_data_summery, token_rotator=token_rotator, session=session)
             
             # 2. Fallback Attempt: Gemini API Call if NVIDIA failed or returned empty result
             if not output_data_summery:
@@ -2573,7 +2617,7 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
                 print(f"Nvidia API returned empty result for {domain}. Falling back to Gemini API...")
                 
                 try:
-                    gemini_res = await Gemini_API_ASYNC(input_data_summery)
+                    gemini_res = await Gemini_API_ASYNC(input_data_summery, session=session)
                     
                     # Extract Gemini metadata and output
                     summary_input_Token = gemini_res.get("input_Token", "")
@@ -2676,10 +2720,10 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
 
                     if GEMINI_TOKEN == token_IF_Prediction and clean_date(date_IF_Prediction) in valid_dates and clean_date(exp_date_IF_Prediction) and  status_IF_Prediction == "Sucess" :
                         try :
-                            output_data_if = await Gemini_API_WITH_CACHE(output_data_summery,GEMINI_TOKEN,cache_id_IF_Prediction)
+                            output_data_if = await Gemini_API_WITH_CACHE(output_data_summery, GEMINI_TOKEN, cache_id_IF_Prediction, session=session)
                         except :
                             print("**** LLM IF Prediction entered in Normal Call, As Error Found in Cache ****")
-                            output_data_if = await Gemini_API_ASYNC(input_data_for_if,GEMINI_TOKEN)
+                            output_data_if = await Gemini_API_ASYNC(input_data_for_if, GEMINI_TOKEN, session=session)
                     else :
                         print("**** LLM IF Prediction entered in Normal Call, As some mismatch ****")
                         output_data_if = await Gemini_API_ASYNC(input_data_for_if,GEMINI_TOKEN)
@@ -2759,7 +2803,7 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
                         # output_data_if = await Gemini_API_WITH_CACHE(output_data_summery,GEMINI_TOKEN,base_prompt_for_if_validation_cache_id)
                     # except :
                     #     print("**** LLM Feed entered in Normal Call, As Error Found in Cache ****")
-                    #     output_data_feed = await Gemini_API_ASYNC(input_data_for_feed,GEMINI_TOKEN)
+                    #     output_data_feed = await Gemini_API_ASYNC(input_data_for_feed, GEMINI_TOKEN, session=session)
 
                     output_data_if_validation = "Yes" #await Gemini_API_ASYNC(input_data_for_if_validation)
                     # validation_if_input_Token = output_data_if_validation.get("input_Token","")
@@ -2930,7 +2974,7 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
                 # output_data_feed = Gemini_API(input_data_for_feed)
                 if GEMINI_TOKEN == token_for_feed_cache_id and clean_date(date_prompt_for_feed_cache_id) in valid_dates and  status_for_feed_cache_id == "Sucess" :
                     try :
-                        output_data_feed = await Gemini_API_WITH_CACHE(input_sumry_for_feed,GEMINI_TOKEN,base_prompt_for_feed_cache_id)
+                        output_data_feed = await Gemini_API_WITH_CACHE(input_sumry_for_feed, GEMINI_TOKEN, base_prompt_for_feed_cache_id, session=session)
                     except :
                         print("**** LLM Feed entered in Normal Call, As Error Found in Cache ****")
                         output_data_feed = await Gemini_API_ASYNC(input_data_for_feed,GEMINI_TOKEN)
@@ -3025,9 +3069,9 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
                 elif source_funnel_id :
                     # logging.info(f"This Domain will be escalated as in ESCALATED, Result :- {output_data_if}")
 
-                    # cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id,filter_id,source_funnel_id, "ESCALATED", comment, Wrong_Validation_COMMENT) 
+                    # cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id,filter_id,source_funnel_id, "ESCALATED", comment, Wrong_Validation_COMMENT, session=session) 
 
-                    cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id,filter_id,source_funnel_id, "MARKED_FOR_LATER", Wrong_Validation_COMMENT,token)  
+                    cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id,filter_id,source_funnel_id, "MARKED_FOR_LATER", Wrong_Validation_COMMENT,token, session=session)  
 
                     cf_if_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
 
@@ -3044,7 +3088,7 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
                 elif source_funnel_id :
                     # logging.info(f"This Domain will be escalated as in ESCALATED, Result :- {output_data_if}")
 
-                    cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, industry_funnel_id, filter_group_id,filter_id,industry_funnel_id, "MARKED_FOR_LATER", Wrong_Validation_COMMENT,token) #DiscoveryCentralFunctions.WriteAPI_Domain_Funnel_With_Tab(domain_profile_id, source_funnel_id,source_funnel_id, filter_group_id, filter_id, "ESCALATED", comment, token, 10)  #Need to define/implement
+                    cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, industry_funnel_id, filter_group_id,filter_id,industry_funnel_id, "MARKED_FOR_LATER", Wrong_Validation_COMMENT,token, session=session) #DiscoveryCentralFunctions.WriteAPI_Domain_Funnel_With_Tab(domain_profile_id, source_funnel_id,source_funnel_id, filter_group_id, filter_id, "ESCALATED", comment, token, 10)  #Need to define/implement
                     cf_if_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
 
                     if cf_if_status == "TRUE":
@@ -3060,7 +3104,7 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
                 # DiscoveryCentralFunctions.Domain_HashTag(domain, tag_name_if, token) #Need to define/implement
                 # logging.info(f"This Domain will Sucessfully Move to this Funnel :- {output_data_if_name}")
 
-                cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id,filter_id,industry_funnel_id, "MOVED_OUT", comment, token)
+                cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id,filter_id,industry_funnel_id, "MOVED_OUT", comment, token, session=session)
                 #DiscoveryCentralFunctions.WriteAPI_Domain_Funnel_With_Tab(domain_profile_id, source_funnel_id,industry_funnel_id, filter_group_id, filter_id, cf_if_action, comment, token, 10) #Need to define/implement
                 cf_if_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
 
@@ -3069,7 +3113,7 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
             elif source_funnel_id and (not industry_funnel_id and (output_data_if == "22" or "MARKED_IRRELEVANT" in output_data_if)):
                 # logging.info(f"This Domain will be Rejected as in MARKED_IRRELEVANT, Result :- {output_data_if}")
 
-                cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id,filter_id,source_funnel_id, "MARKED_IRRELEVANT", comment, token)
+                cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id,filter_id,source_funnel_id, "MARKED_IRRELEVANT", comment, token, session=session)
                 #DiscoveryCentralFunctions.WriteAPI_Domain_Funnel_With_Tab(domain_profile_id, source_funnel_id,source_funnel_id, filter_group_id, filter_id, "MARKED_IRRELEVANT", comment, token, 10) #Need to define/implement
 
                 cf_if_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
@@ -3079,14 +3123,14 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
             elif source_funnel_id and (not industry_funnel_id and (output_data_if == "23" or "ESCALATED" in output_data_if)):
                 # logging.info(f"This Domain will be escalated as in ESCALATED, Result :- {output_data_if}")
 
-                cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id,filter_id,source_funnel_id, "ESCALATED", comment, token) #DiscoveryCentralFunctions.WriteAPI_Domain_Funnel_With_Tab(domain_profile_id, source_funnel_id,source_funnel_id, filter_group_id, filter_id, "ESCALATED", comment, token, 10)  #Need to define/implement
+                cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id,filter_id,source_funnel_id, "ESCALATED", comment, token, session=session) #DiscoveryCentralFunctions.WriteAPI_Domain_Funnel_With_Tab(domain_profile_id, source_funnel_id,source_funnel_id, filter_group_id, filter_id, "ESCALATED", comment, token, 10)  #Need to define/implement
                 cf_if_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
 
                 if cf_if_status == "TRUE":
                     cf_if_status = "DONE"
             else:
                 # print(f"This Domain will be Snoozed as in SNOOZED, Result :- {output_data_if}")
-                cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id,filter_id,source_funnel_id, "SNOOZED", comment, token)
+                cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id,filter_id,source_funnel_id, "SNOOZED", comment, token, session=session)
                 #DiscoveryCentralFunctions.WriteAPI_Domain_Funnel_With_Tab(domain_profile_id, source_funnel_id,source_funnel_id, filter_group_id, filter_id, "SNOOZED", comment, token, 10)  #Need to define/implement
                 cf_if_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
 
@@ -3099,7 +3143,7 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
             tag_status_pf = await Domain_HashTag_async(domain, tag_name_pf, token) 
             #DiscoveryCentralFunctions.Domain_HashTag(domain, tag_name_pf, token) #Need to define/implement
 
-            if_pf_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, industry_funnel_id,filter_group_id, filter_id,publish_funnel_id,if_pf_action, comment, token) 
+            if_pf_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, industry_funnel_id,filter_group_id, filter_id,publish_funnel_id,if_pf_action, comment, token, session=session) 
             #DiscoveryCentralFunctions.WriteAPI_Domain_Funnel_With_Tab(domain_profile_id, industry_funnel_id,publish_funnel_id, filter_group_id, filter_id, if_pf_action, comment, token, 10) #Need to define/implement
             if_pf_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
 
@@ -3107,7 +3151,7 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
                 if_pf_status = "DONE"
 
         # Add discovery processing hashtag at the end of Tracxn write API execution
-        await Domain_HashTag_async(domain, Discovery_Processing_TAG_NAME, token)
+        await Domain_HashTag_async(domain, Discovery_Processing_TAG_NAME, token, session=session)
 
     # inbetween_sheet.update_acell("B7", dstart + i) #Save point for next execution.
 
@@ -3176,7 +3220,8 @@ async def Integrated_Process_domain(
     config_funnel_name_Feed_Cached_Model, config_funnel_name_Feed_Cached_Gen_Date, 
     config_funnel_name_Feed_Cached_Final_Status, token_rotator,
     created_timestamp=None,
-    mode="full"
+    mode="full",
+    write_to_sheet=True
 ):
     async with semaphore:
         try:
@@ -3247,10 +3292,11 @@ async def Integrated_Process_domain(
 
                 # If still PROCESSING after initial check, DO NOT call fallback scraper!
                 if tc_status == "PROCESSING":
-                    try:
-                        await write_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, [[tc_job_id, tc_job_gen_time, tc_status]], row, 24)
-                    except Exception as ex:
-                        logging.warning(f"Could not write intermediate PROCESSING state to sheet for {domain}: {ex}")
+                    if write_to_sheet:
+                        try:
+                            await write_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, [[tc_job_id, tc_job_gen_time, tc_status]], row, 24)
+                        except Exception as ex:
+                            logging.warning(f"Could not write intermediate PROCESSING state to sheet for {domain}: {ex}")
 
                     logging.info(f"Tech Crawler job {tc_job_id} for {domain} is PROCESSING. Skipping fallback scraper and yielding to background poller.")
                     return {
@@ -3264,7 +3310,9 @@ async def Integrated_Process_domain(
                             *rowData[:23], tc_job_id, tc_job_gen_time, tc_status, tc_final_url,
                             tc_s3_html, tc_s3_markdown, tc_http_status, tc_signals, scrappingBeautySoup,
                             *rowData[32:]
-                        ]
+                        ],
+                        "write_data": [tc_job_id, tc_job_gen_time, tc_status],
+                        "start_col": 24
                     }
 
                 # 3. If Tech Crawler succeeded, fetch signed S3 Markdown
@@ -3284,12 +3332,13 @@ async def Integrated_Process_domain(
             body_results = home_body if home_body else ["Website is not working."]
 
             if mode == "phase1":
-                phase1_data = [[
+                phase1_data = [
                     tc_job_id, tc_job_gen_time, tc_status, tc_final_url,
                     tc_s3_html, tc_s3_markdown, tc_http_status, tc_signals,
                     scrappingBeautySoup
-                ]]
-                await write_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, phase1_data, row, 24)
+                ]
+                if write_to_sheet:
+                    await write_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, [phase1_data], row, 24)
                 return {
                     "tc_status": tc_status,
                     "domain": domain,
@@ -3300,7 +3349,9 @@ async def Integrated_Process_domain(
                         tc_s3_html, tc_s3_markdown, tc_http_status, tc_signals, scrappingBeautySoup,
                         *rowData[32:]
                     ],
-                    "body": body_results
+                    "body": body_results,
+                    "write_data": phase1_data,
+                    "start_col": 24
                 }
 
             AI_Engine_Result_Array = []
@@ -3396,7 +3447,8 @@ async def Integrated_Process_domain(
                 config_funnel_name_Feed_Cached_prompt, config_funnel_name_Feed_Cached_API_Token,
                 config_funnel_name_Feed_Cached_Model, config_funnel_name_Feed_Cached_Gen_Date,
                 config_funnel_name_Feed_Cached_Final_Status,token_rotator,
-                mode=mode
+                mode=mode,
+                session=session
             )
 
             # Unpack AI Engine Outputs (Col AN receives summary_status, Col AO receives output_data_summery)
@@ -3406,15 +3458,18 @@ async def Integrated_Process_domain(
             output_data_summery = AI_Engine_Output_Result[3]
 
             if mode == "phase2":
-                phase2_data = [[summary_status, output_data_summery]]
-                await write_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, phase2_data, row, 40)
+                phase2_data = [summary_status, output_data_summery]
+                if write_to_sheet:
+                    await write_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, [phase2_data], row, 40)
                 return {
                     "tc_status": tc_status,
                     "domain": domain,
                     "row": row,
                     "summary_status": summary_status,
                     "summary": output_data_summery,
-                    "rowData": rowData
+                    "rowData": rowData,
+                    "write_data": phase2_data,
+                    "start_col": 40
                 }
 
             base_prompt_for_if = ""  # Col AP write back skipped per requirement
@@ -3486,7 +3541,10 @@ async def Integrated_Process_domain(
                     if_pf_time, tag_status_if, tag_status_pf, "", ""
                 ])
 
-            await write_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, AI_Engine_Result_Array, row, 20)
+            full_write_row = AI_Engine_Result_Array[0] if AI_Engine_Result_Array else []
+            if write_to_sheet and full_write_row:
+                await write_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, [full_write_row], row, 20)
+
             return {
                 "tc_status": tc_status,
                 "domain": domain,
@@ -3497,7 +3555,9 @@ async def Integrated_Process_domain(
                     tc_s3_html, tc_s3_markdown, tc_http_status, tc_signals, scrappingBeautySoup,
                     *rowData[32:]
                 ],
-                "body": body_results
+                "body": body_results,
+                "write_data": full_write_row,
+                "start_col": 20
             }
 
         except Exception as e:
@@ -3542,7 +3602,12 @@ async def Integrated_Extract_domains(
         pf_data[i : i + batch_size] for i in range(0, len(pf_data), batch_size)
     ]
 
-    async with aiohttp.ClientSession(headers=mainheaders) as session:
+    connector = aiohttp.TCPConnector(
+        limit=100,
+        limit_per_host=25,
+        ttl_dns_cache=300
+    )
+    async with aiohttp.ClientSession(headers=mainheaders, connector=connector) as session:
 
         for batch_index, batch in enumerate(domains_batches):
             if os.path.exists(STOP_FILE):
@@ -3580,19 +3645,81 @@ async def Integrated_Extract_domains(
                             config_funnel_name_Feed_Cached_Final_Status,
                             token_rotator,
                             mode=mode,
+                            write_to_sheet=False,
                         )
                     )
                     tasks.append(task)
 
             results = await asyncio.gather(*tasks, return_exceptions=True)
-            for res in results:
+
+            if mode == "phase1":
+                target_start_col = 24
+                expected_cols = 9
+            elif mode == "phase2":
+                target_start_col = 40
+                expected_cols = 2
+            else:
+                target_start_col = 20
+                expected_cols = 50
+
+            batch_write_rows = []
+            for idx, res in enumerate(results):
                 processed += 1
+                orig_row = batch[idx] if idx < len(batch) else []
+
                 if isinstance(res, Exception) or res is None:
                     fail_count += 1
+                    slice_start = target_start_col - 1
+                    existing_slice = orig_row[slice_start : slice_start + expected_cols]
+                    if len(existing_slice) < expected_cols:
+                        existing_slice = existing_slice + [""] * (expected_cols - len(existing_slice))
+                    batch_write_rows.append(existing_slice)
                 else:
                     success_count += 1
                     if isinstance(res, dict) and res.get("tc_status") == "PROCESSING":
                         pending_tech_crawler_jobs.append(res)
+                        if mode == "phase1":
+                            write_data = res.get("write_data") or [res.get("tc_job_id", ""), res.get("tc_job_gen_time", ""), "PROCESSING"]
+                            if len(write_data) < expected_cols:
+                                write_data = write_data + [""] * (expected_cols - len(write_data))
+                            batch_write_rows.append(write_data)
+                        elif mode == "phase2":
+                            slice_start = target_start_col - 1
+                            existing_slice = orig_row[slice_start : slice_start + expected_cols]
+                            if len(existing_slice) < expected_cols:
+                                existing_slice = existing_slice + [""] * (expected_cols - len(existing_slice))
+                            batch_write_rows.append(existing_slice)
+                        else:
+                            slice_start = target_start_col - 1
+                            row_slice = list(orig_row[slice_start : slice_start + expected_cols])
+                            if len(row_slice) < expected_cols:
+                                row_slice = row_slice + [""] * (expected_cols - len(row_slice))
+                            row_slice[4] = res.get("tc_job_id", "")
+                            row_slice[5] = res.get("tc_job_gen_time", "")
+                            row_slice[6] = "PROCESSING"
+                            batch_write_rows.append(row_slice)
+                    else:
+                        write_data = res.get("write_data") if isinstance(res, dict) else None
+                        if write_data and len(write_data) == expected_cols:
+                            batch_write_rows.append(write_data)
+                        elif write_data:
+                            if len(write_data) < expected_cols:
+                                write_data = write_data + [""] * (expected_cols - len(write_data))
+                            else:
+                                write_data = write_data[:expected_cols]
+                            batch_write_rows.append(write_data)
+                        else:
+                            slice_start = target_start_col - 1
+                            existing_slice = orig_row[slice_start : slice_start + expected_cols]
+                            if len(existing_slice) < expected_cols:
+                                existing_slice = existing_slice + [""] * (expected_cols - len(existing_slice))
+                            batch_write_rows.append(existing_slice)
+
+            if batch_write_rows:
+                await write_sheet_data(
+                    client, SHEET_ID, EXTRACTING_SHEET_NAME,
+                    batch_write_rows, start_row, target_start_col
+                )
 
             update_progress_file(processed, total_domains, success_count, fail_count)
             logging.info(
@@ -3705,7 +3832,7 @@ def get_ist_timestamp():
         return datetime.datetime.utcnow().strftime("%d/%b/%Y  %H:%M:%S")
 
 # Async version of your domain logic
-async def Process_Review_domain(session, row, row_number, client, semaphore,SHEET_ID, EXTRACTING_SHEET_NAME):
+async def Process_Review_domain(session, row, row_number, client, semaphore, SHEET_ID, EXTRACTING_SHEET_NAME, write_to_sheet=False):
     try:
         async with semaphore:
             domain = row[0]
@@ -3731,20 +3858,20 @@ async def Process_Review_domain(session, row, row_number, client, semaphore,SHEE
                 # print("Domain Picked for review - ",domain)
                 
                 if source_funnel_id and ("22" in output_data_if or "MARKED_IRRELEVANT" in output_data_if):
-                    cf_if_status = await WriteAPI_Domain_Funnel_async( domain_profile_id, source_funnel_id, filter_group_id, filter_id,source_funnel_id, "MARKED_IRRELEVANT", COMMENT, TOKEN)
+                    cf_if_status = await WriteAPI_Domain_Funnel_async( domain_profile_id, source_funnel_id, filter_group_id, filter_id,source_funnel_id, "MARKED_IRRELEVANT", COMMENT, TOKEN, session=session)
                     cf_if_time = get_ist_timestamp()
                     if cf_if_status == "TRUE":
                         cf_if_status = "DONE"
 
                 elif source_funnel_id and ("23" in output_data_if or "ESCALATED" in output_data_if):
-                    cf_if_status = await WriteAPI_Domain_Funnel_async( domain_profile_id, source_funnel_id, filter_group_id, filter_id,source_funnel_id, "ESCALATED", COMMENT, TOKEN)
+                    cf_if_status = await WriteAPI_Domain_Funnel_async( domain_profile_id, source_funnel_id, filter_group_id, filter_id,source_funnel_id, "ESCALATED", COMMENT, TOKEN, session=session)
                     cf_if_time = get_ist_timestamp()
                     if cf_if_status == "TRUE":
                         cf_if_status = "DONE"
 
                 else:
                     tag_status_review = await Domain_HashTag_async(domain, To_Review_TAG_NAME, TOKEN)
-                    cf_if_status = await WriteAPI_Domain_Funnel_async( domain_profile_id, source_funnel_id, filter_group_id, filter_id,source_funnel_id, "SNOOZED", COMMENT, TOKEN)
+                    cf_if_status = await WriteAPI_Domain_Funnel_async( domain_profile_id, source_funnel_id, filter_group_id, filter_id,source_funnel_id, "SNOOZED", COMMENT, TOKEN, session=session)
                     cf_if_time = get_ist_timestamp()
                     if cf_if_status == "TRUE":
                         cf_if_status = "DONE"
@@ -3767,11 +3894,12 @@ async def Process_Review_domain(session, row, row_number, client, semaphore,SHEE
                     tag_status_review
                 ]
 
-                # Write to the 20th column of the correct row
-                # await client.write_range(EXTRACTING_SHEET_NAME, row_number, 20, [output_row])
-            await write_sheet_data(client, SHEET_ID,EXTRACTING_SHEET_NAME, [output_row], row_number, 20)
+            if write_to_sheet:
+                await write_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, [output_row], row_number, 20)
+            return output_row
     except Exception as e:
         logging.error(f"Error processing row {row_number}: {e}")
+        return None
 
 
 # Entry point
@@ -3785,7 +3913,12 @@ async def Process_Review_Caller(client, mainheaders, SHEET_ID, EXTRACTING_SHEET_
     batch_size = BATCH_SIZE
     domains_batches = [pf_data[i:i + batch_size] for i in range(0, len(pf_data), batch_size)]
 
-    async with aiohttp.ClientSession(headers=mainheaders) as session:
+    connector = aiohttp.TCPConnector(
+        limit=100,
+        limit_per_host=25,
+        ttl_dns_cache=300
+    )
+    async with aiohttp.ClientSession(headers=mainheaders, connector=connector) as session:
         for batch_index, batch in enumerate(domains_batches):
             if os.path.exists(STOP_FILE):
                 logging.info("Stop requested during Process_Review_Caller. Halting.")
@@ -3797,11 +3930,27 @@ async def Process_Review_Caller(client, mainheaders, SHEET_ID, EXTRACTING_SHEET_
             for row_index, row in enumerate(batch):
                 if row and row[0]:
                     task = asyncio.create_task(
-                        Process_Review_domain(session, row, start_row + row_index, client, semaphore, SHEET_ID, EXTRACTING_SHEET_NAME)
+                        Process_Review_domain(
+                            session, row, start_row + row_index, client, semaphore, SHEET_ID, EXTRACTING_SHEET_NAME, write_to_sheet=False
+                        )
                     )
                     tasks.append(task)
 
-            await asyncio.gather(*tasks, return_exceptions=True)
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            batch_output_rows = []
+            for idx, res in enumerate(results):
+                orig_row = batch[idx] if idx < len(batch) else []
+                if isinstance(res, Exception) or res is None:
+                    # Accidental data loss prevention fallback: preserve existing row data
+                    existing_slice = orig_row[19:68] if len(orig_row) >= 68 else (orig_row[19:] + [""] * max(0, 49 - len(orig_row[19:])))
+                    batch_output_rows.append(existing_slice)
+                else:
+                    batch_output_rows.append(res)
+
+            if batch_output_rows:
+                await write_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, batch_output_rows, start_row, 20)
+
             logging.info(f"Completed review batch {batch_index + 1} with {len(batch)} domains.")
 
 #********************************************************************************************

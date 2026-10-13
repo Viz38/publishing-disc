@@ -32,9 +32,8 @@ class Settings:
     GEMINI_TOKEN: str = os.getenv("GEMINI_API_KEY") or os.getenv("GEMINI_TOKEN", "")
     Tracxn_API_Token: str = os.getenv("TRACXN_API_TOKEN", "")
 
-    # Concurrency
     MAX_WORKERS: int = int(os.getenv("MAX_WORKERS", "10"))
-    BATCH_SIZE: int = int(os.getenv("BATCH_SIZE", "10"))
+    BATCH_SIZE: int = int(os.getenv("BATCH_SIZE", "100"))
 
     # Nvidia NIM Configuration
     Nvidia_Base_Model: str = os.getenv("NVIDIA_BASE_MODEL", "meta/muse-glimmer-30b")
