@@ -529,43 +529,18 @@ TokenRotator = NIMKeyManager
 
 #********************************** Getting NVDIA Tokens ************************************
 
-def Return_NIM_Config_Details(client):
-    """Retrieve NIM model name and API tokens from Config Sheet with local run cache support."""
+def Return_NIM_Config_Details(client=None):
+    """Retrieve NIM model name and API tokens directly from environment settings, skipping sheet fetch."""
     global _RUN_CACHE
     if _RUN_CACHE.get("nim_config"):
         return _RUN_CACHE["nim_config"]
 
-    gc = client
+    tokens = [["", "", "", "", k] for k in settings.NIM_API_KEYS]
     result_map = {
-        "NIM_Model_To_Pick": "",
-        "tokenArray": []
+        "NIM_Model_To_Pick": settings.Nvidia_Base_Model,
+        "tokenArray": tokens
     }
-
-    try:
-        sheet = open_sheet_with_fallback(gc, Config_Sheet_ID)
-        worksheet = sheet.worksheet("NIM - Models & Keys")
-        all_vals = worksheet.get_all_values()
-        if len(all_vals) <= 2:
-            return result_map
-
-        NIM_Token_Array = all_vals[2:]
-        unique_token_map = {}
-        for row in NIM_Token_Array:
-            if len(row) >= 5 and row[4] and row[4].strip():
-                tok = row[4].strip()
-                if tok not in unique_token_map:
-                    unique_token_map[tok] = row
-                    result_map["tokenArray"].append(row)
-            elif len(row) >= 4 and row[3] and row[3].strip():
-                tok = row[3].strip()
-                if tok not in unique_token_map:
-                    unique_token_map[tok] = row
-                    result_map["tokenArray"].append(row)
-            if len(row) >= 2 and row[1]:
-                result_map["NIM_Model_To_Pick"] = row[1]
-    except Exception as e:
-        logging.warning(f"Failed to fetch NIM Config details from {Config_Sheet_ID}: {e}")
-
+    _RUN_CACHE["nim_config"] = result_map
     return result_map
 
 #*************************************** Output Sanitization (from Runner.py) *************************************
@@ -1096,21 +1071,10 @@ def load_or_refresh_run_config(gc, force_refresh=False):
             "inputResult": []
         }
 
-        # 3. NIM - Models & Keys
-        ws_nim = cfg_sheet.worksheet("NIM - Models & Keys")
-        nim_rows = ws_nim.get_all_values()
-        tokens = []
-        model_picked = ""
-        for row in nim_rows[2:]:
-            if len(row) >= 5 and row[4] and row[4].strip():
-                tokens.append(row)
-            elif len(row) >= 4 and row[3] and row[3].strip():
-                tokens.append(row)
-        if len(nim_rows) > 0 and len(nim_rows[0]) > 1:
-            model_picked = nim_rows[0][1]
-
+        # 3. NIM - Models & Keys (Direct from .env, sheet fetch skipped)
+        tokens = [["", "", "", "", k] for k in settings.NIM_API_KEYS]
         nim_config = {
-            "NIM_Model_To_Pick": model_picked,
+            "NIM_Model_To_Pick": settings.Nvidia_Base_Model,
             "tokenArray": tokens
         }
 
@@ -3461,7 +3425,7 @@ async def Integrated_Process_domain(
                 engineClearedTime = safe_str(rowData[20])
                 engineTimeTaken = rowData[22] if len(rowData) > 22 else ""
 
-            # Prepare sheet write array
+            # Prepare sheet write array (Ending at Col BQ, Col BR to CP omitted per requirement)
             if EXTRACTING_SHEET_NAME == CF_EXTRACTING_SHEET_NAME:
                 AI_Engine_Result_Array.append([
                     enginePickedTime, engineClearedTime, engineClearedStatus, engineTimeTaken, 
@@ -3473,8 +3437,7 @@ async def Integrated_Process_domain(
                     base_prompt_for_if_validation, input_data_for_if_validation, output_data_if_validation, 
                     input_sumry_for_feed, base_prompt_for_feed, input_data_for_feed, output_data_feed, 
                     final_feed_name, final_feed_id, final_pub_funnel_name, final_pub_funnel_id, "", "", "", 
-                    cf_if_status, cf_if_time, if_pf_status, if_pf_time, tag_status_if, tag_status_pf, "", "", 
-                    *AI_Engine_Output_Result[27:51]
+                    cf_if_status, cf_if_time, if_pf_status, if_pf_time, tag_status_if, tag_status_pf, "", ""
                 ])
             else:
                 AI_Engine_Result_Array.append([
@@ -3488,8 +3451,7 @@ async def Integrated_Process_domain(
                     output_data_if_id, input_sumry_for_feed, base_prompt_for_feed, input_data_for_feed, 
                     output_data_feed, final_feed_name, final_feed_id, final_pub_funnel_name, 
                     final_pub_funnel_id, "", "", "", cf_if_status, cf_if_time, if_pf_status, 
-                    if_pf_time, tag_status_if, tag_status_pf, 
-                    *AI_Engine_Output_Result[27:51]
+                    if_pf_time, tag_status_if, tag_status_pf, "", ""
                 ])
 
             await write_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, AI_Engine_Result_Array, row, 20)
@@ -3883,33 +3845,12 @@ async def main():
         config_feed_num_funnel_map = config_feed_wise_funnel["FeedNumFunnelMap"]
         config_feed_name_funnel_map = config_feed_wise_funnel["FeedNameFunnelMap"]
 
-        # Caller - NIM Model Detail & Tokens
-        NIM_Model_sheet = open_sheet_with_fallback(gc, Config_Sheet_ID)
-        worksheet_nim = NIM_Model_sheet.worksheet("NIM - Models & Keys")
-
-        last_row = len(worksheet_nim.get_all_values())
-        extracted_tokens = []
-        model_to_pick = ""
-
-        if last_row > 2:
-            NIM_Token_Array = worksheet_nim.get(f"A3:{gspread.utils.rowcol_to_a1(last_row, worksheet_nim.col_count)}")
-
-            for row in NIM_Token_Array:
-                if len(row) >= 5 and row[4] and row[4].strip():
-                    extracted_tokens.append(row[4].strip())
-                elif len(row) >= 4 and row[3] and row[3].strip():
-                    extracted_tokens.append(row[3].strip())
-                    
-                if len(row) >= 2 and row[1]:
-                    model_to_pick = row[1]
-
-        unique_tokens = list(dict.fromkeys(extracted_tokens))
-        if not unique_tokens:
-            logging.info("No tokens from sheet - falling back to hardcoded NIM_HARDCODED_KEYS.")
-            unique_tokens = list(NIM_HARDCODED_KEYS)
+        # Caller - NIM Model Detail & Tokens (Direct from .env, sheet fetch skipped)
+        unique_tokens = list(settings.NIM_API_KEYS)
+        model_to_pick = settings.Nvidia_Base_Model
 
         token_rotator = NIMKeyManager(unique_tokens)
-        logging.info(f"NIMKeyManager initialized with {token_rotator.total_tokens} keys.")
+        logging.info(f"NIMKeyManager initialized with {token_rotator.total_tokens} keys from environment.")
 
         if model_to_pick:
             global Nvidia_Base_Model
