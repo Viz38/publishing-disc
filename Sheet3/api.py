@@ -16,8 +16,12 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-from models import RunRequest
-from config import settings
+try:
+    from .models import RunRequest
+    from .config import settings
+except (ImportError, ValueError):
+    from models import RunRequest
+    from config import settings
 
 LOGS_DIR = os.path.join(BASE_DIR, 'Logs')
 PROGRESS_FILE = os.path.join(BASE_DIR, ".progress.json")
@@ -273,9 +277,64 @@ async def _cancel():
     state["is_stopping"] = False
     return {"status": "ok"}
 
+def tail_file(filepath: str, max_lines: int = 200) -> str:
+    if not os.path.exists(filepath):
+        return ""
+    try:
+        from collections import deque
+        with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+            return "".join(deque(f, maxlen=max_lines))
+    except Exception as e:
+        return f"[Error reading log: {e}]"
+
+def _get_logs_response(lines: int = 200, log_type: str = "all"):
+    worker_identity = os.environ.get("WORKER_IDENTITY", os.uname().nodename)
+    result = {
+        "status": "ok",
+        "service": settings.SERVICE_NAME,
+        "worker": f"{worker_identity}-{settings.SERVICE_NAME}-Pipeline",
+        "timestamp": utc_now(),
+        "lines_requested": lines,
+        "logs": {},
+        "available_files": []
+    }
+
+    api_log_file = os.path.join(LOGS_DIR, "api.logs") if os.path.exists(os.path.join(LOGS_DIR, "api.logs")) else os.path.join(LOGS_DIR, "api.log")
+    log_mapping = {
+        "discovery": os.path.join(LOGS_DIR, "discovery.log"),
+        "stdout": os.path.join(LOGS_DIR, "stdout.log"),
+        "stderr": os.path.join(LOGS_DIR, "stderr.log"),
+        "api": api_log_file,
+    }
+
+    if os.path.exists(LOGS_DIR):
+        result["available_files"] = [f for f in os.listdir(LOGS_DIR) if os.path.isfile(os.path.join(LOGS_DIR, f))]
+
+    if log_type == "all":
+        for k, path in log_mapping.items():
+            result["logs"][k] = tail_file(path, lines)
+    elif log_type in log_mapping:
+        result["logs"][log_type] = tail_file(log_mapping[log_type], lines)
+    else:
+        custom_path = os.path.join(LOGS_DIR, log_type)
+        if os.path.exists(custom_path) and os.path.commonpath([LOGS_DIR, custom_path]) == LOGS_DIR:
+            result["logs"][log_type] = tail_file(custom_path, lines)
+        else:
+            result["logs"][log_type] = f"Log type '{log_type}' not found."
+
+    if os.path.exists(PROGRESS_FILE):
+        try:
+            with open(PROGRESS_FILE, "r") as f:
+                result["progress"] = json.load(f)
+        except Exception:
+            pass
+
+    return result
+
 for prefix in ["/discovery", "/sheet3"]:
     app.add_api_route(f"{prefix}/health", lambda: {"status": "ok", "service": "CF-3", "timestamp": utc_now()}, methods=["GET"], dependencies=[Depends(verify_token)])
     app.add_api_route(f"{prefix}/status", _get_status_response, methods=["GET"], dependencies=[Depends(verify_token)])
+    app.add_api_route(f"{prefix}/logs", _get_logs_response, methods=["GET"], dependencies=[Depends(verify_token)])
     app.add_api_route(f"{prefix}/cancel", _cancel, methods=["POST"], dependencies=[Depends(verify_token)])
 
 @app.post("/discovery/start", dependencies=[Depends(verify_token)])

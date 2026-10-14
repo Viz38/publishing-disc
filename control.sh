@@ -13,7 +13,7 @@ BASE_DIR=$(cd "$(dirname "$0")" && pwd)
 OS=$(uname -s)
 REAL_USER=${SUDO_USER:-$USER}
 REAL_GROUP=$(id -gn "$REAL_USER")
-LOCK_FILE="/tmp/discovery_control.lock"
+LOCK_FILE="/tmp/discovery_control_${REAL_USER:-$USER}.lock"
 
 # --- Smart Sudo Detection ---
 if [[ "$OS" == "Darwin" ]]; then
@@ -31,7 +31,7 @@ if [ -f "$LOCK_FILE" ]; then
             read -p "Would you like to kill it and start fresh? (y/n): " kill_confirm
             if [[ "$kill_confirm" == "y" || "$kill_confirm" == "Y" ]]; then
                 kill -9 "$OLD_PID" 2>/dev/null
-                rm -f "$LOCK_FILE"
+                rm -f "$LOCK_FILE" 2>/dev/null
             else
                 echo "Exiting."
                 exit 1
@@ -39,14 +39,16 @@ if [ -f "$LOCK_FILE" ]; then
         else
             echo "Non-interactive session detected. Killing old instance..."
             kill -9 "$OLD_PID" 2>/dev/null
-            rm -f "$LOCK_FILE"
+            rm -f "$LOCK_FILE" 2>/dev/null
         fi
     else
-        rm -f "$LOCK_FILE"
+        rm -f "$LOCK_FILE" 2>/dev/null
     fi
 fi
-echo $$ > "$LOCK_FILE"
-trap "rm -f $LOCK_FILE; exit" INT TERM EXIT
+if ( : > "$LOCK_FILE" ) 2>/dev/null; then
+    echo $$ > "$LOCK_FILE" 2>/dev/null || true
+    trap "rm -f '$LOCK_FILE' 2>/dev/null; exit" INT TERM EXIT
+fi
 
 # Centralized logging for control.sh
 LOG_FILE="$BASE_DIR/control.logs"
@@ -796,6 +798,37 @@ EOF"
     echo -e "${GREEN}Services registered and persistent across reboots.${NC}"
 }
 
+# --- Non-Interactive CLI Command Dispatch ---
+if [ -n "$1" ]; then
+    case "$1" in
+        pull-logs|pull_logs|fetch-logs)
+            shift
+            if [ -f "$BASE_DIR/.venv/bin/python" ]; then
+                "$BASE_DIR/.venv/bin/python" "$BASE_DIR/scripts/pull_fleet_logs.py" "$@"
+            else
+                python3 "$BASE_DIR/scripts/pull_fleet_logs.py" "$@"
+            fi
+            exit $?
+            ;;
+        status)
+            check_status
+            exit 0
+            ;;
+        stop)
+            stop_all
+            exit 0
+            ;;
+        start)
+            start_standard
+            exit 0
+            ;;
+        clear-logs)
+            clear_logs
+            exit 0
+            ;;
+    esac
+fi
+
 # --- Main Interactive Menu ---
 while true; do
     clear
@@ -820,8 +853,9 @@ while true; do
     echo "8) Configure Credentials"
     echo "9) Exit"
     echo "10) Deep Clean Workspace (Venvs + Tunnel + Logs)"
+    echo "11) Pull Remote Fleet Logs (5321 & 5080)"
     echo -e "${BLUE}==========================================================${NC}"
-    read -p "Option [1-10]: " opt
+    read -p "Option [1-11]: " opt
     case $opt in
         1)
             ensure_system_dependencies
@@ -893,6 +927,13 @@ while true; do
                 echo -e "${GREEN}✅ Deep clean complete. Use Option 1 to reinstall.${NC}"
             fi
             read -p "Enter..." ;;
+        11)
+            if [ -f "$BASE_DIR/.venv/bin/python" ]; then
+                "$BASE_DIR/.venv/bin/python" "$BASE_DIR/scripts/pull_fleet_logs.py"
+            else
+                python3 "$BASE_DIR/scripts/pull_fleet_logs.py"
+            fi
+            read -p "Press Enter to continue..." ;;
         *)
             echo -e "${RED}Invalid option.${NC}"; sleep 1 ;;
     esac
