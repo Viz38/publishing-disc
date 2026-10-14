@@ -3150,8 +3150,10 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
             if if_pf_status == "TRUE":
                 if_pf_status = "DONE"
 
-        # Add discovery processing hashtag at the end of Tracxn write API execution
-        await Domain_HashTag_async(domain, Discovery_Processing_TAG_NAME, token, session=session)
+        # Add discovery processing hashtag only when Write API Status (Publish Funnel) is completed and marked "Done"
+        tag_status_discovery = ""
+        if if_pf_status == "DONE":
+            tag_status_discovery = await Domain_HashTag_async(domain, Discovery_Processing_TAG_NAME, token, session=session)
 
     # inbetween_sheet.update_acell("B7", dstart + i) #Save point for next execution.
 
@@ -3162,7 +3164,7 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
                     input_data_for_if, output_data_if, output_data_if_name, output_data_if_id,
                     input_sumry_for_if_validation, base_prompt_for_if_validation, input_data_for_if_validation,
                     output_data_if_validation, input_sumry_for_feed, base_prompt_for_feed, input_data_for_feed,
-                    output_data_feed, final_feed_name, final_feed_id, final_pub_funnel_name, final_pub_funnel_id,cf_if_status, cf_if_time, if_pf_status, if_pf_time, tag_status_if, tag_status_pf,summary_input_Token, summary_thought_Token, summary_cache_Token, summary_output_Token, summary_total_Token, summary_llm_model, output_data_if_input_Token, output_data_if_thought_Token, output_data_if_cache_Token, output_data_if_output_Token, output_data_if_total_Token, output_data_if_llm_model, validation_if_input_Token, validation_if_thought_Token, validation_if_cache_Token, validation_if_output_Token, validation_if_total_Token, validation_if_llm_model, output_data_feed_input_Token, output_data_feed_thought_Token, output_data_feed_cache_Token, output_data_feed_output_Token, output_data_feed_total_Token, output_data_feed_llm_model]
+                    output_data_feed, final_feed_name, final_feed_id, final_pub_funnel_name, final_pub_funnel_id,cf_if_status, cf_if_time, if_pf_status, if_pf_time, tag_status_if, tag_status_pf, tag_status_discovery, summary_input_Token, summary_thought_Token, summary_cache_Token, summary_output_Token, summary_total_Token, summary_llm_model, output_data_if_input_Token, output_data_if_thought_Token, output_data_if_cache_Token, output_data_if_output_Token, output_data_if_total_Token, output_data_if_llm_model, validation_if_input_Token, validation_if_thought_Token, validation_if_cache_Token, validation_if_output_Token, validation_if_total_Token, validation_if_llm_model, output_data_feed_input_Token, output_data_feed_thought_Token, output_data_feed_cache_Token, output_data_feed_output_Token, output_data_feed_total_Token, output_data_feed_llm_model]
 
 
     final_map[domain] = [final_raw_data, base_prompt_for_summery, input_data_summery, output_data_summery, base_prompt_for_if,
@@ -3499,6 +3501,8 @@ async def Integrated_Process_domain(
             if_pf_time = AI_Engine_Output_Result[24]
             tag_status_if = AI_Engine_Output_Result[25]
             tag_status_pf = AI_Engine_Output_Result[26]
+            tag_status_discovery = AI_Engine_Output_Result[27] if len(AI_Engine_Output_Result) > 27 else ""
+            discovery_bq = "yes" if str(tag_status_discovery).upper() in ("YES", "TRUE") else ""
 
             # Once write API (last step) is completed, update Col U with current date and time (format: 12/Oct/2026 15:00:14)
             if mode == "full":
@@ -3524,7 +3528,7 @@ async def Integrated_Process_domain(
                     base_prompt_for_if_validation, input_data_for_if_validation, output_data_if_validation, 
                     input_sumry_for_feed, base_prompt_for_feed, input_data_for_feed, output_data_feed, 
                     final_feed_name, final_feed_id, final_pub_funnel_name, final_pub_funnel_id, "", "", "", 
-                    cf_if_status, cf_if_time, if_pf_status, if_pf_time, tag_status_if, tag_status_pf, "", ""
+                    cf_if_status, cf_if_time, if_pf_status, if_pf_time, tag_status_if, tag_status_pf, "", discovery_bq
                 ])
             else:
                 AI_Engine_Result_Array.append([
@@ -3538,7 +3542,7 @@ async def Integrated_Process_domain(
                     output_data_if_id, input_sumry_for_feed, base_prompt_for_feed, input_data_for_feed, 
                     output_data_feed, final_feed_name, final_feed_id, final_pub_funnel_name, 
                     final_pub_funnel_id, "", "", "", cf_if_status, cf_if_time, if_pf_status, 
-                    if_pf_time, tag_status_if, tag_status_pf, "", ""
+                    if_pf_time, tag_status_if, tag_status_pf, "", discovery_bq
                 ])
 
             full_write_row = AI_Engine_Result_Array[0] if AI_Engine_Result_Array else []
@@ -3876,8 +3880,11 @@ async def Process_Review_domain(session, row, row_number, client, semaphore, SHE
                     if cf_if_status == "TRUE":
                         cf_if_status = "DONE"
 
-                # Add discovery processing hashtag at the end of review write API execution
-                await Domain_HashTag_async(domain, Discovery_Processing_TAG_NAME, TOKEN)
+            tag_status_discovery = ""
+            if str(row[63]).strip().upper() == "DONE":
+                tag_status_discovery = await Domain_HashTag_async(domain, Discovery_Processing_TAG_NAME, TOKEN)
+
+            discovery_bq = "yes" if str(tag_status_discovery).upper() in ("YES", "TRUE") else (row[68] if len(row) > 68 else "")
 
             # Prepare output data
             output_row = [
@@ -3891,7 +3898,8 @@ async def Process_Review_domain(session, row, row_number, client, semaphore, SHE
                     row[64],  # IF_PF_Time
                     tagStatusForIF,  # TagStatusIF
                     tagStatusForPF,  # TagStatusPF
-                    tag_status_review
+                    tag_status_review,
+                    discovery_bq
                 ]
 
             if write_to_sheet:
