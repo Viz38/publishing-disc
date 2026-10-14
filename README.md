@@ -46,10 +46,10 @@ The fleet consists of strictly 3 worker machines:
 
 | Sheet / Pipeline | Folder | Port | Google Spreadsheet Link & ID | Cloudflare Hostnames (5321, 5080, Vishnu) |
 | :--- | :--- | :--- | :--- | :--- |
-| **CF-1** | `Sheet1/` | `8769` | [CF-1 Domains DB](https://docs.google.com/spreadsheets/d/1JLp0CQ3S2cVj8ykdYpjHe6OvL-Q7rGTm2KCy7aZArNM/)<br>`1JLp0CQ3S2cVj8ykdYpjHe6OvL-Q7rGTm2KCy7aZArNM` | `https://5321-sheet1.ecosuyaenergies.com`<br>`https://5080-sheet1.ecosuyaenergies.com`<br>`https://vishnu-sheet1.ecosuyaenergies.com` |
-| **CF-2** | `Sheet2/` | `8770` | [CF-2 Nandan Domains DB](https://docs.google.com/spreadsheets/d/1OYV70F2r7oBUF7_SemXgQVkAHonDWZDjq_p7ve8Uw_o/)<br>`1OYV70F2r7oBUF7_SemXgQVkAHonDWZDjq_p7ve8Uw_o` | `https://5321-sheet2.ecosuyaenergies.com`<br>`https://5080-sheet2.ecosuyaenergies.com`<br>`https://vishnu-sheet2.ecosuyaenergies.com` |
-| **CF-3** | `Sheet3/` | `8771` | [CF-3 Nandan Domains DB](https://docs.google.com/spreadsheets/d/1zQr4NyJpkk0Db7cDaDHvNJQJC9ou8rswq8RxsiGUD2k/)<br>`1zQr4NyJpkk0Db7cDaDHvNJQJC9ou8rswq8RxsiGUD2k` | `https://5321-sheet3.ecosuyaenergies.com`<br>`https://5080-sheet3.ecosuyaenergies.com`<br>`https://vishnu-sheet3.ecosuyaenergies.com` |
-| **Filter-V2** | `Sheet4/` | `8772` | [Nandan Filter-V2](https://docs.google.com/spreadsheets/d/1iodRlmHB1PmHy2CORe33VQOBA2MpQYHRDPpJPAYUJ9s/)<br>`1iodRlmHB1PmHy2CORe33VQOBA2MpQYHRDPpJPAYUJ9s` | `https://5321-sheet4.ecosuyaenergies.com`<br>`https://5080-sheet4.ecosuyaenergies.com`<br>`https://vishnu-sheet4.ecosuyaenergies.com` |
+| **CF-1** | `Sheet1/` | `8769` | [CF-1 Python Automation](https://docs.google.com/spreadsheets/d/1Sil5fw0l0rc0aMoydtnn7ZHdDbY5hwl7D9rda7bETkc/)<br>`1Sil5fw0l0rc0aMoydtnn7ZHdDbY5hwl7D9rda7bETkc` | `https://5321-sheet1.ecosuyaenergies.com`<br>`https://5080-sheet1.ecosuyaenergies.com`<br>`https://vishnu-sheet1.ecosuyaenergies.com` |
+| **CF-2** | `Sheet2/` | `8770` | [CF-2 Python Automation](https://docs.google.com/spreadsheets/d/1xphjNDv0hHEr8ZXv4PEVDmnEeVrsw_XAUMGaDf8ySUY/)<br>`1xphjNDv0hHEr8ZXv4PEVDmnEeVrsw_XAUMGaDf8ySUY` | `https://5321-sheet2.ecosuyaenergies.com`<br>`https://5080-sheet2.ecosuyaenergies.com`<br>`https://vishnu-sheet2.ecosuyaenergies.com` |
+| **CF-3** | `Sheet3/` | `8771` | [CF-3 Python Automation](https://docs.google.com/spreadsheets/d/10pacDW-6EqAdWslv9DTJBrRZDsybMczwMSpmKJebWFc/)<br>`10pacDW-6EqAdWslv9DTJBrRZDsybMczwMSpmKJebWFc` | `https://5321-sheet3.ecosuyaenergies.com`<br>`https://5080-sheet3.ecosuyaenergies.com`<br>`https://vishnu-sheet3.ecosuyaenergies.com` |
+| **Filter-V2** | `Sheet4/` | `8772` | [Nandan Filter-V2 Python Automation](https://docs.google.com/spreadsheets/d/14kC-RUMrpJB1Ur4CGpXMh1Te-yv7qBjsINJgM7NqySY/)<br>`14kC-RUMrpJB1Ur4CGpXMh1Te-yv7qBjsINJgM7NqySY` | `https://5321-sheet4.ecosuyaenergies.com`<br>`https://5080-sheet4.ecosuyaenergies.com`<br>`https://vishnu-sheet4.ecosuyaenergies.com` |
 
 ---
 

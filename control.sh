@@ -213,10 +213,10 @@ PORTS=(8769 8770 8771 8772)
 NAMES=("discovery-cf1" "discovery-cf2" "discovery-cf3" "discovery-filterv2")
 TITLES=("CF-1" "CF-2" "CF-3" "Filter-V2")
 SHEET_IDS=(
-    "1JLp0CQ3S2cVj8ykdYpjHe6OvL-Q7rGTm2KCy7aZArNM"
-    "1OYV70F2r7oBUF7_SemXgQVkAHonDWZDjq_p7ve8Uw_o"
-    "1zQr4NyJpkk0Db7cDaDHvNJQJC9ou8rswq8RxsiGUD2k"
-    "1iodRlmHB1PmHy2CORe33VQOBA2MpQYHRDPpJPAYUJ9s"
+    "1Sil5fw0l0rc0aMoydtnn7ZHdDbY5hwl7D9rda7bETkc"
+    "1xphjNDv0hHEr8ZXv4PEVDmnEeVrsw_XAUMGaDf8ySUY"
+    "10pacDW-6EqAdWslv9DTJBrRZDsybMczwMSpmKJebWFc"
+    "14kC-RUMrpJB1Ur4CGpXMh1Te-yv7qBjsINJgM7NqySY"
 )
 
 GREEN='\033[0;32m'

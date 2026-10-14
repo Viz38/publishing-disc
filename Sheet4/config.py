@@ -12,7 +12,7 @@ load_dotenv(os.path.join(BASE_DIR, ".env"))
 @dataclass
 class Settings:
     SERVICE_NAME: str = "Filter-V2"
-    FULL_NAME: str = "Discovery AI - Filter-V2 (Nandan Filter)"
+    FULL_NAME: str = "Discovery AI - CF >> IF Automation (NVDEIA) - Nandan Filter-V2-Python Automation"
     SERVICE_AUTH_TOKEN: str = os.getenv("SERVICE_AUTH_TOKEN", "")
     DISCOVERY_PORT: int = int(os.getenv("SHEET4_PORT", os.getenv("DISCOVERY_PORT", "8772")))
 
