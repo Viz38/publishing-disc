@@ -13,12 +13,57 @@ const CONFIG = {
     { name: '5080-CF-3-Pipeline', url: 'https://5080-sheet3.ecosuyaenergies.com', hostId: '5080', isProduction: true },
     { name: 'Vishnu-CF-3-Pipeline', url: 'https://vishnu-sheet3.ecosuyaenergies.com', hostId: 'Vishnu', isTesting: true }
   ],
-  AUTH_TOKEN: '',
+  AUTH_TOKEN: '', // Loaded dynamically from Script Properties (SERVICE_AUTH_TOKEN)
   DEFAULT_MODE: 'full',
   MAX_RETRIES: 3,
   ACTIVE_WORKER_PROP: 'DISCOVERY_ACTIVE_WORKER_SHEET_3',
   MAX_DEVICE_SHEETS: 2
 };
+
+/**
+ * Retrieves the authorization token for worker FastAPI endpoints.
+ * Prioritizes Script Properties (SERVICE_AUTH_TOKEN) or Document Properties,
+ * falling back to CONFIG.AUTH_TOKEN.
+ */
+function getAuthToken_() {
+  try {
+    const sp = PropertiesService.getScriptProperties().getProperty('SERVICE_AUTH_TOKEN');
+    if (sp && sp.trim()) return sp.trim();
+  } catch (e) {}
+
+  try {
+    const dp = PropertiesService.getDocumentProperties().getProperty('SERVICE_AUTH_TOKEN');
+    if (dp && dp.trim()) return dp.trim();
+  } catch (e) {}
+
+  return CONFIG.AUTH_TOKEN || '';
+}
+
+/**
+ * Menu action allowing operators to configure or update the Service Auth Token
+ * securely without modifying script source code.
+ */
+function uiSetServiceAuthToken() {
+  const ui = SpreadsheetApp.getUi();
+  const currentToken = getAuthToken_();
+  const masked = currentToken ? (currentToken.substring(0, 3) + '***' + currentToken.slice(-2)) : 'Not Set';
+
+  const res = ui.prompt(
+    '🔑 Set Service Auth Token',
+    'Current Token: ' + masked + '\n\nEnter the new Service Auth Token (matches SERVICE_AUTH_TOKEN in .env):',
+    ui.ButtonSet.OK_CANCEL
+  );
+
+  if (res.getSelectedButton() === ui.Button.OK) {
+    const newToken = res.getResponseText().trim();
+    if (newToken) {
+      PropertiesService.getScriptProperties().setProperty('SERVICE_AUTH_TOKEN', newToken);
+      ui.alert('✅ Token Saved', 'Service Auth Token has been securely stored in Script Properties.', ui.ButtonSet.OK);
+    } else {
+      ui.alert('⚠️ Warning', 'Token cannot be empty.', ui.ButtonSet.OK);
+    }
+  }
+}
 
 function onOpen() {
   const ui = SpreadsheetApp.getUi();
@@ -27,8 +72,9 @@ function onOpen() {
     .addSeparator()
     .addItem('\uD83D\uDEA6 Check Status', 'uiCheckStatus')
     .addItem('\uD83D\uDCCA Check Health', 'uiCheckHealth')
+    .addItem("🔑 Set Auth Token", "uiSetServiceAuthToken")
     .addSeparator()
-    .addItem("\uD83E\uDDF9 Clean Sheet", "cleanSheet")
+    .addItem("🧹 Clean Sheet", "cleanSheet")
     .addItem("\u26A0\uFE0F Force Reset", "forceReset")
     .addToUi();
 }
@@ -155,7 +201,7 @@ function uiStartRun(resumeOnly = false) {
   htmlContent += 'function selectWorker(i){ document.getElementById("w" + i).checked = true; document.getElementById("next-btn").disabled = false; }';
 
   htmlContent += 'function fetchStatuses(){';
-  htmlContent += '  const token = "' + CONFIG.AUTH_TOKEN + '";';
+  htmlContent += '  const token = "' + getAuthToken_() + '";';
   htmlContent += '  const targetWorkers = workersList.filter(w => w.url !== "auto");';
   htmlContent += '  document.getElementById("fetch-btn").textContent = "\u23F3 Checking...";';
   htmlContent += '  function applyResults(results){';
@@ -230,7 +276,7 @@ function uiStartRun(resumeOnly = false) {
 
   htmlContent += 'let activeWorkerUrl = null;';
   htmlContent += 'function pollProgress(){';
-  htmlContent += '  const token = "' + CONFIG.AUTH_TOKEN + '";';
+  htmlContent += '  const token = "' + getAuthToken_() + '";';
   htmlContent += '  const prodWorkers = ' + JSON.stringify(CONFIG.WORKER_URLS.filter(w => w.isProduction)) + ';';
   htmlContent += '  function handleStatus(s){';
   htmlContent += '    if(!s) return;';
@@ -321,7 +367,7 @@ function normalizeUrl_(url) {
 
 function uiCheckHealth() {
   const workersJson = JSON.stringify(CONFIG.WORKER_URLS);
-  const token = CONFIG.AUTH_TOKEN;
+  const token = getAuthToken_();
   let htmlContent = '<html><body style="font-family:Inter,sans-serif;padding:16px;">';
   htmlContent += '<h3>\uD83D\uDCCA Discovery Engine Fleet Health (' + CONFIG.TYPE + ')</h3>';
   htmlContent += '<div id="results-box"><p style="color:#64748b;">\u23F3 Checking fleet connectivity directly...</p></div>';
@@ -359,7 +405,7 @@ function uiCheckHealthServer() {
     const cleanUrl = normalizeUrl_(w.url);
     try {
       const res = UrlFetchApp.fetch(cleanUrl + '/discovery/health', {
-        headers: { 'Authorization': 'Bearer ' + CONFIG.AUTH_TOKEN },
+        headers: { 'Authorization': 'Bearer ' + getAuthToken_() },
         muteHttpExceptions: true
       });
       const code = res.getResponseCode();
@@ -378,7 +424,7 @@ function checkMultipleWorkerStatusesForUi(urls) {
   return urls.map(url => {
     try {
       const res = UrlFetchApp.fetch(normalizeUrl_(url) + '/discovery/status', {
-        headers: { 'Authorization': 'Bearer ' + CONFIG.AUTH_TOKEN },
+        headers: { 'Authorization': 'Bearer ' + getAuthToken_() },
         muteHttpExceptions: true
       });
       if (res.getResponseCode() === 200) {
@@ -413,7 +459,7 @@ function findIdleWorker_() {
   for (const w of prodWorkers) {
     try {
       const res = UrlFetchApp.fetch(normalizeUrl_(w.url) + '/discovery/status', {
-        headers: { 'Authorization': 'Bearer ' + CONFIG.AUTH_TOKEN },
+        headers: { 'Authorization': 'Bearer ' + getAuthToken_() },
         muteHttpExceptions: true
       });
       if (res.getResponseCode() === 200) {
@@ -454,7 +500,7 @@ function executeRunFromUi(startRow, chosenWorkerUrl, mode = 'full', silent = fal
 
     try {
       const res = UrlFetchApp.fetch(normalizeUrl_(chosenWorkerUrl) + '/discovery/status', {
-        headers: { 'Authorization': 'Bearer ' + CONFIG.AUTH_TOKEN },
+        headers: { 'Authorization': 'Bearer ' + getAuthToken_() },
         muteHttpExceptions: true
       });
       if (res.getResponseCode() === 200) {
@@ -476,7 +522,7 @@ function executeRunFromUi(startRow, chosenWorkerUrl, mode = 'full', silent = fal
       for (const alt of otherProdWorkers) {
         try {
           const res = UrlFetchApp.fetch(normalizeUrl_(alt.url) + '/discovery/status', {
-            headers: { 'Authorization': 'Bearer ' + CONFIG.AUTH_TOKEN },
+            headers: { 'Authorization': 'Bearer ' + getAuthToken_() },
             muteHttpExceptions: true
           });
           if (res.getResponseCode() === 200) {
@@ -520,7 +566,7 @@ function executeRunFromUi(startRow, chosenWorkerUrl, mode = 'full', silent = fal
   const startRes = UrlFetchApp.fetch(normalizeUrl_(targetWorker.url) + '/discovery/start', {
     method: 'post',
     contentType: 'application/json',
-    headers: { 'Authorization': 'Bearer ' + CONFIG.AUTH_TOKEN },
+    headers: { 'Authorization': 'Bearer ' + getAuthToken_() },
     payload: JSON.stringify({ 
       start_row: startRow, 
       mode: mode, 
@@ -568,7 +614,7 @@ function getStatusJson() {
     try {
       const cleanUrl = normalizeUrl_(url);
       const res = UrlFetchApp.fetch(cleanUrl + '/discovery/status', {
-        headers: { 'Authorization': 'Bearer ' + CONFIG.AUTH_TOKEN },
+        headers: { 'Authorization': 'Bearer ' + getAuthToken_() },
         muteHttpExceptions: true
       });
       if (res.getResponseCode() === 200) {
@@ -586,7 +632,7 @@ function getStatusJson() {
     try {
       const cleanUrl = normalizeUrl_(w.url);
       const res = UrlFetchApp.fetch(cleanUrl + '/discovery/status', {
-        headers: { 'Authorization': 'Bearer ' + CONFIG.AUTH_TOKEN },
+        headers: { 'Authorization': 'Bearer ' + getAuthToken_() },
         muteHttpExceptions: true
       });
       if (res.getResponseCode() === 200) {
@@ -606,7 +652,7 @@ function getStatusJson() {
     try {
       const cleanUrl = normalizeUrl_(url);
       const res = UrlFetchApp.fetch(cleanUrl + '/discovery/status', {
-        headers: { 'Authorization': 'Bearer ' + CONFIG.AUTH_TOKEN },
+        headers: { 'Authorization': 'Bearer ' + getAuthToken_() },
         muteHttpExceptions: true
       });
       if (res.getResponseCode() === 200) return JSON.parse(res.getContentText());
@@ -621,7 +667,7 @@ function executeCancelFromUi() {
   if (!url) return;
   UrlFetchApp.fetch(normalizeUrl_(url) + '/discovery/cancel', {
     method: 'post',
-    headers: { 'Authorization': 'Bearer ' + CONFIG.AUTH_TOKEN },
+    headers: { 'Authorization': 'Bearer ' + getAuthToken_() },
     muteHttpExceptions: true
   });
 }

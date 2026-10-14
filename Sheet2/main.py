@@ -1218,10 +1218,36 @@ def load_or_refresh_run_config(gc, force_refresh=False):
                 "timestamp": time.time()
             }
 
+            # Sanitize secrets before writing fallback cache to disk
+            sanitized_disk_cache = {
+                "basic_config": basic_config,
+                "funnel_prompts": {
+                    "FunnelIdPromptMap": funnel_id_map,
+                    "FunnelNamePromptMap": funnel_name_map,
+                    "Feed_cache_Id": feed_cache_id_map,
+                    "Feed_cache_Info_API_Token": {k: "" for k in feed_api_token_map},
+                    "Feed_cache_Info_Model": feed_model_map,
+                    "Feed_cache_Info_Gen_Date": feed_gen_date_map,
+                    "Feed_cache_Info_Final_Status": feed_status_map,
+                    "inputResult": []
+                },
+                "feed_mappings": feed_mappings,
+                "nim_config": {
+                    "NIM_Model_To_Pick": settings.Nvidia_Base_Model,
+                    "tokenArray": []
+                },
+                "cache_id_IF_Prediction": cache_id_IF,
+                "token_IF_Prediction": "",
+                "date_IF_Prediction": date_IF,
+                "status_IF_Prediction": status_IF,
+                "exp_date_IF_Prediction": exp_date_IF,
+                "timestamp": time.time()
+            }
+
             for cf in [candidate_cache_files[0], candidate_cache_files[1]]:
                 try:
                     with open(cf, "w") as f:
-                        json.dump(_RUN_CACHE, f)
+                        json.dump(sanitized_disk_cache, f)
                 except Exception:
                     pass
 

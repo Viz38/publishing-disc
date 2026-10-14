@@ -25,10 +25,21 @@ __pycache__/
 .pytest_cache/
 
 # Environment and sensitive keys
-.env
+.env*
+*.env
+!.env.example
 *.json
-!credentials_template.json
-!run_cache.json
+*run_cache.json
+*.run_cache.json
+*creds*.json
+creds.json
+*service_account*.json
+credentials*.json
+.execution_state.json
+*.execution_state.json
+*.pem
+*.key
+*.cert
 .venv/
 env/
 venv/

@@ -46,6 +46,24 @@ def get_ist_timestamp() -> str:
     """Returns formatted IST timestamp for logging and sheet cells."""
     return get_now_ist().strftime("%d/%b/%Y %H:%M:%S")
 
+def get_cycle_date_ist(current_dt: Optional[datetime.datetime] = None) -> str:
+    """
+    Returns the daily processing cycle date string (YYYY-MM-DD) in IST.
+    Daily domains refresh from Apps Script at 05:00 AM IST.
+    Therefore, the window from 00:00:00 to 04:59:59 IST belongs to the cycle
+    that started at 05:00 AM on the previous calendar day.
+    """
+    if current_dt is None:
+        current_dt = get_now_ist()
+    elif current_dt.tzinfo is None:
+        current_dt = current_dt.replace(tzinfo=IST_TZ)
+    else:
+        current_dt = current_dt.astimezone(IST_TZ)
+
+    if current_dt.hour < 5:
+        current_dt = current_dt - datetime.timedelta(days=1)
+    return current_dt.strftime("%Y-%m-%d")
+
 def safe_str(val: Any) -> str:
     """Safely converts any value to string, stripping whitespace."""
     if val is None:
@@ -443,7 +461,7 @@ class ExecutionTracker:
             retry_count = existing.get("retry_count", 0)
 
             now_str = current_dt.strftime("%Y-%m-%d %H:%M:%S")
-            date_str = current_dt.strftime("%Y-%m-%d")
+            date_str = get_cycle_date_ist(current_dt)
             if not run_id:
                 run_id = f"{sheet}_{current_dt.strftime('%Y%m%d_%H%M%S')}"
 
@@ -566,8 +584,8 @@ class ExecutionTracker:
 
         # 2. Daily cycle check: If run was from a previous date, sheet was wiped by Apps Script at 5am
         run_date_ist = state.get("date_ist")
-        today_date_ist = current_dt.strftime("%Y-%m-%d")
-        if run_date_ist != today_date_ist:
+        today_cycle_ist = get_cycle_date_ist(current_dt)
+        if run_date_ist != today_cycle_ist:
             return False, None
 
         # 3. 5:00 AM IST blackout window: Do not resume while Apps Script is refreshing daily domains

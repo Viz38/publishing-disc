@@ -550,6 +550,7 @@ async def start_pipeline(req: RunRequest, background_tasks: BackgroundTasks):
             "message": f"Device capacity reached ({active_sheets}/2 active sheets). Maximum 2 concurrent sheets allowed on this host."
         }
 
+    EXEC_TRACKER.reset_retry_count()
     background_tasks.add_task(run_pipeline_task, req)
     return {"status": "accepted", "sheet_id": req.sheet_id or settings.CF_SHEET_ID}
 
