@@ -155,9 +155,10 @@ function uiStartRun(resumeOnly = false) {
   htmlContent += 'function selectWorker(i){ document.getElementById("w" + i).checked = true; document.getElementById("next-btn").disabled = false; }';
 
   htmlContent += 'function fetchStatuses(){';
-  htmlContent += '  const urls = workersList.filter(w => w.url !== "auto").map(w => w.url);';
+  htmlContent += '  const token = "' + CONFIG.AUTH_TOKEN + '";';
+  htmlContent += '  const targetWorkers = workersList.filter(w => w.url !== "auto");';
   htmlContent += '  document.getElementById("fetch-btn").textContent = "\u23F3 Checking...";';
-  htmlContent += '  google.script.run.withSuccessHandler(function(results){';
+  htmlContent += '  function applyResults(results){';
   htmlContent += '    document.getElementById("fetch-btn").textContent = "\uD83D\uDD04 Refresh Status";';
   htmlContent += '    results.forEach(r => {';
   htmlContent += '      const w = workersList.find(x => x.url === r.url);';
@@ -170,7 +171,16 @@ function uiStartRun(resumeOnly = false) {
   htmlContent += '      }';
   htmlContent += '    });';
   htmlContent += '    renderWorkers();';
-  htmlContent += '  }).checkMultipleWorkerStatusesForUi(urls);';
+  htmlContent += '  }';
+  htmlContent += '  Promise.all(targetWorkers.map(w => {';
+  htmlContent += '    const cleanUrl = (w.url || "").trim().replace(/\/+$/, "");';
+  htmlContent += '    return fetch(cleanUrl + "/discovery/status", { headers: { "Authorization": "Bearer " + token } })';
+  htmlContent += '      .then(res => res.json().then(s => ({ url: w.url, isOnline: true, isIdle: s.status === "idle", isAtCapacity: (s.device_active_sheets || 0) >= (s.device_max_sheets || 2), device_active_sheets: s.device_active_sheets || 0 })))';
+  htmlContent += '      .catch(() => ({ url: w.url, isOnline: false, isIdle: false, isAtCapacity: false, device_active_sheets: 0 }));';
+  htmlContent += '  })).then(applyResults).catch(() => {';
+  htmlContent += '    const urls = targetWorkers.map(w => w.url);';
+  htmlContent += '    google.script.run.withSuccessHandler(applyResults).checkMultipleWorkerStatusesForUi(urls);';
+  htmlContent += '  });';
   htmlContent += '}';
 
   htmlContent += 'function goToSetup(){';
@@ -218,8 +228,12 @@ function uiStartRun(resumeOnly = false) {
 
   htmlContent += 'function startPolling(){ pollProgress(); pollTimer = setInterval(pollProgress, 3000); }';
 
+  htmlContent += 'let activeWorkerUrl = null;';
   htmlContent += 'function pollProgress(){';
-  htmlContent += '  google.script.run.withSuccessHandler(function(s){';
+  htmlContent += '  const token = "' + CONFIG.AUTH_TOKEN + '";';
+  htmlContent += '  const prodWorkers = ' + JSON.stringify(CONFIG.WORKER_URLS.filter(w => w.isProduction)) + ';';
+  htmlContent += '  function handleStatus(s){';
+  htmlContent += '    if(!s) return;';
   htmlContent += '    updateProgressUi(s);';
   htmlContent += '    if(s.status === "succeeded" || s.status === "failed" || s.status === "stopped"){';
   htmlContent += '      clearInterval(pollTimer);';
@@ -227,7 +241,31 @@ function uiStartRun(resumeOnly = false) {
   htmlContent += '      document.getElementById("stop-btn").style.display = "none";';
   htmlContent += '      fitHeight();';
   htmlContent += '    }';
-  htmlContent += '  }).getStatusJson();';
+  htmlContent += '  }';
+  htmlContent += '  if(activeWorkerUrl){';
+  htmlContent += '    fetch(activeWorkerUrl + "/discovery/status", { headers: { "Authorization": "Bearer " + token } })';
+  htmlContent += '      .then(r => r.json())';
+  htmlContent += '      .then(s => {';
+  htmlContent += '        if(!s.active && s.status === "idle"){ activeWorkerUrl = null; }';
+  htmlContent += '        handleStatus(s);';
+  htmlContent += '      })';
+  htmlContent += '      .catch(() => { google.script.run.withSuccessHandler(handleStatus).getStatusJson(); });';
+  htmlContent += '  } else {';
+  htmlContent += '    Promise.all(prodWorkers.map(w =>';
+  htmlContent += '      fetch(w.url + "/discovery/status", { headers: { "Authorization": "Bearer " + token } })';
+  htmlContent += '        .then(r => r.json().then(data => ({ worker: w, data })))';
+  htmlContent += '        .catch(() => null)';
+  htmlContent += '    )).then(results => {';
+  htmlContent += '      const active = results.find(r => r && r.data && r.data.active);';
+  htmlContent += '      if(active){';
+  htmlContent += '        activeWorkerUrl = active.worker.url;';
+  htmlContent += '        handleStatus(active.data);';
+  htmlContent += '      } else {';
+  htmlContent += '        const anyValid = results.find(r => r && r.data);';
+  htmlContent += '        handleStatus(anyValid ? anyValid.data : { active: false, status: "idle" });';
+  htmlContent += '      }';
+  htmlContent += '    }).catch(() => { google.script.run.withSuccessHandler(handleStatus).getStatusJson(); });';
+  htmlContent += '  }';
   htmlContent += '}';
 
   htmlContent += 'function updateProgressUi(s){';
@@ -277,38 +315,58 @@ function uiCheckStatus() {
   uiStartRun(true);
 }
 
+function normalizeUrl_(url) {
+  return (url || '').toString().trim().replace(/\/+$/, '');
+}
+
 function uiCheckHealth() {
-  const results = CONFIG.WORKER_URLS.map(w => {
-    let isOnline = false;
-    try {
-      const res = UrlFetchApp.fetch(w.url + '/discovery/health', {
-        headers: { 'Authorization': 'Bearer ' + CONFIG.AUTH_TOKEN },
-        muteHttpExceptions: true
-      });
-      isOnline = (res.getResponseCode() === 200);
-    } catch(e) {}
-    return { name: w.name, isOnline: isOnline };
-  });
-  let htmlContent = '<html><body style="font-family:Inter,sans-serif;padding:16px;"><h3>\uD83D\uDCCA Discovery Engine Fleet Health (CF-3)</h3>';
-  results.forEach(r => {
-    htmlContent += '<p>' + (r.isOnline ? '\u2705 ' : '\u274C ') + '<strong>' + r.name + '</strong>: ' + (r.isOnline ? 'Online' : 'Offline') + '</p>';
-  });
-  htmlContent += '</body></html>';
-  const html = HtmlService.createHtmlOutput(htmlContent).setWidth(380).setHeight(320);
-  SpreadsheetApp.getUi().showModalDialog(html, '\uD83D\uDCCA Discovery Engine Fleet Health (CF-3)');
+  const workersJson = JSON.stringify(CONFIG.WORKER_URLS);
+  const token = CONFIG.AUTH_TOKEN;
+  let htmlContent = '<html><body style="font-family:Inter,sans-serif;padding:16px;">';
+  htmlContent += '<h3>\uD83D\uDCCA Discovery Engine Fleet Health (' + CONFIG.TYPE + ')</h3>';
+  htmlContent += '<div id="results-box"><p style="color:#64748b;">\u23F3 Checking fleet connectivity directly...</p></div>';
+  htmlContent += '<script>';
+  htmlContent += 'const workers = ' + workersJson + ';';
+  htmlContent += 'const token = "' + token + '";';
+  htmlContent += 'Promise.all(workers.map(w => {';
+  htmlContent += '  const cleanUrl = (w.url || "").trim().replace(/\/+$/, "");';
+  htmlContent += '  const start = Date.now();';
+  htmlContent += '  return fetch(cleanUrl + "/discovery/health", { headers: { "Authorization": "Bearer " + token } })';
+  htmlContent += '    .then(res => {';
+  htmlContent += '      const lat = Date.now() - start;';
+  htmlContent += '      return { name: w.name, isOnline: res.status === 200, details: "HTTP " + res.status + " (" + lat + "ms)" };';
+  htmlContent += '    })';
+  htmlContent += '    .catch(err => ({ name: w.name, isOnline: false, details: err.message || "Offline" }));';
+  htmlContent += '})).then(results => {';
+  htmlContent += '  let html = "";';
+  htmlContent += '  results.forEach(r => {';
+  htmlContent += '    html += `<p style="margin:8px 0;">${r.isOnline ? "\u2705 " : "\u274C "}<strong>${r.name}</strong>: ${r.isOnline ? '<span style="color:#16a34a;font-weight:600;">Online</span>' : '<span style="color:#dc2626;font-weight:600;">Offline</span>'} <span style="color:#64748b;font-size:12px;">(${r.details})</span></p>`;';
+  htmlContent += '  });';
+  htmlContent += '  document.getElementById("results-box").innerHTML = html;';
+  htmlContent += '});';
+  htmlContent += '</script></body></html>';
+
+  const html = HtmlService.createHtmlOutput(htmlContent).setWidth(440).setHeight(320);
+  SpreadsheetApp.getUi().showModalDialog(html, '\uD83D\uDCCA Discovery Engine Fleet Health (' + CONFIG.TYPE + ')');
 }
 
 function uiCheckHealthServer() {
   return CONFIG.WORKER_URLS.map(w => {
     let isOnline = false;
+    let details = '';
+    const cleanUrl = normalizeUrl_(w.url);
     try {
-      const res = UrlFetchApp.fetch(w.url + '/discovery/health', {
+      const res = UrlFetchApp.fetch(cleanUrl + '/discovery/health', {
         headers: { 'Authorization': 'Bearer ' + CONFIG.AUTH_TOKEN },
         muteHttpExceptions: true
       });
-      isOnline = (res.getResponseCode() === 200);
-    } catch(e) {}
-    return { name: w.name, url: w.url, isOnline: isOnline };
+      const code = res.getResponseCode();
+      isOnline = (code === 200);
+      details = 'HTTP ' + code;
+    } catch(e) {
+      details = e.message || 'Error';
+    }
+    return { name: w.name, url: w.url, isOnline: isOnline, details: details };
   });
 }
 
@@ -317,13 +375,13 @@ function getConfigWorkersForUi() { return CONFIG.WORKER_URLS; }
 function checkMultipleWorkerStatusesForUi(urls) {
   return urls.map(url => {
     try {
-      const res = UrlFetchApp.fetch(url + '/discovery/status', {
+      const res = UrlFetchApp.fetch(normalizeUrl_(url) + '/discovery/status', {
         headers: { 'Authorization': 'Bearer ' + CONFIG.AUTH_TOKEN },
         muteHttpExceptions: true
       });
       if (res.getResponseCode() === 200) {
         const s = JSON.parse(res.getContentText());
-        const worker = CONFIG.WORKER_URLS.find(w => w.url === url);
+        const worker = CONFIG.WORKER_URLS.find(w => normalizeUrl_(w.url) === normalizeUrl_(url));
         const isTesting = worker ? worker.isTesting : false;
         const activeSheets = s.device_active_sheets || 0;
         const maxSheets = s.device_max_sheets || 2;
@@ -352,7 +410,7 @@ function findIdleWorker_() {
 
   for (const w of prodWorkers) {
     try {
-      const res = UrlFetchApp.fetch(w.url + '/discovery/status', {
+      const res = UrlFetchApp.fetch(normalizeUrl_(w.url) + '/discovery/status', {
         headers: { 'Authorization': 'Bearer ' + CONFIG.AUTH_TOKEN },
         muteHttpExceptions: true
       });
@@ -393,7 +451,7 @@ function executeRunFromUi(startRow, chosenWorkerUrl, mode = 'full', silent = fal
     let chosenStatus = null;
 
     try {
-      const res = UrlFetchApp.fetch(chosenWorkerUrl + '/discovery/status', {
+      const res = UrlFetchApp.fetch(normalizeUrl_(chosenWorkerUrl) + '/discovery/status', {
         headers: { 'Authorization': 'Bearer ' + CONFIG.AUTH_TOKEN },
         muteHttpExceptions: true
       });
@@ -415,7 +473,7 @@ function executeRunFromUi(startRow, chosenWorkerUrl, mode = 'full', silent = fal
 
       for (const alt of otherProdWorkers) {
         try {
-          const res = UrlFetchApp.fetch(alt.url + '/discovery/status', {
+          const res = UrlFetchApp.fetch(normalizeUrl_(alt.url) + '/discovery/status', {
             headers: { 'Authorization': 'Bearer ' + CONFIG.AUTH_TOKEN },
             muteHttpExceptions: true
           });
@@ -457,7 +515,7 @@ function executeRunFromUi(startRow, chosenWorkerUrl, mode = 'full', silent = fal
   }
 
   // Launch pipeline
-  const startRes = UrlFetchApp.fetch(targetWorker.url + '/discovery/start', {
+  const startRes = UrlFetchApp.fetch(normalizeUrl_(targetWorker.url) + '/discovery/start', {
     method: 'post',
     contentType: 'application/json',
     headers: { 'Authorization': 'Bearer ' + CONFIG.AUTH_TOKEN },
@@ -500,23 +558,66 @@ function triggerDailyDiscoveryRun() {
 }
 
 function getStatusJson() {
-  const url = PropertiesService.getDocumentProperties().getProperty(CONFIG.ACTIVE_WORKER_PROP);
-  if (!url) return { active: false, status: 'idle' };
+  let url = PropertiesService.getDocumentProperties().getProperty(CONFIG.ACTIVE_WORKER_PROP);
+  const prodWorkers = CONFIG.WORKER_URLS.filter(w => w.isProduction);
 
-  try {
-    const res = UrlFetchApp.fetch(url + '/discovery/status', {
-      headers: { 'Authorization': 'Bearer ' + CONFIG.AUTH_TOKEN },
-      muteHttpExceptions: true
-    });
-    if (res.getResponseCode() === 200) return JSON.parse(res.getContentText());
-  } catch(e) {}
-  return { active: false, status: 'unknown' };
+  // 1. If stored worker exists, test if it is running
+  if (url) {
+    try {
+      const cleanUrl = normalizeUrl_(url);
+      const res = UrlFetchApp.fetch(cleanUrl + '/discovery/status', {
+        headers: { 'Authorization': 'Bearer ' + CONFIG.AUTH_TOKEN },
+        muteHttpExceptions: true
+      });
+      if (res.getResponseCode() === 200) {
+        const data = JSON.parse(res.getContentText());
+        if (data.active) {
+          return data;
+        }
+      }
+    } catch(e) {}
+  }
+
+  // 2. If stored worker is idle or unreachable, auto-scan all production workers to find where it's actively running
+  for (const w of prodWorkers) {
+    if (normalizeUrl_(w.url) === normalizeUrl_(url)) continue;
+    try {
+      const cleanUrl = normalizeUrl_(w.url);
+      const res = UrlFetchApp.fetch(cleanUrl + '/discovery/status', {
+        headers: { 'Authorization': 'Bearer ' + CONFIG.AUTH_TOKEN },
+        muteHttpExceptions: true
+      });
+      if (res.getResponseCode() === 200) {
+        const data = JSON.parse(res.getContentText());
+        if (data.active) {
+          // Auto-latch onto the running worker!
+          PropertiesService.getDocumentProperties().setProperty(CONFIG.ACTIVE_WORKER_PROP, w.url);
+          PropertiesService.getDocumentProperties().setProperty(CONFIG.ACTIVE_WORKER_PROP + '_NAME', w.name);
+          return data;
+        }
+      }
+    } catch(e) {}
+  }
+
+  // 3. Fallback: return status of stored worker if available
+  if (url) {
+    try {
+      const cleanUrl = normalizeUrl_(url);
+      const res = UrlFetchApp.fetch(cleanUrl + '/discovery/status', {
+        headers: { 'Authorization': 'Bearer ' + CONFIG.AUTH_TOKEN },
+        muteHttpExceptions: true
+      });
+      if (res.getResponseCode() === 200) return JSON.parse(res.getContentText());
+    } catch(e) {}
+  }
+
+  return { active: false, status: 'idle' };
 }
 
 function executeCancelFromUi() {
   const url = PropertiesService.getDocumentProperties().getProperty(CONFIG.ACTIVE_WORKER_PROP);
   if (!url) return;
-  UrlFetchApp.fetch(url + '/discovery/cancel', {
+  UrlFetchApp.fetch(normalizeUrl_(url) + '/discovery/cancel', {
     method: 'post',
     headers: { 'Authorization': 'Bearer ' + CONFIG.AUTH_TOKEN },
     muteHttpExceptions: true

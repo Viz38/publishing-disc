@@ -3848,8 +3848,7 @@ async def Integrated_Extract_domains(
         ttl_dns_cache=300
     )
     async with aiohttp.ClientSession(headers=mainheaders, connector=connector) as session:
-        # Resumption check: if script stopped >3 hrs ago, query Tech Crawler status of all existing jobs first
-        await reconcile_existing_tech_crawler_jobs(session, pf_data, client, SHEET_ID, EXTRACTING_SHEET_NAME, start_row_num=start_row_num)
+        # Each 100-row batch automatically tracks its own existing Tech Crawler jobs and harvests S3 markdowns progressively in Integrated_Process_domain
 
         for batch_index, batch in enumerate(domains_batches):
             if is_5am_ist_cutoff():

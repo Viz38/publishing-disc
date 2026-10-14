@@ -155,9 +155,10 @@ function uiStartRun(resumeOnly = false) {
   htmlContent += 'function selectWorker(i){ document.getElementById("w" + i).checked = true; document.getElementById("next-btn").disabled = false; }';
 
   htmlContent += 'function fetchStatuses(){';
-  htmlContent += '  const urls = workersList.filter(w => w.url !== "auto").map(w => w.url);';
+  htmlContent += '  const token = "' + CONFIG.AUTH_TOKEN + '";';
+  htmlContent += '  const targetWorkers = workersList.filter(w => w.url !== "auto");';
   htmlContent += '  document.getElementById("fetch-btn").textContent = "\u23F3 Checking...";';
-  htmlContent += '  google.script.run.withSuccessHandler(function(results){';
+  htmlContent += '  function applyResults(results){';
   htmlContent += '    document.getElementById("fetch-btn").textContent = "\uD83D\uDD04 Refresh Status";';
   htmlContent += '    results.forEach(r => {';
   htmlContent += '      const w = workersList.find(x => x.url === r.url);';
@@ -170,7 +171,16 @@ function uiStartRun(resumeOnly = false) {
   htmlContent += '      }';
   htmlContent += '    });';
   htmlContent += '    renderWorkers();';
-  htmlContent += '  }).checkMultipleWorkerStatusesForUi(urls);';
+  htmlContent += '  }';
+  htmlContent += '  Promise.all(targetWorkers.map(w => {';
+  htmlContent += '    const cleanUrl = (w.url || "").trim().replace(/\/+$/, "");';
+  htmlContent += '    return fetch(cleanUrl + "/discovery/status", { headers: { "Authorization": "Bearer " + token } })';
+  htmlContent += '      .then(res => res.json().then(s => ({ url: w.url, isOnline: true, isIdle: s.status === "idle", isAtCapacity: (s.device_active_sheets || 0) >= (s.device_max_sheets || 2), device_active_sheets: s.device_active_sheets || 0 })))';
+  htmlContent += '      .catch(() => ({ url: w.url, isOnline: false, isIdle: false, isAtCapacity: false, device_active_sheets: 0 }));';
+  htmlContent += '  })).then(applyResults).catch(() => {';
+  htmlContent += '    const urls = targetWorkers.map(w => w.url);';
+  htmlContent += '    google.script.run.withSuccessHandler(applyResults).checkMultipleWorkerStatusesForUi(urls);';
+  htmlContent += '  });';
   htmlContent += '}';
 
   htmlContent += 'function goToSetup(){';
@@ -218,8 +228,12 @@ function uiStartRun(resumeOnly = false) {
 
   htmlContent += 'function startPolling(){ pollProgress(); pollTimer = setInterval(pollProgress, 3000); }';
 
+  htmlContent += 'let activeWorkerUrl = null;';
   htmlContent += 'function pollProgress(){';
-  htmlContent += '  google.script.run.withSuccessHandler(function(s){';
+  htmlContent += '  const token = "' + CONFIG.AUTH_TOKEN + '";';
+  htmlContent += '  const prodWorkers = ' + JSON.stringify(CONFIG.WORKER_URLS.filter(w => w.isProduction)) + ';';
+  htmlContent += '  function handleStatus(s){';
+  htmlContent += '    if(!s) return;';
   htmlContent += '    updateProgressUi(s);';
   htmlContent += '    if(s.status === "succeeded" || s.status === "failed" || s.status === "stopped"){';
   htmlContent += '      clearInterval(pollTimer);';
@@ -227,7 +241,31 @@ function uiStartRun(resumeOnly = false) {
   htmlContent += '      document.getElementById("stop-btn").style.display = "none";';
   htmlContent += '      fitHeight();';
   htmlContent += '    }';
-  htmlContent += '  }).getStatusJson();';
+  htmlContent += '  }';
+  htmlContent += '  if(activeWorkerUrl){';
+  htmlContent += '    fetch(activeWorkerUrl + "/discovery/status", { headers: { "Authorization": "Bearer " + token } })';
+  htmlContent += '      .then(r => r.json())';
+  htmlContent += '      .then(s => {';
+  htmlContent += '        if(!s.active && s.status === "idle"){ activeWorkerUrl = null; }';
+  htmlContent += '        handleStatus(s);';
+  htmlContent += '      })';
+  htmlContent += '      .catch(() => { google.script.run.withSuccessHandler(handleStatus).getStatusJson(); });';
+  htmlContent += '  } else {';
+  htmlContent += '    Promise.all(prodWorkers.map(w =>';
+  htmlContent += '      fetch(w.url + "/discovery/status", { headers: { "Authorization": "Bearer " + token } })';
+  htmlContent += '        .then(r => r.json().then(data => ({ worker: w, data })))';
+  htmlContent += '        .catch(() => null)';
+  htmlContent += '    )).then(results => {';
+  htmlContent += '      const active = results.find(r => r && r.data && r.data.active);';
+  htmlContent += '      if(active){';
+  htmlContent += '        activeWorkerUrl = active.worker.url;';
+  htmlContent += '        handleStatus(active.data);';
+  htmlContent += '      } else {';
+  htmlContent += '        const anyValid = results.find(r => r && r.data);';
+  htmlContent += '        handleStatus(anyValid ? anyValid.data : { active: false, status: "idle" });';
+  htmlContent += '      }';
+  htmlContent += '    }).catch(() => { google.script.run.withSuccessHandler(handleStatus).getStatusJson(); });';
+  htmlContent += '  }';
   htmlContent += '}';
 
   htmlContent += 'function updateProgressUi(s){';
@@ -278,24 +316,34 @@ function uiCheckStatus() {
 }
 
 function uiCheckHealth() {
-  const results = CONFIG.WORKER_URLS.map(w => {
-    let isOnline = false;
-    try {
-      const res = UrlFetchApp.fetch(w.url + '/discovery/health', {
-        headers: { 'Authorization': 'Bearer ' + CONFIG.AUTH_TOKEN },
-        muteHttpExceptions: true
-      });
-      isOnline = (res.getResponseCode() === 200);
-    } catch(e) {}
-    return { name: w.name, isOnline: isOnline };
-  });
-  let htmlContent = '<html><body style="font-family:Inter,sans-serif;padding:16px;"><h3>\uD83D\uDCCA Discovery Engine Fleet Health (CF-1)</h3>';
-  results.forEach(r => {
-    htmlContent += '<p>' + (r.isOnline ? '\u2705 ' : '\u274C ') + '<strong>' + r.name + '</strong>: ' + (r.isOnline ? 'Online' : 'Offline') + '</p>';
-  });
-  htmlContent += '</body></html>';
-  const html = HtmlService.createHtmlOutput(htmlContent).setWidth(380).setHeight(320);
-  SpreadsheetApp.getUi().showModalDialog(html, '\uD83D\uDCCA Discovery Engine Fleet Health (CF-1)');
+  const workersJson = JSON.stringify(CONFIG.WORKER_URLS);
+  const token = CONFIG.AUTH_TOKEN;
+  let htmlContent = '<html><body style="font-family:Inter,sans-serif;padding:16px;">';
+  htmlContent += '<h3>\uD83D\uDCCA Discovery Engine Fleet Health (' + CONFIG.TYPE + ')</h3>';
+  htmlContent += '<div id="results-box"><p style="color:#64748b;">\u23F3 Checking fleet connectivity directly...</p></div>';
+  htmlContent += '<script>';
+  htmlContent += 'const workers = ' + workersJson + ';';
+  htmlContent += 'const token = "' + token + '";';
+  htmlContent += 'Promise.all(workers.map(w => {';
+  htmlContent += '  const cleanUrl = (w.url || "").trim().replace(/\/+$/, "");';
+  htmlContent += '  const start = Date.now();';
+  htmlContent += '  return fetch(cleanUrl + "/discovery/health", { headers: { "Authorization": "Bearer " + token } })';
+  htmlContent += '    .then(res => {';
+  htmlContent += '      const lat = Date.now() - start;';
+  htmlContent += '      return { name: w.name, isOnline: res.status === 200, details: "HTTP " + res.status + " (" + lat + "ms)" };';
+  htmlContent += '    })';
+  htmlContent += '    .catch(err => ({ name: w.name, isOnline: false, details: err.message || "Offline" }));';
+  htmlContent += '})).then(results => {';
+  htmlContent += '  let html = "";';
+  htmlContent += '  results.forEach(r => {';
+  htmlContent += '    html += `<p style="margin:8px 0;">${r.isOnline ? "\u2705 " : "\u274C "}<strong>${r.name}</strong>: ${r.isOnline ? '<span style="color:#16a34a;font-weight:600;">Online</span>' : '<span style="color:#dc2626;font-weight:600;">Offline</span>'} <span style="color:#64748b;font-size:12px;">(${r.details})</span></p>`;';
+  htmlContent += '  });';
+  htmlContent += '  document.getElementById("results-box").innerHTML = html;';
+  htmlContent += '});';
+  htmlContent += '</script></body></html>';
+
+  const html = HtmlService.createHtmlOutput(htmlContent).setWidth(440).setHeight(320);
+  SpreadsheetApp.getUi().showModalDialog(html, '\uD83D\uDCCA Discovery Engine Fleet Health (' + CONFIG.TYPE + ')');
 }
 
 function uiCheckHealthServer() {

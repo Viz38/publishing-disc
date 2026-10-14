@@ -180,20 +180,28 @@ class TechCrawlerClient:
     ) -> Optional[str]:
         """
         Fetches the raw text content of the rendered markdown file via the signed S3 URL.
+        Includes automatic retry and clean headers to prevent closing transport drops on S3.
         """
         if not signed_url:
             return None
 
-        try:
-            async with session.get(
-                signed_url,
-                timeout=aiohttp.ClientTimeout(total=45),
-            ) as resp:
-                if resp.status == 200:
-                    return await resp.text()
-                else:
-                    logger.warning(f"Failed to fetch markdown from signed S3 URL ({resp.status})")
+        for attempt in range(3):
+            try:
+                async with session.get(
+                    signed_url,
+                    headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+                    timeout=aiohttp.ClientTimeout(total=20),
+                ) as resp:
+                    if resp.status == 200:
+                        return await resp.text()
+                    elif resp.status in (403, 404):
+                        logger.warning(f"S3 returned status {resp.status} for signed URL")
+                        return None
+                    else:
+                        logger.warning(f"Failed to fetch markdown from signed S3 URL ({resp.status}), attempt {attempt+1}")
+            except Exception as e:
+                if attempt == 2:
+                    logger.error(f"Error downloading raw markdown from {signed_url}: {e}")
                     return None
-        except Exception as e:
-            logger.error(f"Error downloading raw markdown from {signed_url}: {e}")
-            return None
+                await asyncio.sleep(0.5)
+        return None
