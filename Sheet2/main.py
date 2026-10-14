@@ -1063,131 +1063,165 @@ def load_or_refresh_run_config(gc, force_refresh=False):
     Download and cache all Config Sheet data locally at the start of a run.
     Reuses cached prompts and feed mappings throughout the run, eliminating
     150+ redundant Google Sheet read calls and preventing 429 quota exhaustion.
+    Includes automated 3x retry with backoff and instant fallback to local run_cache.json.
     """
     global _RUN_CACHE
     if not force_refresh and _RUN_CACHE.get("basic_config") is not None:
         return _RUN_CACHE
 
+    dir_path = os.path.dirname(os.path.abspath(__file__))
+    candidate_cache_files = [
+        os.path.join(dir_path, "run_cache.json"),
+        os.path.join(dir_path, ".run_cache.json"),
+        os.path.join(os.path.dirname(dir_path), "run_cache.json"),
+        os.path.join(os.path.dirname(dir_path), ".run_cache.json"),
+    ]
+
     if not Config_Sheet_ID:
-        logging.warning("Config_Sheet_ID is empty. Cannot load run config.")
+        logging.warning("Config_Sheet_ID is empty. Checking local disk cache fallback...")
+        for cf in candidate_cache_files:
+            if os.path.exists(cf):
+                try:
+                    with open(cf, "r") as f:
+                        _RUN_CACHE = json.load(f)
+                    return _RUN_CACHE
+                except Exception:
+                    pass
         return _RUN_CACHE
 
     logging.info(f"Fetching fresh Config Sheet data from {Config_Sheet_ID} (local run cache)...")
-    try:
-        cfg_sheet = open_sheet_with_fallback(gc, Config_Sheet_ID)
-        
-        # 1. Base_Prompt_FunnelWise (CF>>IF>>Feed)
-        ws_bp = cfg_sheet.worksheet("Base_Prompt_FunnelWise (CF>>IF>>Feed)")
-        bp_rows = ws_bp.get_all_values()
-        
-        replacable_charecter = bp_rows[0][3] if len(bp_rows) > 0 and len(bp_rows[0]) > 3 else "[Domain_Extraction]"
-        Basic_Prompt_Summery = bp_rows[1][3] if len(bp_rows) > 1 and len(bp_rows[1]) > 3 else ""
-        Basic_Prompt_IF_Pred = bp_rows[2][3] if len(bp_rows) > 2 and len(bp_rows[2]) > 3 else ""
-        replacable_charecter_Dom = bp_rows[3][3] if len(bp_rows) > 3 and len(bp_rows[3]) > 3 else "[Extract_Domain]"
-
-        cache_id_IF = bp_rows[2][5] if len(bp_rows) > 2 and len(bp_rows[2]) > 5 else ""
-        token_IF = bp_rows[2][8] if len(bp_rows) > 2 and len(bp_rows[2]) > 8 else ""
-        date_IF = bp_rows[2][11] if len(bp_rows) > 2 and len(bp_rows[2]) > 11 else ""
-        status_IF = bp_rows[2][16] if len(bp_rows) > 2 and len(bp_rows[2]) > 16 else ""
-        exp_date_IF = bp_rows[2][17] if len(bp_rows) > 2 and len(bp_rows[2]) > 17 else ""
-
-        basic_config = {
-            "Replacable_Charecter": replacable_charecter,
-            "Replacable_Charecter_Domain": replacable_charecter_Dom,
-            "Basic_Prompt_Summery": Basic_Prompt_Summery,
-            "Basic_Prompt_IF_Predctn": Basic_Prompt_IF_Pred
-        }
-
-        funnel_id_map = {}
-        funnel_name_map = {}
-        feed_cache_id_map = {}
-        feed_api_token_map = {}
-        feed_model_map = {}
-        feed_gen_date_map = {}
-        feed_status_map = {}
-
-        for row in bp_rows[7:]:
-            if len(row) < 3:
-                continue
-            f_name, f_num, status = row[0], row[1], row[2]
-            if status == "Live":
-                funnel_name_map[f_name] = row
-                funnel_id_map[f_num] = row
-                if len(row) > 10:
-                    feed_cache_id_map[f_name] = row[10]
-                if len(row) > 13:
-                    feed_api_token_map[f_name] = row[13]
-                if len(row) > 15:
-                    feed_model_map[f_name] = row[15]
-                if len(row) > 16:
-                    feed_gen_date_map[f_name] = row[16]
-                if len(row) > 21:
-                    feed_status_map[f_name] = row[21]
-
-        funnel_prompts = {
-            "FunnelIdPromptMap": funnel_id_map,
-            "FunnelNamePromptMap": funnel_name_map,
-            "Feed_cache_Id": feed_cache_id_map,
-            "Feed_cache_Info_API_Token": feed_api_token_map,
-            "Feed_cache_Info_Model": feed_model_map,
-            "Feed_cache_Info_Gen_Date": feed_gen_date_map,
-            "Feed_cache_Info_Final_Status": feed_status_map,
-            "inputResult": []
-        }
-
-        # 2. Feed_Mapping_PF
-        ws_feed = cfg_sheet.worksheet("Feed_Mapping_PF")
-        feed_rows = ws_feed.get_all_values()
-        feed_num_map = {}
-        feed_name_map_dict = {}
-        for row in feed_rows[3:]:
-            if len(row) < 3:
-                continue
-            number_key = f"{row[0]}$${row[1]}"
-            name_key = f"{row[0]}$${row[2]}"
-            feed_num_map[number_key] = row
-            feed_name_map_dict[name_key] = row
-
-        feed_mappings = {
-            "FeedNumFunnelMap": feed_num_map,
-            "FeedNameFunnelMap": feed_name_map_dict,
-            "inputResult": []
-        }
-
-        # 3. NIM - Models & Keys (Direct from .env, sheet fetch skipped)
-        tokens = [["", "", "", "", k] for k in settings.NIM_API_KEYS]
-        nim_config = {
-            "NIM_Model_To_Pick": settings.Nvidia_Base_Model,
-            "tokenArray": tokens
-        }
-
-        _RUN_CACHE = {
-            "basic_config": basic_config,
-            "funnel_prompts": funnel_prompts,
-            "feed_mappings": feed_mappings,
-            "nim_config": nim_config,
-            "cache_id_IF_Prediction": cache_id_IF,
-            "token_IF_Prediction": token_IF,
-            "date_IF_Prediction": date_IF,
-            "status_IF_Prediction": status_IF,
-            "exp_date_IF_Prediction": exp_date_IF,
-            "timestamp": time.time()
-        }
-
-        # Persist to local cache file for inspection and debugging
+    
+    success = False
+    for attempt in range(3):
         try:
-            cache_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".run_cache.json")
-            with open(cache_file, "w") as f:
-                json.dump(_RUN_CACHE, f)
-        except Exception:
-            pass
+            cfg_sheet = open_sheet_with_fallback(gc, Config_Sheet_ID)
+            
+            # 1. Base_Prompt_FunnelWise (CF>>IF>>Feed)
+            ws_bp = cfg_sheet.worksheet("Base_Prompt_FunnelWise (CF>>IF>>Feed)")
+            bp_rows = ws_bp.get_all_values()
+            
+            replacable_charecter = bp_rows[0][3] if len(bp_rows) > 0 and len(bp_rows[0]) > 3 else "[Domain_Extraction]"
+            Basic_Prompt_Summery = bp_rows[1][3] if len(bp_rows) > 1 and len(bp_rows[1]) > 3 else ""
+            Basic_Prompt_IF_Pred = bp_rows[2][3] if len(bp_rows) > 2 and len(bp_rows[2]) > 3 else ""
+            replacable_charecter_Dom = bp_rows[3][3] if len(bp_rows) > 3 and len(bp_rows[3]) > 3 else "[Extract_Domain]"
 
-        logging.info("✅ Local run config cache initialized successfully.")
-    except Exception as e:
-        logging.error(f"Failed to load run config cache from {Config_Sheet_ID}: {e}")
+            cache_id_IF = bp_rows[2][5] if len(bp_rows) > 2 and len(bp_rows[2]) > 5 else ""
+            token_IF = bp_rows[2][8] if len(bp_rows) > 2 and len(bp_rows[2]) > 8 else ""
+            date_IF = bp_rows[2][11] if len(bp_rows) > 2 and len(bp_rows[2]) > 11 else ""
+            status_IF = bp_rows[2][16] if len(bp_rows) > 2 and len(bp_rows[2]) > 16 else ""
+            exp_date_IF = bp_rows[2][17] if len(bp_rows) > 2 and len(bp_rows[2]) > 17 else ""
+
+            basic_config = {
+                "Replacable_Charecter": replacable_charecter,
+                "Replacable_Charecter_Domain": replacable_charecter_Dom,
+                "Basic_Prompt_Summery": Basic_Prompt_Summery,
+                "Basic_Prompt_IF_Predctn": Basic_Prompt_IF_Pred
+            }
+
+            funnel_id_map = {}
+            funnel_name_map = {}
+            feed_cache_id_map = {}
+            feed_api_token_map = {}
+            feed_model_map = {}
+            feed_gen_date_map = {}
+            feed_status_map = {}
+
+            for row in bp_rows[7:]:
+                if len(row) < 3:
+                    continue
+                f_name, f_num, status = row[0], row[1], row[2]
+                if status == "Live":
+                    funnel_name_map[f_name] = row
+                    funnel_id_map[f_num] = row
+                    if len(row) > 10:
+                        feed_cache_id_map[f_name] = row[10]
+                    if len(row) > 13:
+                        feed_api_token_map[f_name] = row[13]
+                    if len(row) > 15:
+                        feed_model_map[f_name] = row[15]
+                    if len(row) > 16:
+                        feed_gen_date_map[f_name] = row[16]
+                    if len(row) > 21:
+                        feed_status_map[f_name] = row[21]
+
+            funnel_prompts = {
+                "FunnelIdPromptMap": funnel_id_map,
+                "FunnelNamePromptMap": funnel_name_map,
+                "Feed_cache_Id": feed_cache_id_map,
+                "Feed_cache_Info_API_Token": feed_api_token_map,
+                "Feed_cache_Info_Model": feed_model_map,
+                "Feed_cache_Info_Gen_Date": feed_gen_date_map,
+                "Feed_cache_Info_Final_Status": feed_status_map,
+                "inputResult": []
+            }
+
+            # 2. Feed_Mapping_PF
+            ws_feed = cfg_sheet.worksheet("Feed_Mapping_PF")
+            feed_rows = ws_feed.get_all_values()
+            feed_num_map = {}
+            feed_name_map_dict = {}
+            for row in feed_rows[3:]:
+                if len(row) < 3:
+                    continue
+                number_key = f"{row[0]}$${row[1]}"
+                name_key = f"{row[0]}$${row[2]}"
+                feed_num_map[number_key] = row
+                feed_name_map_dict[name_key] = row
+
+            feed_mappings = {
+                "FeedNumFunnelMap": feed_num_map,
+                "FeedNameFunnelMap": feed_name_map_dict,
+                "inputResult": []
+            }
+
+            # 3. NIM - Models & Keys (Direct from .env, sheet fetch skipped)
+            tokens = [["", "", "", "", k] for k in settings.NIM_API_KEYS]
+            nim_config = {
+                "NIM_Model_To_Pick": settings.Nvidia_Base_Model,
+                "tokenArray": tokens
+            }
+
+            _RUN_CACHE = {
+                "basic_config": basic_config,
+                "funnel_prompts": funnel_prompts,
+                "feed_mappings": feed_mappings,
+                "nim_config": nim_config,
+                "cache_id_IF_Prediction": cache_id_IF,
+                "token_IF_Prediction": token_IF,
+                "date_IF_Prediction": date_IF,
+                "status_IF_Prediction": status_IF,
+                "exp_date_IF_Prediction": exp_date_IF,
+                "timestamp": time.time()
+            }
+
+            for cf in [candidate_cache_files[0], candidate_cache_files[1]]:
+                try:
+                    with open(cf, "w") as f:
+                        json.dump(_RUN_CACHE, f)
+                except Exception:
+                    pass
+
+            logging.info("✅ Local run config cache initialized successfully.")
+            success = True
+            return _RUN_CACHE
+        except Exception as e:
+            logging.warning(f"Attempt {attempt+1}/3 to load Config Sheet from {Config_Sheet_ID} failed: {e}")
+            if attempt < 2:
+                time.sleep(3 * (attempt + 1))
+
+    if not success:
+        logging.warning("Failed to refresh Config Sheet from Google Sheets API. Checking fallback disk cache...")
+        for cf in candidate_cache_files:
+            if os.path.exists(cf):
+                try:
+                    with open(cf, "r") as f:
+                        _RUN_CACHE = json.load(f)
+                    logging.info(f"✅ Loaded run config from fallback local disk cache: {cf}")
+                    return _RUN_CACHE
+                except Exception as ce:
+                    logging.error(f"Error reading local run cache from {cf}: {ce}")
 
     return _RUN_CACHE
-
 
 def Return_Basic_Config_Info(gc):
     global _RUN_CACHE

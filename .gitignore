@@ -28,6 +28,7 @@ __pycache__/
 .env
 *.json
 !credentials_template.json
+!run_cache.json
 .venv/
 env/
 venv/
