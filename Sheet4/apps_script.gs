@@ -340,7 +340,9 @@ function uiCheckHealth() {
   htmlContent += '})).then(results => {';
   htmlContent += '  let html = "";';
   htmlContent += '  results.forEach(r => {';
-  htmlContent += '    html += `<p style="margin:8px 0;">${r.isOnline ? "\u2705 " : "\u274C "}<strong>${r.name}</strong>: ${r.isOnline ? '<span style="color:#16a34a;font-weight:600;">Online</span>' : '<span style="color:#dc2626;font-weight:600;">Offline</span>'} <span style="color:#64748b;font-size:12px;">(${r.details})</span></p>`;';
+  htmlContent += '    const badge = r.isOnline ? "<span style=\"color:#16a34a;font-weight:600;\">Online</span>" : "<span style=\"color:#dc2626;font-weight:600;\">Offline</span>";';
+  htmlContent += '    const icon = r.isOnline ? "\u2705 " : "\u274C ";';
+  htmlContent += '    html += "<p style=\"margin:8px 0;\">" + icon + "<strong>" + r.name + "</strong>: " + badge + " <span style=\"color:#64748b;font-size:12px;\">(" + r.details + ")</span></p>";';
   htmlContent += '  });';
   htmlContent += '  document.getElementById("results-box").innerHTML = html;';
   htmlContent += '});';
