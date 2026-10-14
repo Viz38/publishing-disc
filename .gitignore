@@ -10,6 +10,8 @@ CHANGELOG.md
 .stop_requested
 *.lock
 .*.json
+*.csv
+Test/
 
 # Logs
 Logs/

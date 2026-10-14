@@ -43,6 +43,18 @@ from pprint import pprint
 
 max_threads = os.cpu_count()
 
+try:
+    from Sheet1.local_cache import LocalSheetCache, is_5am_ist_cutoff, ExecutionTracker
+except ImportError:
+    try:
+        from local_cache import LocalSheetCache, is_5am_ist_cutoff, ExecutionTracker
+    except ImportError:
+        from scripts.local_cache import LocalSheetCache, is_5am_ist_cutoff, ExecutionTracker
+
+_SHEET_DIR = os.path.dirname(os.path.abspath(__file__))
+LOCAL_CACHE = LocalSheetCache(os.path.join(_SHEET_DIR, "discovery_cache.csv"))
+EXEC_TRACKER = ExecutionTracker(os.path.join(_SHEET_DIR, ".execution_state.json"))
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Linux-specific: proactively raise file descriptor limit for high-concurrency async I/O
@@ -102,6 +114,27 @@ def update_progress_file(current: int, total: int, success: int, fail: int, phas
                 json.dump(prog_data, pf)
         except Exception:
             pass
+
+    try:
+        EXEC_TRACKER.update_heartbeat()
+    except Exception:
+        pass
+
+import signal
+
+def _handle_user_signal(signum, frame):
+    logging.info(f"Signal {signum} received by main process. Recording user stop...")
+    try:
+        EXEC_TRACKER.record_user_stop()
+    except Exception:
+        pass
+    sys.exit(130 if signum == signal.SIGINT else 143)
+
+try:
+    signal.signal(signal.SIGINT, _handle_user_signal)
+    signal.signal(signal.SIGTERM, _handle_user_signal)
+except Exception:
+    pass
 
 # **************************************************************************************************************************
 # *************************************** Configuration *************************************************
@@ -359,6 +392,16 @@ async def read_sheet_data(client, SHEET_ID, sheet_name, start_row=4, start_col=1
 async def write_sheet_data(client, SHEET_ID, sheet_name, data, start_row, start_col=4):
     if not data or not data[0]:
         return
+
+    # Critical: safely cap all cell values to 49,900 chars to avoid Google Sheets 50,000 char per cell HTTP 400 fatal crash
+    data = [
+        [
+            val[:49900] if isinstance(val, str) and len(val) > 49900 else val
+            for val in row
+        ]
+        for row in data
+    ]
+
     cache_key = (str(SHEET_ID).strip(), str(sheet_name).strip())
     worksheet = _WORKSHEET_CACHE.get(cache_key)
 
@@ -2698,7 +2741,14 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
         output_data_if_name = ""
         output_data_if_id = ""
 
-        if output_data_summery:
+        if len(row) > 44 and safe_str(row[44]).strip():
+            output_data_if = safe_str(row[44]).strip()
+            if len(row) > 45 and safe_str(row[45]).strip():
+                output_data_if_name = safe_str(row[45]).strip()
+            if len(row) > 46 and safe_str(row[46]).strip():
+                output_data_if_id = safe_str(row[46]).strip()
+            logging.info(f"Smart resume: reusing existing IF prediction for {domain}: {output_data_if}")
+        elif output_data_summery:
             if not base_prompt_for_if:
                 base_prompt_for_if = if_pred_base_prompt
             else:
@@ -2944,8 +2994,10 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
     date_prompt_for_feed_cache_id = ""
     output_data_feed = ""
 
-    
-    if output_data_if_validation and ((EXTRACTING_SHEET_NAME == CF_EXTRACTING_SHEET_NAME and "Yes" in output_data_if_validation) or (EXTRACTING_SHEET_NAME == IF_EXTRACTING_SHEET_NAME and "Yes" in output_data_if_validation)): # and "Different IF Found" in output_data_if_validation  #outputData_IF_Validation.indexOf("Yes") >= 0
+    if len(row) > 54 and safe_str(row[54]).strip():
+        output_data_feed = safe_str(row[54]).strip()
+        logging.info(f"Smart resume: reusing existing Feed prediction for {domain}: {output_data_feed}")
+    elif output_data_if_validation and ((EXTRACTING_SHEET_NAME == CF_EXTRACTING_SHEET_NAME and "Yes" in output_data_if_validation) or (EXTRACTING_SHEET_NAME == IF_EXTRACTING_SHEET_NAME and "Yes" in output_data_if_validation)): # and "Different IF Found" in output_data_if_validation  #outputData_IF_Validation.indexOf("Yes") >= 0
 
 
         if output_data_if_name and output_data_if_name in config_funnel_name_prompt:
@@ -3048,13 +3100,13 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
     cf_if_action = "MOVED_OUT"
     publish_funnel_id = final_pub_funnel_id
     if_pf_action = "MOVED_OUT"
-    cf_if_status = ""
-    cf_if_time = ""
-    if_pf_status = ""
-    if_pf_time = ""
-    tag_status_if = ""
-    tag_status_pf = ""
-    tag_status_discovery = ""
+    cf_if_status = safe_str(row[62]).strip() if len(row) > 62 else ""
+    cf_if_time = safe_str(row[63]).strip() if len(row) > 63 else ""
+    if_pf_status = safe_str(row[64]).strip() if len(row) > 64 else ""
+    if_pf_time = safe_str(row[65]).strip() if len(row) > 65 else ""
+    tag_status_if = safe_str(row[66]).strip() if len(row) > 66 else ""
+    tag_status_pf = safe_str(row[67]).strip() if len(row) > 67 else ""
+    tag_status_discovery = safe_str(row[69]).strip() if len(row) > 69 else ""
     tag_name_if = "bu_llm_industry_prediction"
     tag_name_pf = "bu_llm_feed_prediction"
 
@@ -3062,7 +3114,9 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
     #********************************************* Write API - Industry Funnel ************************************************
 
     if mode not in ("phase2", "phase3"):
-        if EXTRACTING_SHEET_NAME == CF_EXTRACTING_SHEET_NAME and output_data_if_validation and   "Yes" not in output_data_if_validation :
+        if cf_if_status == "DONE":
+            logging.info(f"Smart resume: CF->IF write API already completed for {domain}")
+        elif EXTRACTING_SHEET_NAME == CF_EXTRACTING_SHEET_NAME and output_data_if_validation and "Yes" not in output_data_if_validation:
                 tag_status_if = await Domain_HashTag_async(domain, Wrong_Validated_IF_Tag_Name, token)  
 
                 print("Validation Came NO with Tag Status : " ,tag_status_if)
@@ -3144,7 +3198,9 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
 
         #********************************************* Write API - Publish Funnel ************************************************
 
-        if industry_funnel_id and publish_funnel_id:
+        if if_pf_status == "DONE":
+            logging.info(f"Smart resume: IF->PF write API already completed for {domain}")
+        elif industry_funnel_id and publish_funnel_id:
             tag_status_pf = await Domain_HashTag_async(domain, tag_name_pf, token) 
             #DiscoveryCentralFunctions.Domain_HashTag(domain, tag_name_pf, token) #Need to define/implement
 
@@ -3233,9 +3289,30 @@ async def Integrated_Process_domain(
     async with semaphore:
         try:
             # Safe index check to prevent IndexError if rowData is shorter than expected
-            min_len = 38
+            min_len = 70
             if len(rowData) < min_len:
                 rowData = rowData + [""] * (min_len - len(rowData))
+
+            if is_5am_ist_cutoff():
+                logging.warning(f"⏰ 5:00 AM IST cutoff reached before processing {domain}. Halting.")
+                return None
+
+            # 0. Local CSV Redundancy Cache Hydration & Direct Write Check
+            rowData, can_direct_write = LOCAL_CACHE.hydrate_row_from_cache(domain, rowData)
+            if can_direct_write and mode == "full":
+                logging.info(f"✨ [Local CSV Cache Hit] {domain} is fully completed in local cache and missing in sheet. Writing directly to sheet!")
+                write_data = LOCAL_CACHE.build_full_write_row(domain, rowData, is_cf_sheet=(EXTRACTING_SHEET_NAME == CF_EXTRACTING_SHEET_NAME))
+                if write_to_sheet:
+                    await write_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, [write_data], row, 20)
+                return {
+                    "tc_status": "SUCCESS",
+                    "domain": domain,
+                    "row": row,
+                    "tc_job_id": rowData[23],
+                    "rowData": rowData,
+                    "write_data": write_data,
+                    "start_col": 20
+                }
 
             tc_job_id = safe_str(rowData[23])
             tc_job_gen_time = safe_str(rowData[24])
@@ -3273,7 +3350,7 @@ async def Integrated_Process_domain(
                         tc_status = "PROCESSING"
 
                 # 2. Track Job once if in progress
-                if tc_job_id and tc_status in ("", "PROCESSING"):
+                if tc_job_id and (tc_status in ("", "PROCESSING") or not home_body):
                     track_res = await tc_client.track_job_id(session, tc_job_id)
                     tc_status = track_res.get("status") or tc_status
                     if track_res.get("final_url"):
@@ -3287,8 +3364,15 @@ async def Integrated_Process_domain(
                     if track_res.get("signals"):
                         tc_signals = track_res["signals"]
 
-                # Check 3-hour timeout rule: If Tech Crawler has been processing for >= 3 hours (10,800s),
-                # mark as FAILED to trigger Waterfall Scraper fallback
+                # 3. If Tech Crawler succeeded, fetch signed S3 Markdown BEFORE checking timeout!
+                if tc_status == "SUCCESS" and tc_s3_markdown:
+                    signed_url = await tc_client.get_signed_s3_url(session, tc_s3_markdown)
+                    if signed_url:
+                        home_body = await tc_client.fetch_raw_markdown(session, signed_url) or ""
+                        if home_body:
+                            scrappingBeautySoup = home_body
+
+                # Check 3-hour timeout rule ONLY if still PROCESSING after real-time check
                 is_timeout = (time.time() - created_timestamp) >= (3 * 3600)
                 if is_timeout and tc_status == "PROCESSING":
                     logging.warning(
@@ -3299,6 +3383,12 @@ async def Integrated_Process_domain(
 
                 # If still PROCESSING after initial check, DO NOT call fallback scraper!
                 if tc_status == "PROCESSING":
+                    LOCAL_CACHE.save_record(domain, {
+                        "tc_job_id": tc_job_id,
+                        "tc_job_gen_time": tc_job_gen_time,
+                        "tc_status": tc_status,
+                        "updated_at": datetime.datetime.now().strftime("%d/%b/%Y %H:%M:%S")
+                    })
                     if write_to_sheet:
                         try:
                             await write_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, [[tc_job_id, tc_job_gen_time, tc_status]], row, 24)
@@ -3344,6 +3434,18 @@ async def Integrated_Process_domain(
                     tc_s3_html, tc_s3_markdown, tc_http_status, tc_signals,
                     scrappingBeautySoup
                 ]
+                LOCAL_CACHE.save_record(domain, {
+                    "tc_job_id": tc_job_id,
+                    "tc_job_gen_time": tc_job_gen_time,
+                    "tc_status": tc_status,
+                    "tc_final_url": tc_final_url,
+                    "tc_s3_html": tc_s3_html,
+                    "tc_s3_markdown": tc_s3_markdown,
+                    "tc_http_status": tc_http_status,
+                    "tc_signals": tc_signals,
+                    "scrappingBeautySoup": scrappingBeautySoup,
+                    "updated_at": datetime.datetime.now().strftime("%d/%b/%Y %H:%M:%S")
+                })
                 if write_to_sheet:
                     await write_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, [phase1_data], row, 24)
                 return {
@@ -3466,6 +3568,11 @@ async def Integrated_Process_domain(
 
             if mode == "phase2":
                 phase2_data = [summary_status, output_data_summery]
+                LOCAL_CACHE.save_record(domain, {
+                    "summary_status": summary_status,
+                    "output_data_summery": output_data_summery,
+                    "updated_at": datetime.datetime.now().strftime("%d/%b/%Y %H:%M:%S")
+                })
                 if write_to_sheet:
                     await write_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, [phase2_data], row, 40)
                 return {
@@ -3550,6 +3657,42 @@ async def Integrated_Process_domain(
                     if_pf_time, tag_status_if, tag_status_pf, "", discovery_bq
                 ])
 
+            # Save completed row to local CSV cache for redundancy & future runs
+            LOCAL_CACHE.save_record(domain, {
+                "enginePickedTime": enginePickedTime,
+                "engineClearedTime": engineClearedTime,
+                "engineClearedStatus": engineClearedStatus,
+                "engineTimeTaken": engineTimeTaken,
+                "tc_job_id": tc_job_id,
+                "tc_job_gen_time": tc_job_gen_time,
+                "tc_status": tc_status,
+                "tc_final_url": tc_final_url,
+                "tc_s3_html": tc_s3_html,
+                "tc_s3_markdown": tc_s3_markdown,
+                "tc_http_status": tc_http_status,
+                "tc_signals": tc_signals,
+                "scrappingBeautySoup": scrappingBeautySoup,
+                "summary_status": summary_status,
+                "output_data_summery": output_data_summery,
+                "output_data_if": output_data_if,
+                "output_data_if_name": output_data_if_name,
+                "output_data_if_id": output_data_if_id,
+                "output_data_if_validation": output_data_if_validation,
+                "output_data_feed": output_data_feed,
+                "final_feed_name": final_feed_name,
+                "final_feed_id": final_feed_id,
+                "final_pub_funnel_name": final_pub_funnel_name,
+                "final_pub_funnel_id": final_pub_funnel_id,
+                "cf_if_status": cf_if_status,
+                "cf_if_time": cf_if_time,
+                "if_pf_status": if_pf_status,
+                "if_pf_time": if_pf_time,
+                "tag_status_if": tag_status_if,
+                "tag_status_pf": tag_status_pf,
+                "discovery_bq": discovery_bq,
+                "updated_at": datetime.datetime.now().strftime("%d/%b/%Y %H:%M:%S")
+            })
+
             full_write_row = AI_Engine_Result_Array[0] if AI_Engine_Result_Array else []
             if write_to_sheet and full_write_row:
                 await write_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, [full_write_row], row, 20)
@@ -3573,6 +3716,93 @@ async def Integrated_Process_domain(
             logging.error(f"Error processing {domain}: {e}")
             return None
         
+async def reconcile_existing_tech_crawler_jobs(session, rows, client, SHEET_ID, sheet_name, start_row_num=4):
+    """
+    When resuming a run (especially if the script stopped >3 hours ago):
+    Finds all rows that already have a tc_job_id but where scraping is not yet completed.
+    First checks the status of all these job IDs with Tech Crawler API.
+    For any job returning SUCCESS, retrieves the signed S3 markdown and updates the row/cache/sheet.
+    Only genuinely non-successful cases remain to be picked up by the fallback scraper.
+    """
+    candidates = []
+    for idx, r in enumerate(rows):
+        if not r or not r[0]:
+            continue
+        min_len = 38
+        if len(r) < min_len:
+            r.extend([""] * (min_len - len(r)))
+        tc_job_id = safe_str(r[23]).strip()
+        tc_status = safe_str(r[25]).strip()
+        scraped = safe_str(r[31]).strip()
+        summary = safe_str(r[40]).strip() if len(r) > 40 else ""
+        if tc_job_id and tc_status != "SUCCESS" and not scraped and not summary:
+            candidates.append((start_row_num + idx, r))
+
+    if not candidates:
+        return
+
+    logging.info(f"🔄 Resumption check: Reconciling status of {len(candidates)} existing Tech Crawler jobs before proceeding...")
+    tc_client = TechCrawlerClient(token=Tracxn_API_Token)
+    reconcile_sem = asyncio.Semaphore(25)
+
+    async def _check_one_candidate(r_num, row_data):
+        async with reconcile_sem:
+            domain = row_data[0]
+            job_id = row_data[23]
+            try:
+                track_res = await tc_client.track_job_id(session, job_id)
+                status = track_res.get("status")
+                if status == "SUCCESS" and track_res.get("s3_markdown"):
+                    signed_url = await tc_client.get_signed_s3_url(session, track_res["s3_markdown"])
+                    if signed_url:
+                        md = await tc_client.fetch_raw_markdown(session, signed_url)
+                        if md:
+                            row_data[25] = "SUCCESS"
+                            if track_res.get("final_url"): row_data[26] = track_res["final_url"]
+                            if track_res.get("s3_html"): row_data[27] = track_res["s3_html"]
+                            row_data[28] = track_res["s3_markdown"]
+                            if track_res.get("http_status"): row_data[29] = str(track_res["http_status"])
+                            if track_res.get("signals"): row_data[30] = str(track_res["signals"])
+                            row_data[31] = md
+                            LOCAL_CACHE.save_record(domain, {
+                                "tc_job_id": job_id,
+                                "tc_status": "SUCCESS",
+                                "tc_final_url": row_data[26],
+                                "tc_s3_html": row_data[27],
+                                "tc_s3_markdown": row_data[28],
+                                "tc_http_status": row_data[29],
+                                "tc_signals": row_data[30],
+                                "scrappingBeautySoup": md,
+                                "updated_at": datetime.datetime.now().strftime("%d/%b/%Y %H:%M:%S")
+                            })
+                            sheet_slice = [
+                                row_data[23], row_data[24], row_data[25], row_data[26],
+                                row_data[27], row_data[28], row_data[29], row_data[30],
+                                row_data[31][:49500]
+                            ]
+                            return (r_num, sheet_slice)
+                elif status == "FAILED":
+                    row_data[25] = "FAILED"
+            except Exception as e:
+                logging.debug(f"Error checking candidate {job_id} for {domain}: {e}")
+            return None
+
+    tasks = [_check_one_candidate(r_num, r) for r_num, r in candidates]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    success_count = 0
+    for res in results:
+        if res and not isinstance(res, Exception):
+            r_num, sheet_slice = res
+            success_count += 1
+            try:
+                await write_sheet_data(client, SHEET_ID, sheet_name, [sheet_slice], r_num, 24)
+            except Exception as we:
+                logging.warning(f"Could not write reconciled Tech Crawler slice to sheet for row {r_num}: {we}")
+
+    logging.info(f"✅ Reconciled {success_count}/{len(candidates)} existing Tech Crawler jobs to SUCCESS. Markdown harvested.")
+
+
 async def Integrated_Extract_domains(
     client,
     SHEET_ID,
@@ -3618,8 +3848,13 @@ async def Integrated_Extract_domains(
         ttl_dns_cache=300
     )
     async with aiohttp.ClientSession(headers=mainheaders, connector=connector) as session:
+        # Resumption check: if script stopped >3 hrs ago, query Tech Crawler status of all existing jobs first
+        await reconcile_existing_tech_crawler_jobs(session, pf_data, client, SHEET_ID, EXTRACTING_SHEET_NAME, start_row_num=start_row_num)
 
         for batch_index, batch in enumerate(domains_batches):
+            if is_5am_ist_cutoff():
+                logging.warning("⏰ 5:00 AM IST daily cutoff reached! Halting execution so Apps Script can refresh daily domains.")
+                break
             if os.path.exists(STOP_FILE):
                 logging.info("Stop requested (.stop_requested found). Halting Integrated_Extract_domains.")
                 break
@@ -3756,6 +3991,9 @@ async def Integrated_Extract_domains(
             MAX_WAIT_SEC = 1800   # Max 30 minutes (1800s)
 
             while pending_tech_crawler_jobs:
+                if is_5am_ist_cutoff():
+                    logging.warning("⏰ 5:00 AM IST cutoff reached during Tech Crawler polling. Halting.")
+                    break
                 if os.path.exists(STOP_FILE):
                     logging.info("Stop requested (.stop_requested found). Exiting Tech Crawler polling loop.")
                     break
@@ -3767,7 +4005,7 @@ async def Integrated_Extract_domains(
                 
                 elapsed = 0
                 while elapsed < retry_wait_sec:
-                    if os.path.exists(STOP_FILE):
+                    if is_5am_ist_cutoff() or os.path.exists(STOP_FILE):
                         break
                     remaining_sec = retry_wait_sec - elapsed
                     update_progress_file(
@@ -3983,6 +4221,9 @@ async def Process_Review_Caller(client, mainheaders, SHEET_ID, EXTRACTING_SHEET_
     )
     async with aiohttp.ClientSession(headers=mainheaders, connector=connector) as session:
         for batch_index, batch in enumerate(domains_batches):
+            if is_5am_ist_cutoff():
+                logging.warning("⏰ 5:00 AM IST cutoff reached during Process_Review_Caller. Halting.")
+                break
             if os.path.exists(STOP_FILE):
                 logging.info("Stop requested during Process_Review_Caller. Halting.")
                 break
@@ -4054,6 +4295,9 @@ async def Execute_Phase4_Ingestion_Write_APIs(client, mainheaders, SHEET_ID, EXT
     connector = aiohttp.TCPConnector(limit=100, limit_per_host=25, ttl_dns_cache=300)
     async with aiohttp.ClientSession(headers=mainheaders, connector=connector) as session:
         for b_idx, batch in enumerate(batches):
+            if is_5am_ist_cutoff():
+                logging.warning("⏰ 5:00 AM IST cutoff reached during Phase 4 Ingestion. Halting.")
+                break
             if os.path.exists(STOP_FILE):
                 break
             tasks = []
@@ -4064,6 +4308,7 @@ async def Execute_Phase4_Ingestion_Write_APIs(client, mainheaders, SHEET_ID, EXT
                     if not row or not row[0]:
                         return None
                     domain = row[0]
+                    row, _ = LOCAL_CACHE.hydrate_row_from_cache(domain, row)
                     domain_profile_id = row[10] if len(row) > 10 else ""
                     filter_group_id = row[4] if len(row) > 4 else ""
                     filter_id = row[6] if len(row) > 6 else ""
@@ -4136,7 +4381,18 @@ async def Execute_Phase4_Ingestion_Write_APIs(client, mainheaders, SHEET_ID, EXT
                         tag_status_discovery = await Domain_HashTag_async(domain, Discovery_Processing_TAG_NAME, token, session=session)
 
                     discovery_bq = "yes" if str(tag_status_discovery).upper() in ("YES", "TRUE") else ""
-                    return [cf_if_status, cf_if_time, if_pf_status, if_pf_time, tag_status_if, tag_status_pf, "", discovery_bq]
+                    res_write = [cf_if_status, cf_if_time, if_pf_status, if_pf_time, tag_status_if, tag_status_pf, "", discovery_bq]
+                    LOCAL_CACHE.save_record(domain, {
+                        "cf_if_status": cf_if_status,
+                        "cf_if_time": cf_if_time,
+                        "if_pf_status": if_pf_status,
+                        "if_pf_time": if_pf_time,
+                        "tag_status_if": tag_status_if,
+                        "tag_status_pf": tag_status_pf,
+                        "discovery_bq": discovery_bq,
+                        "updated_at": datetime.datetime.now().strftime("%d/%b/%Y %H:%M:%S")
+                    })
+                    return res_write
 
             for r_idx, row in enumerate(batch):
                 tasks.append(asyncio.create_task(_process_row_ingestion(row, start_row + r_idx)))
@@ -4189,6 +4445,27 @@ async def main():
 
         active_sheet_id = custom_sheet_id or CF_SHEET_ID
         logging.info(f"Discovery Engine Pipeline starting: start_row={start_row_arg}, mode={mode_arg}, sheet_id={active_sheet_id}")
+
+        try:
+            curr_state = EXEC_TRACKER.get_state()
+            if curr_state.get("active_pid") != os.getpid():
+                EXEC_TRACKER.record_start(
+                    sheet=os.path.basename(BASE_DIR),
+                    sheet_id=active_sheet_id,
+                    start_row=start_row_arg,
+                    mode=mode_arg,
+                    pid=os.getpid()
+                )
+        except Exception:
+            pass
+
+        if is_5am_ist_cutoff():
+            logging.warning("⏰ 5:00 AM IST daily cutoff active. Pipeline execution halted during daily domain refresh window.")
+            try:
+                EXEC_TRACKER.record_5am_cutoff()
+            except Exception:
+                pass
+            sys.exit(0)
 
         client = await get_gspread_client()
         gc = get_gspread_client_General()
@@ -4296,6 +4573,10 @@ async def main():
             pending_tc=0,
             mode=mode_arg
         )
+        try:
+            EXEC_TRACKER.record_completion()
+        except Exception:
+            pass
         logging.info("Discovery Engine Pipeline completed successfully.")
     except Exception as e:
         logging.error(f"Fatal error in main(): {e}")

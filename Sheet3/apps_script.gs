@@ -53,7 +53,7 @@ function uiStartRun(resumeOnly = false) {
   htmlContent += '</div>';
 
   // Step 1: Worker Select
-  htmlContent += '<div id="worker-view">';
+  htmlContent += '<div id="worker-view"' + (isResuming ? ' style="display:none;"' : '') + '>';
   htmlContent += '<p style="color:#64748b;font-size:13px;margin-top:0;">Select a production desktop (max 2 sheets per device) or test on Vishnu:</p>';
   htmlContent += '<div id="worker-list" style="display:flex;flex-direction:column;gap:10px;margin-bottom:20px;">';
   htmlContent += '<div style="padding:16px;text-align:center;color:#64748b;background:white;border-radius:8px;border:1px solid #e2e8f0;">Loading workers...</div>';
@@ -210,6 +210,8 @@ function uiStartRun(resumeOnly = false) {
   htmlContent += '}';
 
   htmlContent += 'function showProgress(){';
+  htmlContent += '  const wv = document.getElementById("worker-view"); if(wv) wv.style.display = "none";';
+  htmlContent += '  const sv = document.getElementById("setup-view"); if(sv) sv.style.display = "none";';
   htmlContent += '  document.getElementById("progress-view").style.display = "block";';
   htmlContent += '  fitHeight();';
   htmlContent += '}';
@@ -267,8 +269,8 @@ function uiStartRun(resumeOnly = false) {
 
   htmlContent += '</script></body></html>';
 
-  const html = HtmlService.createHtmlOutput(htmlContent).setWidth(430).setHeight(480);
-  SpreadsheetApp.getUi().showModelessDialog(html, '🚀 Discovery Engine - CF-3 Wizard');
+  const html = HtmlService.createHtmlOutput(htmlContent).setWidth(430).setHeight(isResuming ? 340 : 480);
+  SpreadsheetApp.getUi().showModelessDialog(html, isResuming ? '🚦 Discovery Engine - Status Monitor' : '🚀 Discovery Engine - CF-3 Wizard');
 }
 
 function uiCheckStatus() {

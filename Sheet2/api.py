@@ -27,8 +27,27 @@ LOGS_DIR = os.path.join(BASE_DIR, 'Logs')
 PROGRESS_FILE = os.path.join(BASE_DIR, ".progress.json")
 STOP_FILE = os.path.join(BASE_DIR, ".stop_requested")
 ACTIVE_FILE = os.path.join(BASE_DIR, ".active_state.json")
+CACHE_FILE = os.path.join(BASE_DIR, "discovery_cache.csv")
+ARCHIVE_CACHE_DIR = os.path.join(LOGS_DIR, "Cache")
 os.makedirs(LOGS_DIR, exist_ok=True)
+os.makedirs(ARCHIVE_CACHE_DIR, exist_ok=True)
 api_log_path = os.path.join(LOGS_DIR, 'api.logs')
+
+try:
+    from Sheet2.local_cache import LocalSheetCache, is_5am_ist_cutoff, get_now_ist, ExecutionTracker, is_pid_alive
+except ImportError:
+    try:
+        from local_cache import LocalSheetCache, is_5am_ist_cutoff, get_now_ist, ExecutionTracker, is_pid_alive
+    except ImportError:
+        from scripts.local_cache import LocalSheetCache, is_5am_ist_cutoff, get_now_ist, ExecutionTracker, is_pid_alive
+
+EXEC_STATE_FILE = os.path.join(BASE_DIR, ".execution_state.json")
+EXEC_TRACKER = ExecutionTracker(EXEC_STATE_FILE)
+
+try:
+    LOCAL_CACHE = LocalSheetCache(CACHE_FILE)
+except Exception as _ce:
+    LOCAL_CACHE = None
 
 if not os.path.exists(api_log_path):
     with open(api_log_path, 'w') as f:
@@ -62,6 +81,126 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+async def _daily_5am_ist_watchdog():
+    """
+    Background watchdog checking every 15 seconds:
+    At 05:00 AM IST daily (05:00:00 - 05:05:00 IST), Google Apps Script clears the sheet and loads fresh domains.
+    1. Immediately terminates any active pipeline running for this sheet to prevent writing stale results.
+    2. Resets state to 'idle' and cleans up lock/progress/stop/active files.
+    3. Archives the previous day's discovery_cache.csv into Logs/Cache/discovery_cache_YYYY-MM-DD.csv
+       and initializes a fresh discovery_cache.csv for the new daily domain set (once per day).
+    """
+    last_rotated_date = None
+    logger.info("🕒 Daily 5:00 AM IST Watchdog initialized.")
+    while True:
+        try:
+            now_ist = get_now_ist()
+            current_date_str = now_ist.strftime("%Y-%m-%d")
+
+            if is_5am_ist_cutoff(now_ist):
+                # 1. Terminate any running pipeline
+                active_pid = state.get("active_pid")
+                if active_pid or state.get("status") in ("running", "stopping"):
+                    logger.warning(
+                        f"⏰ 5:00 AM IST Daily Cutoff reached! Terminating active pipeline PID {active_pid} "
+                        "so Apps Script can refresh daily domains without conflict."
+                    )
+                    if active_pid:
+                        try:
+                            os.kill(active_pid, signal.SIGTERM)
+                            await asyncio.sleep(1)
+                            try:
+                                os.kill(active_pid, 0)
+                                os.kill(active_pid, signal.SIGKILL)
+                            except OSError:
+                                pass
+                        except Exception as e:
+                            logger.error(f"Error terminating PID {active_pid}: {e}")
+
+                    async with state_lock:
+                        state["status"] = "idle"
+                        state["is_stopping"] = False
+                        state["active_pid"] = None
+                        state["current_task"] = None
+
+                    EXEC_TRACKER.record_5am_cutoff()
+
+                    if os.path.exists(STOP_FILE):
+                        try: os.remove(STOP_FILE)
+                        except Exception: pass
+                    if os.path.exists(ACTIVE_FILE):
+                        try: os.remove(ACTIVE_FILE)
+                        except Exception: pass
+
+                # 2. Rotate daily cache once per day during the 5:00 AM window
+                if last_rotated_date != current_date_str and LOCAL_CACHE:
+                    try:
+                        archived = LOCAL_CACHE.rotate_daily_cache(ARCHIVE_CACHE_DIR, current_dt=now_ist)
+                        last_rotated_date = current_date_str
+                        logger.info(f"📦 5:00 AM IST Daily Cache Rotation complete. Archived to {archived}, fresh cache active.")
+                    except Exception as re:
+                        logger.error(f"Error during daily cache rotation: {re}")
+
+            # Supervisor: check if active_pid died unexpectedly while state was running
+            active_pid = state.get("active_pid")
+            if active_pid and not is_pid_alive(active_pid) and state.get("status") == "running" and not state.get("is_stopping"):
+                logger.warning(f"🚨 Supervisor watchdog detected active PID {active_pid} died unexpectedly.")
+                EXEC_TRACKER.record_external_failure(-1)
+                async with state_lock:
+                    state["status"] = "failed"
+                    state["active_pid"] = None
+                    state["current_task"] = None
+                should_resume, saved_state = EXEC_TRACKER.should_auto_resume()
+                if should_resume and saved_state:
+                    cnt = EXEC_TRACKER.increment_retry_count()
+                    logger.warning(
+                        f"Autonomous Smart Resume triggered by supervisor in 15s (attempt {cnt}/{EXEC_TRACKER.MAX_AUTO_RETRIES})..."
+                    )
+                    req = RunRequest(
+                        start_row=saved_state.get("start_row", 4),
+                        mode=saved_state.get("mode", "full"),
+                        sheet_id=saved_state.get("sheet_id", settings.CF_SHEET_ID)
+                    )
+                    asyncio.create_task(_delayed_smart_resume(req, 15))
+
+            await asyncio.sleep(15)
+        except Exception as e:
+            logger.error(f"Exception in _daily_5am_ist_watchdog: {e}")
+            await asyncio.sleep(15)
+
+async def _delayed_smart_resume(req: RunRequest, delay_sec: int):
+    """Waits for a buffer, then autonomously smart-resumes the pipeline where it left off."""
+    logger.info(f"⏳ Waiting {delay_sec}s buffer before autonomous smart resume...")
+    await asyncio.sleep(delay_sec)
+    if is_5am_ist_cutoff():
+        logger.warning("5:00 AM IST cutoff reached during resume delay. Postponing resume.")
+        return
+    if state["status"] in ("running", "stopping"):
+        logger.info("Pipeline already running or stopping. Skipping auto-resume.")
+        return
+    logger.info(f"🚀 Autonomously resuming pipeline: start_row={req.start_row}, mode={req.mode}, sheet_id={req.sheet_id}")
+    await run_pipeline_task(req)
+
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(_daily_5am_ist_watchdog())
+
+    # Check if previous execution died due to desktop shutdown / power cut / reboot
+    should_resume, saved_state = EXEC_TRACKER.should_auto_resume()
+    if should_resume and saved_state:
+        cnt = EXEC_TRACKER.increment_retry_count()
+        logger.warning(
+            f"🚨 System Startup: Detected external termination (desktop shutdown/infra failure) "
+            f"from previous execution (PID {saved_state.get('active_pid')}, started {saved_state.get('start_time_ist')}). "
+            f"Autonomous Smart Resume initiating in 10 seconds (attempt {cnt}/{EXEC_TRACKER.MAX_AUTO_RETRIES})..."
+        )
+        req = RunRequest(
+            start_row=saved_state.get("start_row", 4),
+            mode=saved_state.get("mode", "full"),
+            sheet_id=saved_state.get("sheet_id", settings.CF_SHEET_ID)
+        )
+        asyncio.create_task(_delayed_smart_resume(req, 10))
 
 security = HTTPBearer()
 
@@ -169,6 +308,14 @@ async def run_pipeline_task(request: RunRequest):
             state["active_pid"] = process.pid
             logger.info(f"CF-2 pipeline running with PID {process.pid}")
 
+            EXEC_TRACKER.record_start(
+                sheet=settings.SERVICE_NAME,
+                sheet_id=target_sheet,
+                start_row=request.start_row,
+                mode=request.mode,
+                pid=process.pid
+            )
+
             try:
                 with open(ACTIVE_FILE, "w") as f:
                     json.dump({
@@ -183,17 +330,33 @@ async def run_pipeline_task(request: RunRequest):
             await process.wait()
 
         if state.get("is_stopping"):
-            logger.info("CF-2 pipeline stopped gracefully")
+            logger.info("CF-2 pipeline stopped gracefully by user")
+            EXEC_TRACKER.record_user_stop()
             state["status"] = "stopped"
+        elif is_5am_ist_cutoff():
+            logger.warning("CF-2 pipeline stopped due to 5:00 AM IST daily cutoff")
+            EXEC_TRACKER.record_5am_cutoff()
+            state["status"] = "idle"
         elif process.returncode == 0:
             logger.info("CF-2 pipeline completed successfully")
+            EXEC_TRACKER.record_completion()
             state["status"] = "succeeded"
         else:
             logger.error(f"CF-2 pipeline exited with code {process.returncode}")
+            EXEC_TRACKER.record_external_failure(process.returncode)
             state["status"] = "failed"
+            should_resume, saved_state = EXEC_TRACKER.should_auto_resume()
+            if should_resume and saved_state:
+                cnt = EXEC_TRACKER.increment_retry_count()
+                logger.warning(
+                    f"🚨 Pipeline terminated abnormally (code {process.returncode}). "
+                    f"Autonomous Smart Resume scheduled in 15 seconds (attempt {cnt}/{EXEC_TRACKER.MAX_AUTO_RETRIES})..."
+                )
+                asyncio.create_task(_delayed_smart_resume(request, 15))
 
     except Exception as e:
         logger.error(f"Pipeline execution error: {e}")
+        EXEC_TRACKER.record_external_failure(-1)
         state["status"] = "failed"
     finally:
         state["current_task"] = None
@@ -251,6 +414,7 @@ async def _cancel():
             state["status"] = "idle"
             state["is_stopping"] = False
             state["active_pid"] = None
+            EXEC_TRACKER.record_user_stop()
             if os.path.exists(STOP_FILE):
                 try: os.remove(STOP_FILE)
                 except Exception: pass
@@ -261,6 +425,7 @@ async def _cancel():
 
         state["is_stopping"] = True
         state["status"] = "stopping"
+        EXEC_TRACKER.record_user_stop()
         try:
             with open(STOP_FILE, "w") as f:
                 f.write("stop")
@@ -340,6 +505,12 @@ for prefix in ["/discovery", "/sheet2"]:
 @app.post("/discovery/start", dependencies=[Depends(verify_token)])
 @app.post("/sheet2/start", dependencies=[Depends(verify_token)])
 async def start_pipeline(req: RunRequest, background_tasks: BackgroundTasks):
+    if is_5am_ist_cutoff():
+        return {
+            "status": "error",
+            "message": "Cannot start pipeline between 05:00 - 05:05 AM IST. Apps Script daily domain refresh in progress."
+        }
+
     if state["status"] in ("running", "stopping"):
         return {"status": "error", "message": "Pipeline already running or stopping for this sheet"}
 
