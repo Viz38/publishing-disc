@@ -77,6 +77,10 @@ class LocalSheetCache:
         with self._lock:
             return self._cache.get(norm_d)
 
+    def get_record(self, domain: str) -> Optional[Dict[str, str]]:
+        """Alias for get(domain) for compatibility."""
+        return self.get(domain)
+
     def save_record(self, domain: str, record: Dict[str, Any]):
         norm_d = self._normalize(domain)
         if not norm_d:

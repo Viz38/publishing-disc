@@ -3918,7 +3918,7 @@ async def Integrated_Extract_domains(
                         batch_summaries[domain] = existing_sum
                         continue
                     
-                    cached = LOCAL_CACHE.get_record(domain)
+                    cached = LOCAL_CACHE.get(domain) if LOCAL_CACHE else None
                     if cached and cached.get("output_data_summery"):
                         batch_summaries[domain] = cached["output_data_summery"]
                         continue
