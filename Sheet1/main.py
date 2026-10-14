@@ -189,7 +189,7 @@ IF_SHEET_ID = settings.IF_SHEET_ID
 IF_EXTRACTING_SHEET_NAME = "IF_Engine_Database"
 
 CREDENTIALS_FILE = settings.CREDENTIALS_FILE
-MAX_WORKERS = int(os.getenv("MAX_WORKERS", "10"))  # Scaled for up to 60% resource utilization (3,500 - 4,500+ domains/hr)
+MAX_WORKERS = int(os.getenv("MAX_WORKERS", "16"))  # Scaled for 2,500+ domains/hr combined fleet throughput
 BATCH_SIZE = settings.BATCH_SIZE  # Default 100 rows per batch
 _WORKSHEET_CACHE = {}
 Config_Sheet_ID = settings.Config_Sheet_ID
@@ -3936,12 +3936,23 @@ async def Integrated_Extract_domains(
     FLUSH_FILE = os.path.join(os.path.dirname(__file__), ".flush_requested")
     async with aiohttp.ClientSession(headers=mainheaders, connector=connector) as session:
         # Background non-blocking Google Sheets writer
+        def _sanitize_val(v):
+            if isinstance(v, str) and len(v) > 45000:
+                return v[:45000]
+            return v
+
         async def _flush_sheet_buffer(buf):
             if not buf:
                 return
-            by_col = {}
+            # Deduplicate buffer keeping latest update per (row_number, col_number)
+            deduped = {}
             for r_num, c_num, val in buf:
-                by_col.setdefault(c_num, []).append((r_num, val))
+                deduped[(r_num, c_num)] = val
+
+            by_col = {}
+            for (r_num, c_num), val in deduped.items():
+                sanitized_val = [_sanitize_val(x) for x in val] if isinstance(val, list) else _sanitize_val(val)
+                by_col.setdefault(c_num, []).append((r_num, sanitized_val))
 
             for c_num, items in by_col.items():
                 items.sort(key=lambda x: x[0])
@@ -3962,7 +3973,17 @@ async def Integrated_Extract_domains(
                         await write_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, chunk_rows, start_r, c_num)
                         await asyncio.sleep(0.5)
                     except Exception as ex:
-                        logging.error(f"Failed to write range rows {start_r}-{start_r + len(chunk_rows)-1} col {c_num}: {ex}")
+                        logging.warning(f"Batch write failed for rows {start_r}-{start_r + len(chunk_rows)-1} col {c_num}: {ex}. Trying chunked fallback (5 rows)...")
+                        # Chunked fallback in batches of 5 to isolate rogue rows (inspired by publishing-sr)
+                        chunk_size = 5
+                        for ci in range(0, len(chunk_rows), chunk_size):
+                            sub_rows = chunk_rows[ci : ci + chunk_size]
+                            sub_start = start_r + ci
+                            try:
+                                await write_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, sub_rows, sub_start, c_num)
+                                await asyncio.sleep(0.2)
+                            except Exception as sub_ex:
+                                logging.error(f"Chunked fallback failed for rows {sub_start}-{sub_start + len(sub_rows)-1} col {c_num}: {sub_ex}")
 
         async def sheet_writer_worker():
             buffer = []
@@ -3979,7 +4000,7 @@ async def Integrated_Extract_domains(
                         pass
 
                     now = time.time()
-                    if buffer and (len(buffer) >= 20 or (now - last_flush) >= 4.0):
+                    if buffer and (len(buffer) >= 100 or (now - last_flush) >= 60.0):
                         await _flush_sheet_buffer(buffer)
                         buffer.clear()
                         last_flush = time.time()
@@ -4110,7 +4131,7 @@ async def Integrated_Extract_domains(
                 fail_count += 1
             finally:
                 processed += 1
-                if processed % 5 == 0 or processed == total_domains:
+                if processed % 25 == 0 or processed == total_domains:
                     update_progress_file(
                         processed, total_domains, success_count, fail_count,
                         phase=phase_title,
