@@ -642,7 +642,7 @@ async def Nvidia_API_ASYNC(promptMsg, token_rotator: NIMKeyManager = None, max_a
             {"role": "system", "content": system_instruction},
             {"role": "user", "content": str(promptMsg)}
         ],
-        "max_tokens": 350,
+        "max_tokens": 1000,
         "temperature": 0.0,
         "stream": False
     }
@@ -651,7 +651,7 @@ async def Nvidia_API_ASYNC(promptMsg, token_rotator: NIMKeyManager = None, max_a
     original_user_content = str(promptMsg)
 
     ssl_ctx = False if _nim_use_unverified_ssl else get_nim_ssl_context()
-    timeout = aiohttp.ClientTimeout(total=45.0)
+    timeout = aiohttp.ClientTimeout(total=130.0)
 
     attempt = 0
     while attempt < max_attempts and (token_rotator is None or token_rotator.keys):
@@ -2575,7 +2575,7 @@ except Exception as _e:
 
 
 
-async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_SHEET_NAME,cache_id_IF_Prediction,token_IF_Prediction,date_IF_Prediction,status_IF_Prediction,exp_date_IF_Prediction,  config_funnel_prompt,config_funnel_id_prompt,config_funnel_name_prompt,config_funnel_name_Feed_Cached_prompt,config_funnel_name_Feed_Cached_API_Token,config_funnel_name_Feed_Cached_Model,config_funnel_name_Feed_Cached_Gen_Date,config_funnel_name_Feed_Cached_Final_Status,token_rotator,mode="full",session=None):
+async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_SHEET_NAME,cache_id_IF_Prediction,token_IF_Prediction,date_IF_Prediction,status_IF_Prediction,exp_date_IF_Prediction,  config_funnel_prompt,config_funnel_id_prompt,config_funnel_name_prompt,config_funnel_name_Feed_Cached_prompt,config_funnel_name_Feed_Cached_API_Token,config_funnel_name_Feed_Cached_Model,config_funnel_name_Feed_Cached_Gen_Date,config_funnel_name_Feed_Cached_Final_Status,token_rotator,mode="full",session=None,precomputed_summary=None):
 
     start_time = datetime.datetime.now()
     today_date = datetime.datetime.now()
@@ -2676,7 +2676,11 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
     elif len(row) > 40 and safe_str(row[40]).strip() and safe_str(row[40]).strip() != safe_str(base_prompt_for_summery).strip() and not safe_str(row[40]).strip().startswith("http"):
         existing_summary = safe_str(row[40]).strip()
 
-    if existing_summary:
+    if precomputed_summary:
+        output_data_summery = precomputed_summary
+        summary_status = "SUCCESS"
+        logging.info(f"Using precomputed cycle NIM summary for {domain} (length {len(output_data_summery)}).")
+    elif existing_summary:
         output_data_summery = existing_summary
         summary_status = safe_str(row[39]).strip() if (len(row) > 39 and safe_str(row[39]).strip()) else "SUCCESS"
         logging.info(f"Smart auto-resume: reusing existing summary for {domain} (length {len(output_data_summery)}) with status {summary_status}")
@@ -3318,7 +3322,8 @@ async def Integrated_Process_domain(
     config_funnel_name_Feed_Cached_Final_Status, token_rotator,
     created_timestamp=None,
     mode="full",
-    write_to_sheet=True
+    write_to_sheet=True,
+    precomputed_summary=None
 ):
     async with semaphore:
         try:
@@ -3591,7 +3596,8 @@ async def Integrated_Process_domain(
                 config_funnel_name_Feed_Cached_Model, config_funnel_name_Feed_Cached_Gen_Date,
                 config_funnel_name_Feed_Cached_Final_Status,token_rotator,
                 mode=mode,
-                session=session
+                session=session,
+                precomputed_summary=precomputed_summary
             )
 
             # Unpack AI Engine Outputs (Col AN receives summary_status, Col AO receives output_data_summery)
@@ -3892,6 +3898,98 @@ async def Integrated_Extract_domains(
                 logging.info("Stop requested (.stop_requested found). Halting Integrated_Extract_domains.")
                 break
 
+            # Cycle-based NIM summarization for the batch (up to 10 cycles, retrying only after all domains in cycle attempted)
+            batch_summaries = {}
+            if mode != "phase1":
+                to_summarize = {}
+                for row_index, row in enumerate(batch):
+                    if not row or not row[0]:
+                        continue
+                    domain = row[0]
+                    
+                    # 1. Existing summary check from sheet
+                    existing_sum = ""
+                    if len(row) > 41 and safe_str(row[41]).strip() and safe_str(row[41]).strip() != safe_str(if_pred_base_prompt).strip():
+                        existing_sum = safe_str(row[41]).strip()
+                    elif len(row) > 40 and safe_str(row[40]).strip() and safe_str(row[40]).strip() != safe_str(summery_base_prompt).strip() and not safe_str(row[40]).strip().startswith("http"):
+                        existing_sum = safe_str(row[40]).strip()
+                    
+                    if existing_sum:
+                        batch_summaries[domain] = existing_sum
+                        continue
+                    
+                    cached = LOCAL_CACHE.get_record(domain)
+                    if cached and cached.get("output_data_summery"):
+                        batch_summaries[domain] = cached["output_data_summery"]
+                        continue
+
+                    # 2. Check raw data in row
+                    raw_content = ""
+                    for c_idx in [31, 37, 32, 33, 34, 35]:
+                        if len(row) > c_idx and safe_str(row[c_idx]).strip():
+                            raw_content = safe_str(row[c_idx]).strip()
+                            break
+                    
+                    # 3. Check S3 markdown if Tech Crawler succeeded
+                    if not raw_content and len(row) > 28 and safe_str(row[28]).strip() and len(row) > 25 and safe_str(row[25]).strip() == "SUCCESS":
+                        s3_md = safe_str(row[28]).strip()
+                        tc_client = TechCrawlerClient(token=Tracxn_API_Token)
+                        signed_url = await tc_client.get_signed_s3_url(session, s3_md)
+                        if signed_url:
+                            raw_content = await tc_client.fetch_raw_markdown(session, signed_url) or ""
+
+                    if raw_content:
+                        if len(raw_content) > 48000:
+                            raw_content = raw_content[:48000]
+                        prompt_msg = Utility_Replace_Response(raw_content, summery_base_prompt, "YYYY")
+                        prompt_msg = Utility_Replace_Response(domain, prompt_msg, "XXXX")
+                        to_summarize[domain] = prompt_msg
+
+                # 10-Cycle Retry loop for all domains needing NIM summary in this batch
+                if to_summarize:
+                    nim_sem = asyncio.Semaphore(15)
+                    async def _single_nim(d, p):
+                        async with nim_sem:
+                            return await Nvidia_API_ASYNC(p, token_rotator=token_rotator, max_attempts=1, session=session)
+
+                    pending_domains = list(to_summarize.keys())
+                    for cycle in range(1, 11):
+                        if not pending_domains:
+                            break
+                        stage_msg = f"Batch {batch_index + 1}/{len(domains_batches)}: NIM Cycle {cycle}/10 ({len(pending_domains)} domains pending)..."
+                        logging.info(f"🔄 {stage_msg}")
+                        update_progress_file(processed, total_domains, success_count, fail_count, phase=phase_title, stage_details=stage_msg, pending_tc=len(pending_tech_crawler_jobs), mode=mode)
+
+                        cycle_tasks = [_single_nim(d, to_summarize[d]) for d in pending_domains]
+                        cycle_results = await asyncio.gather(*cycle_tasks, return_exceptions=True)
+
+                        next_pending = []
+                        for d, res in zip(pending_domains, cycle_results):
+                            if isinstance(res, str) and res.strip():
+                                batch_summaries[d] = res.strip()
+                            else:
+                                next_pending.append(d)
+
+                        successes = len(pending_domains) - len(next_pending)
+                        logging.info(f"✅ NIM Cycle {cycle}/10: {successes} succeeded, {len(next_pending)} pending for next cycle.")
+                        pending_domains = next_pending
+
+                    # Fallback to Gemini for any domain that failed all 10 cycles
+                    if pending_domains:
+                        logging.warning(f"⚠️ {len(pending_domains)} domains exhausted all 10 NIM cycles. Falling back to Gemini...")
+                        async def _gemini_fb(d, p):
+                            try:
+                                g_res = await Gemini_API_ASYNC(p, session=session)
+                                return g_res.get("output", "")
+                            except Exception as ex:
+                                logging.error(f"Gemini fallback failed for {d}: {ex}")
+                                return ""
+                        fb_tasks = [_gemini_fb(d, to_summarize[d]) for d in pending_domains]
+                        fb_results = await asyncio.gather(*fb_tasks, return_exceptions=True)
+                        for d, res in zip(pending_domains, fb_results):
+                            if isinstance(res, str) and res.strip():
+                                batch_summaries[d] = res.strip()
+
             tasks = []
             start_row = start_row_num + batch_index * batch_size  # Adjust row index for writing
 
@@ -3924,6 +4022,7 @@ async def Integrated_Extract_domains(
                             token_rotator,
                             mode=mode,
                             write_to_sheet=False,
+                            precomputed_summary=batch_summaries.get(domain),
                         )
                     )
                     tasks.append(task)
