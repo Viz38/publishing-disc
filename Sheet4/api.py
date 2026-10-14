@@ -13,6 +13,9 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = os.path.dirname(BASE_DIR)
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
@@ -33,16 +36,19 @@ os.makedirs(LOGS_DIR, exist_ok=True)
 os.makedirs(ARCHIVE_CACHE_DIR, exist_ok=True)
 api_log_path = os.path.join(LOGS_DIR, 'api.logs')
 
-try:
-    from Sheet4.local_cache import LocalSheetCache, is_5am_ist_cutoff, get_now_ist, ExecutionTracker, is_pid_alive
-except ImportError:
-    try:
-        from local_cache import LocalSheetCache, is_5am_ist_cutoff, get_now_ist, ExecutionTracker, is_pid_alive
-    except ImportError:
-        from scripts.local_cache import LocalSheetCache, is_5am_ist_cutoff, get_now_ist, ExecutionTracker, is_pid_alive
+from common import (
+    LocalSheetCache,
+    is_5am_ist_cutoff,
+    is_pre_cutoff_window,
+    get_now_ist,
+    ExecutionTracker,
+    BacklogManager,
+)
+from common.local_cache import is_pid_alive
 
 EXEC_STATE_FILE = os.path.join(BASE_DIR, ".execution_state.json")
 EXEC_TRACKER = ExecutionTracker(EXEC_STATE_FILE)
+BACKLOG_MANAGER = BacklogManager()
 
 try:
     LOCAL_CACHE = LocalSheetCache(CACHE_FILE)
@@ -65,9 +71,9 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
-logger = logging.getLogger("api_filter-v2")
+logger = logging.getLogger("api_cf-1")
 
-app = FastAPI(title="Discovery Engine - Discovery AI - Filter-V2 (Nandan Filter)")
+app = FastAPI(title="Discovery Engine - Discovery AI - CF-1 (Domains DB)")
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
@@ -92,11 +98,31 @@ async def _daily_5am_ist_watchdog():
        and initializes a fresh discovery_cache.csv for the new daily domain set (once per day).
     """
     last_rotated_date = None
-    logger.info("🕒 Daily 5:00 AM IST Watchdog initialized.")
+    FLUSH_FILE = os.path.join(BASE_DIR, ".flush_requested")
+    logger.info("🕒 Daily 5:00 AM IST Watchdog initialized (04:30 AM Pre-Cutoff Flush enabled).")
     while True:
         try:
             now_ist = get_now_ist()
             current_date_str = now_ist.strftime("%Y-%m-%d")
+
+            if is_pre_cutoff_window(now_ist):
+                # 04:30 AM IST Pre-Cutoff Flush: Signal active pipeline to stop taking new scrapes
+                if not os.path.exists(FLUSH_FILE):
+                    try:
+                        with open(FLUSH_FILE, "w") as f:
+                            f.write(f"flush_requested_at={now_ist.isoformat()}")
+                        logger.warning("🚨 [04:30 AM IST Watchdog] Created .flush_requested to trigger pre-cutoff flush!")
+                    except Exception as fe:
+                        logger.error(f"Error creating .flush_requested: {fe}")
+
+            # At 05:05 AM IST: Clear .flush_requested
+            if now_ist.hour == 5 and now_ist.minute >= 5:
+                if os.path.exists(FLUSH_FILE):
+                    try:
+                        os.remove(FLUSH_FILE)
+                        logger.info("Cleared .flush_requested after 5:00 AM cutoff window.")
+                    except Exception:
+                        pass
 
             if is_5am_ist_cutoff(now_ist):
                 # 1. Terminate any running pipeline
@@ -294,7 +320,7 @@ async def run_pipeline_task(request: RunRequest):
         if target_sheet:
             cmd.extend(["--sheet_id", target_sheet])
 
-        logger.info(f"Starting Filter-V2 pipeline: {' '.join(cmd)}")
+        logger.info(f"Starting CF-1 pipeline: {' '.join(cmd)}")
 
         stdout_path = os.path.join(LOGS_DIR, "stdout.log")
         stderr_path = os.path.join(LOGS_DIR, "stderr.log")
@@ -306,7 +332,7 @@ async def run_pipeline_task(request: RunRequest):
                 cwd=BASE_DIR
             )
             state["active_pid"] = process.pid
-            logger.info(f"Filter-V2 pipeline running with PID {process.pid}")
+            logger.info(f"CF-1 pipeline running with PID {process.pid}")
 
             EXEC_TRACKER.record_start(
                 sheet=settings.SERVICE_NAME,
@@ -330,19 +356,19 @@ async def run_pipeline_task(request: RunRequest):
             await process.wait()
 
         if state.get("is_stopping"):
-            logger.info("Filter-V2 pipeline stopped gracefully by user")
+            logger.info("CF-1 pipeline stopped gracefully by user")
             EXEC_TRACKER.record_user_stop()
             state["status"] = "stopped"
         elif is_5am_ist_cutoff():
-            logger.warning("Filter-V2 pipeline stopped due to 5:00 AM IST daily cutoff")
+            logger.warning("CF-1 pipeline stopped due to 5:00 AM IST daily cutoff")
             EXEC_TRACKER.record_5am_cutoff()
             state["status"] = "idle"
         elif process.returncode == 0:
-            logger.info("Filter-V2 pipeline completed successfully")
+            logger.info("CF-1 pipeline completed successfully")
             EXEC_TRACKER.record_completion()
             state["status"] = "succeeded"
         else:
-            logger.error(f"Filter-V2 pipeline exited with code {process.returncode}")
+            logger.error(f"CF-1 pipeline exited with code {process.returncode}")
             EXEC_TRACKER.record_external_failure(process.returncode)
             state["status"] = "failed"
             should_resume, saved_state = EXEC_TRACKER.should_auto_resume()
@@ -397,7 +423,7 @@ def _get_status_response():
         "stage_details": prog.get("stage_details", ""),
         "pending_tc": prog.get("pending_tc", 0),
         "pipeline_mode": prog.get("mode", ""),
-        "workerName": f"{worker_identity}-Filter-V2-Pipeline",
+        "workerName": f"{worker_identity}-CF-1-Pipeline",
         "sheet_id": settings.CF_SHEET_ID,
         "device_active_sheets": active_sheets,
         "device_max_sheets": max_sheets
@@ -496,14 +522,14 @@ def _get_logs_response(lines: int = 200, log_type: str = "all"):
 
     return result
 
-for prefix in ["/discovery", "/sheet4"]:
-    app.add_api_route(f"{prefix}/health", lambda: {"status": "ok", "service": "Filter-V2", "timestamp": utc_now()}, methods=["GET"], dependencies=[Depends(verify_token)])
+for prefix in ["/discovery", "/sheet1"]:
+    app.add_api_route(f"{prefix}/health", lambda: {"status": "ok", "service": "CF-1", "timestamp": utc_now()}, methods=["GET"], dependencies=[Depends(verify_token)])
     app.add_api_route(f"{prefix}/status", _get_status_response, methods=["GET"], dependencies=[Depends(verify_token)])
     app.add_api_route(f"{prefix}/logs", _get_logs_response, methods=["GET"], dependencies=[Depends(verify_token)])
     app.add_api_route(f"{prefix}/cancel", _cancel, methods=["POST"], dependencies=[Depends(verify_token)])
 
 @app.post("/discovery/start", dependencies=[Depends(verify_token)])
-@app.post("/sheet4/start", dependencies=[Depends(verify_token)])
+@app.post("/sheet1/start", dependencies=[Depends(verify_token)])
 async def start_pipeline(req: RunRequest, background_tasks: BackgroundTasks):
     if is_5am_ist_cutoff():
         return {

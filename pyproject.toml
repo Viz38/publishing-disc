@@ -33,3 +33,9 @@ dependencies = [
 
 [tool.uv]
 package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["Temp_Test"]
+python_files = ["test_*.py"]
+asyncio_mode = "auto"

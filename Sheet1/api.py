@@ -13,6 +13,9 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = os.path.dirname(BASE_DIR)
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
@@ -33,16 +36,19 @@ os.makedirs(LOGS_DIR, exist_ok=True)
 os.makedirs(ARCHIVE_CACHE_DIR, exist_ok=True)
 api_log_path = os.path.join(LOGS_DIR, 'api.logs')
 
-try:
-    from Sheet1.local_cache import LocalSheetCache, is_5am_ist_cutoff, get_now_ist, ExecutionTracker, is_pid_alive
-except ImportError:
-    try:
-        from local_cache import LocalSheetCache, is_5am_ist_cutoff, get_now_ist, ExecutionTracker, is_pid_alive
-    except ImportError:
-        from scripts.local_cache import LocalSheetCache, is_5am_ist_cutoff, get_now_ist, ExecutionTracker, is_pid_alive
+from common import (
+    LocalSheetCache,
+    is_5am_ist_cutoff,
+    is_pre_cutoff_window,
+    get_now_ist,
+    ExecutionTracker,
+    BacklogManager,
+)
+from common.local_cache import is_pid_alive
 
 EXEC_STATE_FILE = os.path.join(BASE_DIR, ".execution_state.json")
 EXEC_TRACKER = ExecutionTracker(EXEC_STATE_FILE)
+BACKLOG_MANAGER = BacklogManager()
 
 try:
     LOCAL_CACHE = LocalSheetCache(CACHE_FILE)
@@ -92,11 +98,31 @@ async def _daily_5am_ist_watchdog():
        and initializes a fresh discovery_cache.csv for the new daily domain set (once per day).
     """
     last_rotated_date = None
-    logger.info("🕒 Daily 5:00 AM IST Watchdog initialized.")
+    FLUSH_FILE = os.path.join(BASE_DIR, ".flush_requested")
+    logger.info("🕒 Daily 5:00 AM IST Watchdog initialized (04:30 AM Pre-Cutoff Flush enabled).")
     while True:
         try:
             now_ist = get_now_ist()
             current_date_str = now_ist.strftime("%Y-%m-%d")
+
+            if is_pre_cutoff_window(now_ist):
+                # 04:30 AM IST Pre-Cutoff Flush: Signal active pipeline to stop taking new scrapes
+                if not os.path.exists(FLUSH_FILE):
+                    try:
+                        with open(FLUSH_FILE, "w") as f:
+                            f.write(f"flush_requested_at={now_ist.isoformat()}")
+                        logger.warning("🚨 [04:30 AM IST Watchdog] Created .flush_requested to trigger pre-cutoff flush!")
+                    except Exception as fe:
+                        logger.error(f"Error creating .flush_requested: {fe}")
+
+            # At 05:05 AM IST: Clear .flush_requested
+            if now_ist.hour == 5 and now_ist.minute >= 5:
+                if os.path.exists(FLUSH_FILE):
+                    try:
+                        os.remove(FLUSH_FILE)
+                        logger.info("Cleared .flush_requested after 5:00 AM cutoff window.")
+                    except Exception:
+                        pass
 
             if is_5am_ist_cutoff(now_ist):
                 # 1. Terminate any running pipeline

@@ -1,11 +1,33 @@
-from config import settings
-try:
-    from Sheet4.tech_crawler import TechCrawlerClient
-    from Sheet4.waterfall_scraper import WaterfallScraper
-except ImportError:
-    from tech_crawler import TechCrawlerClient
-    from waterfall_scraper import WaterfallScraper
+import os
 import sys
+
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+_ROOT_DIR = os.path.dirname(_BASE_DIR)
+if _ROOT_DIR not in sys.path:
+    sys.path.insert(0, _ROOT_DIR)
+if _BASE_DIR not in sys.path:
+    sys.path.insert(0, _BASE_DIR)
+
+from config import settings
+from common import (
+    TracxnKeyManager,
+    NIMKeyManager,
+    TechCrawlerClient,
+    WaterfallScraper,
+    LocalSheetCache,
+    ExecutionTracker,
+    is_5am_ist_cutoff,
+    is_pre_cutoff_window,
+    get_now_ist,
+    get_ist_timestamp,
+    safe_str,
+    BacklogManager,
+    TracxnClient,
+    PipelineCoordinator,
+    trim_memory,
+    SystemHealthMonitor,
+)
+
 import asyncio
 import aiohttp
 import gspread_asyncio
@@ -43,6 +65,11 @@ from pprint import pprint
 
 max_threads = os.cpu_count()
 
+_SHEET_DIR = os.path.dirname(os.path.abspath(__file__))
+LOCAL_CACHE = LocalSheetCache(os.path.join(_SHEET_DIR, "discovery_cache.csv"))
+EXEC_TRACKER = ExecutionTracker(os.path.join(_SHEET_DIR, ".execution_state.json"))
+SYSTEM_HEALTH = SystemHealthMonitor(cpu_threshold=75.0, mem_threshold=75.0)
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Linux-specific: proactively raise file descriptor limit for high-concurrency async I/O
@@ -78,30 +105,6 @@ PROGRESS_FILE = os.path.join(BASE_DIR, '.progress.json')
 STOP_FILE = os.path.join(BASE_DIR, '.stop_requested')
 os.makedirs(LOGS_DIR, exist_ok=True)
 discovery_log_path = os.path.join(LOGS_DIR, 'discovery.log')
-
-# Local CSV Cache for redundancy & smart resumption
-try:
-    from Sheet4.local_cache import LocalSheetCache, is_5am_ist_cutoff, ExecutionTracker
-except ImportError:
-    try:
-        from local_cache import LocalSheetCache, is_5am_ist_cutoff, ExecutionTracker
-    except ImportError:
-        from scripts.local_cache import LocalSheetCache, is_5am_ist_cutoff, ExecutionTracker
-
-EXEC_STATE_FILE = os.path.join(BASE_DIR, ".execution_state.json")
-EXEC_TRACKER = ExecutionTracker(EXEC_STATE_FILE)
-
-try:
-    LOCAL_CACHE = LocalSheetCache(os.path.join(BASE_DIR, "discovery_cache.csv"))
-except Exception as _e:
-    logging.warning(f"Could not initialize LocalSheetCache: {_e}")
-    class _DummyCache:
-        def get(self, *a, **k): return None
-        def save_record(self, *a, **k): pass
-        def is_fully_completed(self, *a, **k): return False
-        def build_full_write_row(self, *a, **k): return []
-        def hydrate_row_from_cache(self, d, r): return r, False
-    LOCAL_CACHE = _DummyCache()
 
 # Dual file and console logging
 root_logger = logging.getLogger()
@@ -186,7 +189,7 @@ IF_SHEET_ID = settings.IF_SHEET_ID
 IF_EXTRACTING_SHEET_NAME = "IF_Engine_Database"
 
 CREDENTIALS_FILE = settings.CREDENTIALS_FILE
-MAX_WORKERS = 5  # Calibrated for Pentium G4400 (2 cores, 2 threads) to stay <= 40% CPU
+MAX_WORKERS = int(os.getenv("MAX_WORKERS", "10"))  # Scaled for up to 60% resource utilization (3,500 - 4,500+ domains/hr)
 BATCH_SIZE = settings.BATCH_SIZE  # Default 100 rows per batch
 _WORKSHEET_CACHE = {}
 Config_Sheet_ID = settings.Config_Sheet_ID
@@ -200,6 +203,10 @@ Wrong_Validation_COMMENT = "This is a Write API Movement by Gemini(Marked for Ma
 
 GEMINI_TOKEN = settings.GEMINI_TOKEN
 Tracxn_API_Token = settings.Tracxn_API_Token
+
+TRACXN_KEY_MANAGER = TracxnKeyManager()
+TRACXN_CLIENT = TracxnClient(token_rotator=TRACXN_KEY_MANAGER)
+BACKLOG_MANAGER = BacklogManager()
 
 Nvidia_Base_Model  = "meta/muse-glimmer-30b"
 Nvidia_Endpoint = "https://integrate.api.nvidia.com/v1/chat/completions"
@@ -410,18 +417,14 @@ async def write_sheet_data(client, SHEET_ID, sheet_name, data, start_row, start_
     if not data or not data[0]:
         return
 
-    # Cap any cell to max 49,900 chars to avoid Google Sheets 50,000 char limit (HTTP 400)
-    MAX_CELL_CHARS = 49900
-    cleaned_data = []
-    for r in data:
-        cleaned_row = []
-        for val in r:
-            if isinstance(val, str) and len(val) > MAX_CELL_CHARS:
-                cleaned_row.append(val[:MAX_CELL_CHARS])
-            else:
-                cleaned_row.append(val)
-        cleaned_data.append(cleaned_row)
-    data = cleaned_data
+    # Critical: safely cap all cell values to 49,900 chars to avoid Google Sheets 50,000 char per cell HTTP 400 fatal crash
+    data = [
+        [
+            val[:49900] if isinstance(val, str) and len(val) > 49900 else val
+            for val in row
+        ]
+        for row in data
+    ]
 
     cache_key = (str(SHEET_ID).strip(), str(sheet_name).strip())
     worksheet = _WORKSHEET_CACHE.get(cache_key)
@@ -2821,25 +2824,15 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
                     output_data_summery  = "Domain URL : " + domain + "\n" + "\n" + "Company Description: " + "\n" + output_data_summery
                     
                     # output_data_if = await Gemini_API_WITH_CACHE Gemini_API_ASYNC(input_data_for_if)
-                    print("GEMINI_TOKEN - ",GEMINI_TOKEN)
-                    print("token_IF_Prediction - ",token_IF_Prediction)
-                    print("date_IF_Prediction - ",date_IF_Prediction)
-                    print("clean_date(date_IF_Prediction) - ",clean_date(date_IF_Prediction))
-                    print("valid_dates - ",valid_dates)
-                    print("status_IF_Prediction - ",status_IF_Prediction)
-                    print("Condition 1 - ",(GEMINI_TOKEN == token_IF_Prediction))
-                    print("Condition 2 - ",(clean_date(date_IF_Prediction) in valid_dates))
-                    print("Condition 3 - ",(status_IF_Prediction == "Sucess"))
+                    logging.debug(f"IF Prediction cache check for {domain}: token_match={GEMINI_TOKEN == token_IF_Prediction}")
 
-                    if GEMINI_TOKEN == token_IF_Prediction and clean_date(date_IF_Prediction) in valid_dates and clean_date(exp_date_IF_Prediction) and  status_IF_Prediction == "Sucess" :
-                        try :
+                    if GEMINI_TOKEN == token_IF_Prediction and clean_date(date_IF_Prediction) in valid_dates and clean_date(exp_date_IF_Prediction) and status_IF_Prediction == "Sucess":
+                        try:
                             output_data_if = await Gemini_API_WITH_CACHE(output_data_summery, GEMINI_TOKEN, cache_id_IF_Prediction, session=session)
-                        except :
-                            print("**** LLM IF Prediction entered in Normal Call, As Error Found in Cache ****")
+                        except Exception:
                             output_data_if = await Gemini_API_ASYNC(input_data_for_if, GEMINI_TOKEN, session=session)
-                    else :
-                        print("**** LLM IF Prediction entered in Normal Call, As some mismatch ****")
-                        output_data_if = await Gemini_API_ASYNC(input_data_for_if,GEMINI_TOKEN)
+                    else:
+                        output_data_if = await Gemini_API_ASYNC(input_data_for_if, GEMINI_TOKEN, session=session)
 
                     # output_data_if = await Gemini_API_WITH_CACHE(output_data_summery,GEMINI_TOKEN,cache_id_IF_Prediction)
                     
@@ -3055,14 +3048,6 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
 
     if len(row) > 54 and safe_str(row[54]).strip():
         output_data_feed = safe_str(row[54]).strip()
-        if len(row) > 55 and safe_str(row[55]).strip():
-            final_feed_name = safe_str(row[55]).strip()
-        if len(row) > 56 and safe_str(row[56]).strip():
-            final_feed_id = safe_str(row[56]).strip()
-        if len(row) > 57 and safe_str(row[57]).strip():
-            final_pub_funnel_name = safe_str(row[57]).strip()
-        if len(row) > 58 and safe_str(row[58]).strip():
-            final_pub_funnel_id = safe_str(row[58]).strip()
         logging.info(f"Smart resume: reusing existing Feed prediction for {domain}: {output_data_feed}")
     elif output_data_if_validation and ((EXTRACTING_SHEET_NAME == CF_EXTRACTING_SHEET_NAME and "Yes" in output_data_if_validation) or (EXTRACTING_SHEET_NAME == IF_EXTRACTING_SHEET_NAME and "Yes" in output_data_if_validation)): # and "Different IF Found" in output_data_if_validation  #outputData_IF_Validation.indexOf("Yes") >= 0
 
@@ -3183,7 +3168,7 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
     if mode not in ("phase2", "phase3"):
         if cf_if_status == "DONE":
             logging.info(f"Smart resume: CF->IF write API already completed for {domain}")
-        elif EXTRACTING_SHEET_NAME == CF_EXTRACTING_SHEET_NAME and output_data_if_validation and   "Yes" not in output_data_if_validation :
+        elif EXTRACTING_SHEET_NAME == CF_EXTRACTING_SHEET_NAME and output_data_if_validation and "Yes" not in output_data_if_validation:
                 tag_status_if = await Domain_HashTag_async(domain, Wrong_Validated_IF_Tag_Name, token)  
 
                 print("Validation Came NO with Tag Status : " ,tag_status_if)
@@ -3418,7 +3403,7 @@ async def Integrated_Process_domain(
                         tc_status = "PROCESSING"
 
                 # 2. Track Job once if in progress
-                if tc_job_id and tc_status in ("", "PROCESSING"):
+                if tc_job_id and (tc_status in ("", "PROCESSING") or not home_body):
                     track_res = await tc_client.track_job_id(session, tc_job_id)
                     tc_status = track_res.get("status") or tc_status
                     if track_res.get("final_url"):
@@ -3912,10 +3897,11 @@ async def Integrated_Extract_domains(
     ]
 
     connector = aiohttp.TCPConnector(
-        limit=30,
-        limit_per_host=10,
+        limit=100,
+        limit_per_host=30,
         ttl_dns_cache=300
     )
+    FLUSH_FILE = os.path.join(os.path.dirname(__file__), ".flush_requested")
     async with aiohttp.ClientSession(headers=mainheaders, connector=connector) as session:
         # Each 100-row batch automatically tracks its own existing Tech Crawler jobs and harvests S3 markdowns progressively in Integrated_Process_domain
 
@@ -3926,6 +3912,16 @@ async def Integrated_Extract_domains(
             if os.path.exists(STOP_FILE):
                 logging.info("Stop requested (.stop_requested found). Halting Integrated_Extract_domains.")
                 break
+            if is_pre_cutoff_window() or os.path.exists(FLUSH_FILE):
+                logging.warning("⏰ 04:30 AM IST Pre-Cutoff Flush active! Halting new scraping ingestion to drain summarized domains.")
+                if pending_tech_crawler_jobs:
+                    BACKLOG_MANAGER.save_scraped_backlog([
+                        {"domain": it.get("domain"), "raw_content": it.get("raw_content", ""), "tc_job_id": it.get("tc_job_id", "")}
+                        for it in pending_tech_crawler_jobs if it.get("domain")
+                    ])
+                break
+
+            await SYSTEM_HEALTH.wait_for_resources()
 
             # Cycle-based NIM summarization for the batch (up to 10 cycles, retrying only after all domains in cycle attempted)
             batch_summaries = {}
@@ -3983,7 +3979,7 @@ async def Integrated_Extract_domains(
 
                 # 10-Cycle Retry loop for all domains needing NIM summary in this batch
                 if to_summarize:
-                    nim_sem = asyncio.Semaphore(5)
+                    nim_sem = asyncio.Semaphore(15)  # Scaled for 60% resource utilization across 31 NIM keys
                     async def _single_nim(d, p):
                         async with nim_sem:
                             return await Nvidia_API_ASYNC(p, token_rotator=token_rotator, max_attempts=1, session=session)
@@ -4141,6 +4137,32 @@ async def Integrated_Extract_domains(
                     batch_write_rows, start_row, target_start_col
                 )
 
+            # High-Throughput Real-Time Finalization: Execute Ingestion Write APIs & Review APIs
+            # immediately per batch so domains are marked DONE in Google Sheets in real-time!
+            if mode == "full":
+                try:
+                    review_tasks = []
+                    for r_offset, r_data in enumerate(batch):
+                        if r_data and r_data[0]:
+                            review_tasks.append(
+                                Process_Review_domain(
+                                    session, r_data, start_row + r_offset, client, semaphore, SHEET_ID, EXTRACTING_SHEET_NAME, write_to_sheet=False
+                                )
+                            )
+                    rev_results = await asyncio.gather(*review_tasks, return_exceptions=True)
+                    rev_batch_rows = []
+                    for idx, r_res in enumerate(rev_results):
+                        orig_r = batch[idx] if idx < len(batch) else []
+                        if isinstance(r_res, Exception) or r_res is None:
+                            existing_slice = orig_r[19:68] if len(orig_r) >= 68 else (orig_r[19:] + [""] * max(0, 49 - len(orig_r[19:])))
+                            rev_batch_rows.append(existing_slice)
+                        else:
+                            rev_batch_rows.append(r_res)
+                    if rev_batch_rows:
+                        await write_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, rev_batch_rows, start_row, 20)
+                except Exception as rev_err:
+                    logging.warning(f"Batch real-time review execution warning: {rev_err}")
+
             phase_label = "Phase 1: Initial Crawl & Predictions" if mode == "full" else f"Mode: {mode.upper()}"
             update_progress_file(
                 processed, total_domains, success_count, fail_count,
@@ -4152,21 +4174,20 @@ async def Integrated_Extract_domains(
             logging.info(
                 f"Completed batch {batch_index + 1}/{len(domains_batches)} with {len(batch)} domains. Progress: {processed}/{total_domains} (Pending TC: {len(pending_tech_crawler_jobs)})"
             )
-            import gc
-            gc.collect()
+            trim_memory()
 
         if pending_tech_crawler_jobs:
             logging.info(
                 f"{len(pending_tech_crawler_jobs)} domains still PROCESSING in Tech Crawler. "
-                f"Starting exponential backoff background polling loop until all are completed..."
+                f"Starting 15-minute cadence polling loop (up to 3 hours)..."
             )
-            tc_client = TechCrawlerClient(token=Tracxn_API_Token)
-            retry_wait_sec = 300  # Start with 5 minutes (300s)
-            MAX_WAIT_SEC = 1800   # Max 30 minutes (1800s)
+            tc_client = TechCrawlerClient(token_rotator=TRACXN_KEY_MANAGER)
+            retry_wait_sec = 900  # Constant 15 minutes (900s) per user directive
+            MAX_WAIT_SEC = 900
 
             while pending_tech_crawler_jobs:
                 if is_5am_ist_cutoff():
-                    logging.warning("⏰ 5:00 AM IST daily cutoff reached in Tech Crawler poller! Halting.")
+                    logging.warning("⏰ 5:00 AM IST cutoff reached during Tech Crawler polling. Halting.")
                     break
                 if os.path.exists(STOP_FILE):
                     logging.info("Stop requested (.stop_requested found). Exiting Tech Crawler polling loop.")
@@ -4193,9 +4214,6 @@ async def Integrated_Extract_domains(
                     await asyncio.sleep(chunk)
                     elapsed += chunk
 
-                if is_5am_ist_cutoff():
-                    logging.warning("⏰ 5:00 AM IST daily cutoff reached in Tech Crawler poller! Halting.")
-                    break
                 if os.path.exists(STOP_FILE):
                     logging.info("Stop requested (.stop_requested found). Exiting Tech Crawler polling loop.")
                     break
@@ -4210,7 +4228,7 @@ async def Integrated_Extract_domains(
 
                 still_pending = []
                 for item in pending_tech_crawler_jobs:
-                    if is_5am_ist_cutoff() or os.path.exists(STOP_FILE):
+                    if os.path.exists(STOP_FILE):
                         break
                     d = item["domain"]
                     r_num = item["row"]
@@ -4219,17 +4237,8 @@ async def Integrated_Extract_domains(
 
                     try:
                         c_ts = item.get("created_timestamp", time.time())
-                        elapsed_sec = time.time() - c_ts
-                        track_res = await tc_client.track_job_id(session, j_id)
+                        track_res = await tc_client.check_job_status_with_cadence(session, j_id, c_ts)
                         curr_status = track_res.get("status")
-
-                        # If still PROCESSING after 3 hours (10,800s), trigger Waterfall Scraper fallback
-                        if curr_status == "PROCESSING" and elapsed_sec >= 3 * 3600:
-                            logging.warning(
-                                f"Tech Crawler job {j_id} for {d} has been PROCESSING for >= 3 hours "
-                                f"({elapsed_sec/3600:.1f}h). Switching to Waterfall Scraper fallback."
-                            )
-                            curr_status = "FAILED"
 
                         if curr_status in ("SUCCESS", "FAILED"):
                             logging.info(f"Tech Crawler job {j_id} for {d} resolved with status: {curr_status}")
@@ -4275,13 +4284,11 @@ async def Integrated_Extract_domains(
 
                 pending_tech_crawler_jobs = still_pending
                 if pending_tech_crawler_jobs:
-                    # Double wait time for next retry, capped at 30 minutes (1800s)
-                    retry_wait_sec = min(retry_wait_sec * 2, MAX_WAIT_SEC)
+                    retry_wait_sec = 900  # Constant 15 minutes per user directive
 
 #**************************** Domain Rejection + Tagging *********************************
 
 SNOOZE_DURATION = 10
-TOKEN = Tracxn_API_Token
 To_Review_TAG_NAME = "domainformanualreview"
 COMMENT = "This is a Write API Movement by Gemini"
 
@@ -4296,6 +4303,8 @@ def get_ist_timestamp():
 async def Process_Review_domain(session, row, row_number, client, semaphore, SHEET_ID, EXTRACTING_SHEET_NAME, write_to_sheet=False):
     try:
         async with semaphore:
+            token = TRACXN_KEY_MANAGER.get_next_token()
+            TOKEN = token
             domain = row[0]
             domain_profile_id = row[10]
             filter_group_id = row[4]
@@ -4312,9 +4321,8 @@ async def Process_Review_domain(session, row, row_number, client, semaphore, SHE
             cf_if_time = row[62]
             tag_status_review = tagStatusForReview
 
-            # print("Output Data IF Condtition - ",("ESCALATED" in output_data_if))
             if tagStatusForIF == "YES" or tagStatusForPF == "YES" or tagStatusForReview == "YES":
-                print("Domain is already Processed - ",domain)
+                pass
             else :
                 # print("Domain Picked for review - ",domain)
                 
@@ -4405,6 +4413,8 @@ async def Process_Review_Caller(client, mainheaders, SHEET_ID, EXTRACTING_SHEET_
                 logging.info("Stop requested during Process_Review_Caller. Halting.")
                 break
 
+            await SYSTEM_HEALTH.wait_for_resources()
+
             tasks = []
             start_row = start_row_num + batch_index * batch_size  # Adjust for writing
 
@@ -4443,6 +4453,7 @@ async def Process_Review_Caller(client, mainheaders, SHEET_ID, EXTRACTING_SHEET_
                 mode=mode
             )
             logging.info(f"Completed review batch {batch_index + 1}/{len(domains_batches)} with {len(batch)} domains.")
+            trim_memory()
 
 #********************************************************************************************
 
