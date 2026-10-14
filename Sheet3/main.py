@@ -2743,8 +2743,8 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
         input_data_summery = Utility_Replace_Response(domain, input_data_summery, replacable_char_Domain)
 
         try:
-            # 1. Primary Attempt: NVIDIA API Call
-            output_data_summery = await Nvidia_API_ASYNC(input_data_summery, token_rotator=token_rotator, session=session)
+            # 1. Primary Attempt: NVIDIA API Call (10 retries with key rotation)
+            output_data_summery = await Nvidia_API_ASYNC(input_data_summery, token_rotator=token_rotator, max_attempts=10, session=session)
             
             # 2. Fallback Attempt: Gemini API Call if NVIDIA failed or returned empty result
             if not output_data_summery:
@@ -3917,10 +3917,17 @@ async def Integrated_Extract_domains(
     semaphore = asyncio.Semaphore(MAX_WORKERS)
     pending_tech_crawler_jobs = []
 
-    batch_size = BATCH_SIZE
-    domains_batches = [
-        pf_data[i : i + batch_size] for i in range(0, len(pf_data), batch_size)
-    ]
+    if mode == "phase1":
+        target_start_col = 24
+        expected_cols = 9
+    elif mode == "phase2":
+        target_start_col = 40
+        expected_cols = 2
+    else:
+        target_start_col = 20
+        expected_cols = 50
+
+    sheet_write_queue = asyncio.Queue()
 
     connector = aiohttp.TCPConnector(
         limit=100,
@@ -3929,15 +3936,69 @@ async def Integrated_Extract_domains(
     )
     FLUSH_FILE = os.path.join(os.path.dirname(__file__), ".flush_requested")
     async with aiohttp.ClientSession(headers=mainheaders, connector=connector) as session:
-        # Each 100-row batch automatically tracks its own existing Tech Crawler jobs and harvests S3 markdowns progressively in Integrated_Process_domain
+        # Background non-blocking Google Sheets writer
+        async def _flush_sheet_buffer(buf):
+            if not buf:
+                return
+            by_col = {}
+            for r_num, c_num, val in buf:
+                by_col.setdefault(c_num, []).append((r_num, val))
 
-        for batch_index, batch in enumerate(domains_batches):
-            if is_5am_ist_cutoff():
-                logging.warning("⏰ 5:00 AM IST daily cutoff reached! Halting execution so Apps Script can refresh daily domains.")
-                break
-            if os.path.exists(STOP_FILE):
-                logging.info("Stop requested (.stop_requested found). Halting Integrated_Extract_domains.")
-                break
+            for c_num, items in by_col.items():
+                items.sort(key=lambda x: x[0])
+                groups = []
+                curr_grp = [items[0]]
+                for it in items[1:]:
+                    if it[0] == curr_grp[-1][0] + 1:
+                        curr_grp.append(it)
+                    else:
+                        groups.append(curr_grp)
+                        curr_grp = [it]
+                groups.append(curr_grp)
+
+                for grp in groups:
+                    start_r = grp[0][0]
+                    chunk_rows = [x[1] for x in grp]
+                    try:
+                        await write_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, chunk_rows, start_r, c_num)
+                        await asyncio.sleep(0.5)
+                    except Exception as ex:
+                        logging.error(f"Failed to write range rows {start_r}-{start_r + len(chunk_rows)-1} col {c_num}: {ex}")
+
+        async def sheet_writer_worker():
+            buffer = []
+            last_flush = time.time()
+            while True:
+                try:
+                    try:
+                        item = await asyncio.wait_for(sheet_write_queue.get(), timeout=1.0)
+                        if item is None:
+                            break
+                        buffer.append(item)
+                        sheet_write_queue.task_done()
+                    except asyncio.TimeoutError:
+                        pass
+
+                    now = time.time()
+                    if buffer and (len(buffer) >= 20 or (now - last_flush) >= 4.0):
+                        await _flush_sheet_buffer(buffer)
+                        buffer.clear()
+                        last_flush = time.time()
+                except Exception as e:
+                    logging.error(f"Error in sheet_writer_worker: {e}")
+
+            if buffer:
+                await _flush_sheet_buffer(buffer)
+                buffer.clear()
+
+        writer_task = asyncio.create_task(sheet_writer_worker())
+
+        # Domain-to-Domain streaming execution
+        async def process_single_domain(idx, row):
+            nonlocal processed, success_count, fail_count
+
+            if is_5am_ist_cutoff() or os.path.exists(STOP_FILE):
+                return
             if is_pre_cutoff_window() or os.path.exists(FLUSH_FILE):
                 logging.warning("⏰ 04:30 AM IST Pre-Cutoff Flush active! Halting new scraping ingestion to drain summarized domains.")
                 if pending_tech_crawler_jobs:
@@ -3945,262 +4006,156 @@ async def Integrated_Extract_domains(
                         {"domain": it.get("domain"), "raw_content": it.get("raw_content", ""), "tc_job_id": it.get("tc_job_id", "")}
                         for it in pending_tech_crawler_jobs if it.get("domain")
                     ])
-                break
+                return
 
             await SYSTEM_HEALTH.wait_for_resources()
 
-            # Cycle-based NIM summarization for the batch (up to 10 cycles, retrying only after all domains in cycle attempted)
-            batch_summaries = {}
-            if mode != "phase1":
-                to_summarize = {}
-                for row_index, row in enumerate(batch):
-                    if not row or not row[0]:
-                        continue
-                    domain = row[0]
-                    
-                    # 1. Existing summary check from sheet
-                    existing_sum = ""
-                    if len(row) > 41 and safe_str(row[41]).strip() and safe_str(row[41]).strip() != safe_str(if_pred_base_prompt).strip():
-                        existing_sum = safe_str(row[41]).strip()
-                    elif len(row) > 40 and safe_str(row[40]).strip() and safe_str(row[40]).strip() != safe_str(summery_base_prompt).strip() and not safe_str(row[40]).strip().startswith("http"):
-                        existing_sum = safe_str(row[40]).strip()
-                    
-                    if existing_sum:
-                        batch_summaries[domain] = existing_sum
-                        continue
-                    
-                    cached = LOCAL_CACHE.get(domain) if LOCAL_CACHE else None
-                    if cached and cached.get("output_data_summery"):
-                        batch_summaries[domain] = cached["output_data_summery"]
-                        continue
+            row_number = start_row_num + idx
+            if not row or not row[0]:
+                processed += 1
+                return
 
-                    # 2. Check raw data in row
-                    raw_content = ""
-                    for c_idx in [31, 37, 32, 33, 34, 35]:
-                        if len(row) > c_idx and safe_str(row[c_idx]).strip():
-                            raw_content = safe_str(row[c_idx]).strip()
-                            break
-                    
-                    # 3. Check S3 markdown if Tech Crawler succeeded
-                    if not raw_content and len(row) > 28 and safe_str(row[28]).strip() and len(row) > 25 and safe_str(row[25]).strip() == "SUCCESS":
-                        s3_md = safe_str(row[28]).strip()
-                        try:
-                            tc_client = TechCrawlerClient(token=Tracxn_API_Token)
-                            signed_url = await tc_client.get_signed_s3_url(session, s3_md)
-                            if signed_url:
-                                raw_content = await tc_client.fetch_raw_markdown(session, signed_url) or ""
-                        except Exception as s3_err:
-                            logging.warning(f"Could not fetch S3 markdown for {domain}: {s3_err}")
-
-                    if raw_content:
-                        if len(raw_content) > 48000:
-                            raw_content = raw_content[:48000]
-                        prompt_msg = Utility_Replace_Response(raw_content, summery_base_prompt, replacable_char)
-                        prompt_msg = Utility_Replace_Response(domain, prompt_msg, replacable_char_Domain)
-                        if "YYYY" in prompt_msg:
-                            prompt_msg = prompt_msg.replace("YYYY", raw_content)
-                        if "XXXX" in prompt_msg:
-                            prompt_msg = prompt_msg.replace("XXXX", domain)
-                        to_summarize[domain] = prompt_msg
-
-                # 10-Cycle Retry loop for all domains needing NIM summary in this batch
-                if to_summarize:
-                    nim_sem = asyncio.Semaphore(15)  # Scaled for 60% resource utilization across 31 NIM keys
-                    async def _single_nim(d, p):
-                        async with nim_sem:
-                            return await Nvidia_API_ASYNC(p, token_rotator=token_rotator, max_attempts=1, session=session)
-
-                    pending_domains = list(to_summarize.keys())
-                    for cycle in range(1, 11):
-                        if not pending_domains:
-                            break
-                        stage_msg = f"Batch {batch_index + 1}/{len(domains_batches)}: NIM Cycle {cycle}/10 ({len(pending_domains)} domains pending)..."
-                        logging.info(f"🔄 {stage_msg}")
-                        update_progress_file(processed, total_domains, success_count, fail_count, phase=phase_title, stage_details=stage_msg, pending_tc=len(pending_tech_crawler_jobs), mode=mode)
-
-                        cycle_tasks = [_single_nim(d, to_summarize[d]) for d in pending_domains]
-                        cycle_results = await asyncio.gather(*cycle_tasks, return_exceptions=True)
-
-                        next_pending = []
-                        for d, res in zip(pending_domains, cycle_results):
-                            if isinstance(res, str) and res.strip():
-                                batch_summaries[d] = res.strip()
-                            else:
-                                next_pending.append(d)
-
-                        successes = len(pending_domains) - len(next_pending)
-                        logging.info(f"✅ NIM Cycle {cycle}/10: {successes} succeeded, {len(next_pending)} pending for next cycle.")
-                        pending_domains = next_pending
-
-                    # Fallback to Gemini for any domain that failed all 10 cycles
-                    if pending_domains:
-                        logging.warning(f"⚠️ {len(pending_domains)} domains exhausted all 10 NIM cycles. Falling back to Gemini...")
-                        async def _gemini_fb(d, p):
-                            try:
-                                g_res = await Gemini_API_ASYNC(p, session=session)
-                                return g_res.get("output", "")
-                            except Exception as ex:
-                                logging.error(f"Gemini fallback failed for {d}: {ex}")
-                                return ""
-                        fb_tasks = [_gemini_fb(d, to_summarize[d]) for d in pending_domains]
-                        fb_results = await asyncio.gather(*fb_tasks, return_exceptions=True)
-                        for d, res in zip(pending_domains, fb_results):
-                            if isinstance(res, str) and res.strip():
-                                batch_summaries[d] = res.strip()
-
-            tasks = []
-            start_row = start_row_num + batch_index * batch_size  # Adjust row index for writing
-
-            for row_index, row in enumerate(batch):
-                if row and row[0]:  # Ensure the row is valid
-                    domain = row[0]
-                    task = asyncio.create_task(
-                        Integrated_Process_domain(
-                            session,
-                            domain,
-                            start_row + row_index,
-                            client,
-                            semaphore,
-                            row,
-                            SHEET_ID,
-                            EXTRACTING_SHEET_NAME,
-                            cache_id_IF_Prediction,
-                            token_IF_Prediction,
-                            date_IF_Prediction,
-                            status_IF_Prediction,
-                            exp_date_IF_Prediction,
-                            config_funnel_prompt,
-                            config_funnel_id_prompt,
-                            config_funnel_name_prompt,
-                            config_funnel_name_Feed_Cached_prompt,
-                            config_funnel_name_Feed_Cached_API_Token,
-                            config_funnel_name_Feed_Cached_Model,
-                            config_funnel_name_Feed_Cached_Gen_Date,
-                            config_funnel_name_Feed_Cached_Final_Status,
-                            token_rotator,
-                            mode=mode,
-                            write_to_sheet=False,
-                            precomputed_summary=batch_summaries.get(domain),
-                        )
-                    )
-                    tasks.append(task)
-                else:
-                    async def _noop():
-                        return None
-                    tasks.append(asyncio.create_task(_noop()))
-
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-
-            if mode == "phase1":
-                target_start_col = 24
-                expected_cols = 9
-            elif mode == "phase2":
-                target_start_col = 40
-                expected_cols = 2
-            else:
-                target_start_col = 20
-                expected_cols = 50
-
-            batch_write_rows = []
-            for idx, res in enumerate(results):
-                orig_row = batch[idx] if idx < len(batch) else []
-
-                if isinstance(res, Exception) or res is None:
-                    processed += 1
-                    fail_count += 1
-                    slice_start = target_start_col - 1
-                    existing_slice = orig_row[slice_start : slice_start + expected_cols]
-                    if len(existing_slice) < expected_cols:
-                        existing_slice = existing_slice + [""] * (expected_cols - len(existing_slice))
-                    batch_write_rows.append(existing_slice)
-                else:
-                    if isinstance(res, dict) and res.get("tc_status") == "PROCESSING":
-                        pending_tech_crawler_jobs.append(res)
-                        if mode == "phase1":
-                            write_data = res.get("write_data") or [res.get("tc_job_id", ""), res.get("tc_job_gen_time", ""), "PROCESSING"]
-                            if len(write_data) < expected_cols:
-                                write_data = write_data + [""] * (expected_cols - len(write_data))
-                            batch_write_rows.append(write_data)
-                        elif mode == "phase2":
-                            processed += 1
-                            success_count += 1
-                            slice_start = target_start_col - 1
-                            existing_slice = orig_row[slice_start : slice_start + expected_cols]
-                            if len(existing_slice) < expected_cols:
-                                existing_slice = existing_slice + [""] * (expected_cols - len(existing_slice))
-                            batch_write_rows.append(existing_slice)
-                        else:
-                            slice_start = target_start_col - 1
-                            row_slice = list(orig_row[slice_start : slice_start + expected_cols])
-                            if len(row_slice) < expected_cols:
-                                row_slice = row_slice + [""] * (expected_cols - len(row_slice))
-                            row_slice[4] = res.get("tc_job_id", "")
-                            row_slice[5] = res.get("tc_job_gen_time", "")
-                            row_slice[6] = "PROCESSING"
-                            batch_write_rows.append(row_slice)
-                    else:
-                        processed += 1
-                        success_count += 1
-                        write_data = res.get("write_data") if isinstance(res, dict) else None
-                        if write_data and len(write_data) == expected_cols:
-                            batch_write_rows.append(write_data)
-                        elif write_data:
-                            if len(write_data) < expected_cols:
-                                write_data = write_data + [""] * (expected_cols - len(write_data))
-                            else:
-                                write_data = write_data[:expected_cols]
-                            batch_write_rows.append(write_data)
-                        else:
-                            slice_start = target_start_col - 1
-                            existing_slice = orig_row[slice_start : slice_start + expected_cols]
-                            if len(existing_slice) < expected_cols:
-                                existing_slice = existing_slice + [""] * (expected_cols - len(existing_slice))
-                            batch_write_rows.append(existing_slice)
-
-            if batch_write_rows:
-                await write_sheet_data(
-                    client, SHEET_ID, EXTRACTING_SHEET_NAME,
-                    batch_write_rows, start_row, target_start_col
+            domain = row[0]
+            try:
+                res = await Integrated_Process_domain(
+                    session,
+                    domain,
+                    row_number,
+                    client,
+                    semaphore,
+                    row,
+                    SHEET_ID,
+                    EXTRACTING_SHEET_NAME,
+                    cache_id_IF_Prediction,
+                    token_IF_Prediction,
+                    date_IF_Prediction,
+                    status_IF_Prediction,
+                    exp_date_IF_Prediction,
+                    config_funnel_prompt,
+                    config_funnel_id_prompt,
+                    config_funnel_name_prompt,
+                    config_funnel_name_Feed_Cached_prompt,
+                    config_funnel_name_Feed_Cached_API_Token,
+                    config_funnel_name_Feed_Cached_Model,
+                    config_funnel_name_Feed_Cached_Gen_Date,
+                    config_funnel_name_Feed_Cached_Final_Status,
+                    token_rotator,
+                    mode=mode,
+                    write_to_sheet=False,
+                    precomputed_summary=None,
                 )
 
-            # High-Throughput Real-Time Finalization: Execute Ingestion Write APIs & Review APIs
-            # immediately per batch so domains are marked DONE in Google Sheets in real-time!
-            if mode == "full":
-                try:
-                    review_tasks = []
-                    for r_offset, r_data in enumerate(batch):
-                        if r_data and r_data[0]:
-                            review_tasks.append(
-                                Process_Review_domain(
-                                    session, r_data, start_row + r_offset, client, semaphore, SHEET_ID, EXTRACTING_SHEET_NAME, write_to_sheet=False
-                                )
-                            )
-                    rev_results = await asyncio.gather(*review_tasks, return_exceptions=True)
-                    rev_batch_rows = []
-                    for idx, r_res in enumerate(rev_results):
-                        orig_r = batch[idx] if idx < len(batch) else []
-                        if isinstance(r_res, Exception) or r_res is None:
-                            existing_slice = orig_r[19:68] if len(orig_r) >= 68 else (orig_r[19:] + [""] * max(0, 49 - len(orig_r[19:])))
-                            rev_batch_rows.append(existing_slice)
-                        else:
-                            rev_batch_rows.append(r_res)
-                    if rev_batch_rows:
-                        await write_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, rev_batch_rows, start_row, 20)
-                except Exception as rev_err:
-                    logging.warning(f"Batch real-time review execution warning: {rev_err}")
+                if isinstance(res, Exception) or res is None:
+                    fail_count += 1
+                    slice_start = target_start_col - 1
+                    existing_slice = row[slice_start : slice_start + expected_cols]
+                    if len(existing_slice) < expected_cols:
+                        existing_slice = existing_slice + [""] * (expected_cols - len(existing_slice))
+                    await sheet_write_queue.put((row_number, target_start_col, existing_slice))
+                elif isinstance(res, dict) and res.get("tc_status") == "PROCESSING":
+                    pending_tech_crawler_jobs.append(res)
+                    if mode == "phase1":
+                        write_data = res.get("write_data") or [res.get("tc_job_id", ""), res.get("tc_job_gen_time", ""), "PROCESSING"]
+                        if len(write_data) < expected_cols:
+                            write_data = write_data + [""] * (expected_cols - len(write_data))
+                        await sheet_write_queue.put((row_number, target_start_col, write_data))
+                    elif mode == "phase2":
+                        success_count += 1
+                        slice_start = target_start_col - 1
+                        existing_slice = row[slice_start : slice_start + expected_cols]
+                        if len(existing_slice) < expected_cols:
+                            existing_slice = existing_slice + [""] * (expected_cols - len(existing_slice))
+                        await sheet_write_queue.put((row_number, target_start_col, existing_slice))
+                    else:
+                        slice_start = target_start_col - 1
+                        row_slice = list(row[slice_start : slice_start + expected_cols])
+                        if len(row_slice) < expected_cols:
+                            row_slice = row_slice + [""] * (expected_cols - len(row_slice))
+                        row_slice[4] = res.get("tc_job_id", "")
+                        row_slice[5] = res.get("tc_job_gen_time", "")
+                        row_slice[6] = "PROCESSING"
+                        await sheet_write_queue.put((row_number, target_start_col, row_slice))
+                else:
+                    success_count += 1
+                    final_write_data = res.get("write_data") if isinstance(res, dict) else None
 
-            phase_label = "Phase 1: Initial Crawl & Predictions" if mode == "full" else f"Mode: {mode.upper()}"
-            update_progress_file(
-                processed, total_domains, success_count, fail_count,
-                phase=phase_label,
-                stage_details=f"Batch {batch_index + 1}/{len(domains_batches)}: {processed}/{total_domains} rows processed",
-                pending_tc=len(pending_tech_crawler_jobs),
-                mode=mode
-            )
-            logging.info(
-                f"Completed batch {batch_index + 1}/{len(domains_batches)} with {len(batch)} domains. Progress: {processed}/{total_domains} (Pending TC: {len(pending_tech_crawler_jobs)})"
-            )
-            trim_memory()
+                    # Real-time Review API for this domain in full mode
+                    if mode == "full" and final_write_data:
+                        try:
+                            updated_row = list(row[:19]) + list(final_write_data)
+                            rev_res = await Process_Review_domain(
+                                session, updated_row, row_number, client, semaphore, SHEET_ID, EXTRACTING_SHEET_NAME, write_to_sheet=False
+                            )
+                            if rev_res and not isinstance(rev_res, Exception):
+                                final_write_data = rev_res
+                        except Exception as rev_err:
+                            logging.warning(f"Domain real-time review warning for {domain}: {rev_err}")
+
+                    if final_write_data and len(final_write_data) == expected_cols:
+                        await sheet_write_queue.put((row_number, target_start_col, final_write_data))
+                    elif final_write_data:
+                        if len(final_write_data) < expected_cols:
+                            final_write_data = final_write_data + [""] * (expected_cols - len(final_write_data))
+                        else:
+                            final_write_data = final_write_data[:expected_cols]
+                        await sheet_write_queue.put((row_number, target_start_col, final_write_data))
+                    else:
+                        slice_start = target_start_col - 1
+                        existing_slice = row[slice_start : slice_start + expected_cols]
+                        if len(existing_slice) < expected_cols:
+                            existing_slice = existing_slice + [""] * (expected_cols - len(existing_slice))
+                        await sheet_write_queue.put((row_number, target_start_col, existing_slice))
+
+            except Exception as d_err:
+                logging.error(f"Error processing domain {domain} at row {row_number}: {d_err}")
+                fail_count += 1
+            finally:
+                processed += 1
+                if processed % 5 == 0 or processed == total_domains:
+                    update_progress_file(
+                        processed, total_domains, success_count, fail_count,
+                        phase=phase_title,
+                        stage_details=f"Streaming: {processed}/{total_domains} domains processed ({success_count} success, {fail_count} fail)",
+                        pending_tc=len(pending_tech_crawler_jobs),
+                        mode=mode
+                    )
+                    trim_memory()
+
+        # Continuous domain worker pool: workers pull rows dynamically on a domain-to-domain basis
+        domain_queue = asyncio.Queue()
+        for idx, r in enumerate(pf_data):
+            await domain_queue.put((idx, r))
+
+        async def worker():
+            while not domain_queue.empty():
+                if is_5am_ist_cutoff() or os.path.exists(STOP_FILE) or is_pre_cutoff_window() or os.path.exists(FLUSH_FILE):
+                    break
+                try:
+                    idx, r = domain_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                await process_single_domain(idx, r)
+                domain_queue.task_done()
+
+        num_workers = min(MAX_WORKERS, max(1, len(pf_data)))
+        workers = [asyncio.create_task(worker()) for _ in range(num_workers)]
+        await asyncio.gather(*workers)
+
+        # Signal sheet writer worker to flush remaining writes and exit
+        await sheet_write_queue.put(None)
+        await writer_task
+
+        update_progress_file(
+            processed, total_domains, success_count, fail_count,
+            phase=phase_title,
+            stage_details=f"Streaming completed: {processed}/{total_domains} rows processed",
+            pending_tc=len(pending_tech_crawler_jobs),
+            mode=mode
+        )
+        logging.info(
+            f"Streaming completed for {processed}/{total_domains} domains (Success: {success_count}, Fail: {fail_count}, Pending TC: {len(pending_tech_crawler_jobs)})"
+        )
+        trim_memory()
 
         if pending_tech_crawler_jobs:
             logging.info(
@@ -4378,10 +4333,13 @@ async def Process_Review_domain(session, row, row_number, client, semaphore, SHE
             discovery_bq = "yes" if str(tag_status_discovery).upper() in ("YES", "TRUE") else (row[68] if len(row) > 68 else "")
 
             # Prepare output data
+            picked_time = row[19] if len(row) > 19 and row[19] else get_ist_timestamp()
+            cleared_time = row[20] if len(row) > 20 and row[20] else get_ist_timestamp()
+            output_status = row[21] if len(row) > 21 and row[21] else "To be checked"
             output_row = [
-                    get_ist_timestamp(),  # Status Date
-                    get_ist_timestamp(),  # Manual Status
-                    "To be checked",      # Some default value
+                    picked_time,  # Engine Picked Time
+                    cleared_time,  # Engine Cleared Time
+                    output_status,  # Engine Cleared Status
                     *row[22:61],          # Data range
                     cf_if_status,
                     cf_if_time,
