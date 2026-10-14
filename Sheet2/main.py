@@ -80,12 +80,16 @@ file_handler = logging.FileHandler(discovery_log_path, mode='a')
 file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
 root_logger.addHandler(file_handler)
 
-def update_progress_file(current: int, total: int, success: int, fail: int):
+def update_progress_file(current: int, total: int, success: int, fail: int, phase: str = "", stage_details: str = "", pending_tc: int = 0, mode: str = ""):
     prog_data = {
         'current': current,
         'total': total,
         'success': success,
-        'fail': fail
+        'fail': fail,
+        'phase': phase,
+        'stage_details': stage_details,
+        'pending_tc': pending_tc,
+        'mode': mode
     }
     tmp_path = f"{PROGRESS_FILE}.tmp.{os.getpid()}"
     try:
@@ -3050,6 +3054,7 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
     if_pf_time = ""
     tag_status_if = ""
     tag_status_pf = ""
+    tag_status_discovery = ""
     tag_name_if = "bu_llm_industry_prediction"
     tag_name_pf = "bu_llm_feed_prediction"
 
@@ -3596,7 +3601,8 @@ async def Integrated_Extract_domains(
     processed = 0
     success_count = 0
     fail_count = 0
-    update_progress_file(processed, total_domains, success_count, fail_count)
+    phase_title = f"Phase 1: Initial Crawl & Predictions ({mode})" if mode == "full" else f"Mode: {mode.upper()}"
+    update_progress_file(processed, total_domains, success_count, fail_count, phase=phase_title, stage_details=f"Starting batch processing of {total_domains} rows...", pending_tc=0, mode=mode)
 
     semaphore = asyncio.Semaphore(MAX_WORKERS)
     pending_tech_crawler_jobs = []
@@ -3668,10 +3674,10 @@ async def Integrated_Extract_domains(
 
             batch_write_rows = []
             for idx, res in enumerate(results):
-                processed += 1
                 orig_row = batch[idx] if idx < len(batch) else []
 
                 if isinstance(res, Exception) or res is None:
+                    processed += 1
                     fail_count += 1
                     slice_start = target_start_col - 1
                     existing_slice = orig_row[slice_start : slice_start + expected_cols]
@@ -3679,7 +3685,6 @@ async def Integrated_Extract_domains(
                         existing_slice = existing_slice + [""] * (expected_cols - len(existing_slice))
                     batch_write_rows.append(existing_slice)
                 else:
-                    success_count += 1
                     if isinstance(res, dict) and res.get("tc_status") == "PROCESSING":
                         pending_tech_crawler_jobs.append(res)
                         if mode == "phase1":
@@ -3688,6 +3693,8 @@ async def Integrated_Extract_domains(
                                 write_data = write_data + [""] * (expected_cols - len(write_data))
                             batch_write_rows.append(write_data)
                         elif mode == "phase2":
+                            processed += 1
+                            success_count += 1
                             slice_start = target_start_col - 1
                             existing_slice = orig_row[slice_start : slice_start + expected_cols]
                             if len(existing_slice) < expected_cols:
@@ -3703,6 +3710,8 @@ async def Integrated_Extract_domains(
                             row_slice[6] = "PROCESSING"
                             batch_write_rows.append(row_slice)
                     else:
+                        processed += 1
+                        success_count += 1
                         write_data = res.get("write_data") if isinstance(res, dict) else None
                         if write_data and len(write_data) == expected_cols:
                             batch_write_rows.append(write_data)
@@ -3725,9 +3734,16 @@ async def Integrated_Extract_domains(
                     batch_write_rows, start_row, target_start_col
                 )
 
-            update_progress_file(processed, total_domains, success_count, fail_count)
+            phase_label = "Phase 1: Initial Crawl & Predictions" if mode == "full" else f"Mode: {mode.upper()}"
+            update_progress_file(
+                processed, total_domains, success_count, fail_count,
+                phase=phase_label,
+                stage_details=f"Batch {batch_index + 1}/{len(domains_batches)}: {processed}/{total_domains} rows processed",
+                pending_tc=len(pending_tech_crawler_jobs),
+                mode=mode
+            )
             logging.info(
-                f"Completed batch {batch_index + 1} with {len(batch)} domains. Progress: {processed}/{total_domains}"
+                f"Completed batch {batch_index + 1}/{len(domains_batches)} with {len(batch)} domains. Progress: {processed}/{total_domains} (Pending TC: {len(pending_tech_crawler_jobs)})"
             )
 
         if pending_tech_crawler_jobs:
@@ -3753,13 +3769,29 @@ async def Integrated_Extract_domains(
                 while elapsed < retry_wait_sec:
                     if os.path.exists(STOP_FILE):
                         break
-                    chunk = min(5, retry_wait_sec - elapsed)
+                    remaining_sec = retry_wait_sec - elapsed
+                    update_progress_file(
+                        processed, total_domains, success_count, fail_count,
+                        phase="Tech Crawler Background Polling",
+                        stage_details=f"Waiting for {len(pending_tech_crawler_jobs)} crawls to complete (re-check in {remaining_sec}s)",
+                        pending_tc=len(pending_tech_crawler_jobs),
+                        mode=mode
+                    )
+                    chunk = min(5, remaining_sec)
                     await asyncio.sleep(chunk)
                     elapsed += chunk
 
                 if os.path.exists(STOP_FILE):
                     logging.info("Stop requested (.stop_requested found). Exiting Tech Crawler polling loop.")
                     break
+
+                update_progress_file(
+                    processed, total_domains, success_count, fail_count,
+                    phase="Tech Crawler Background Polling",
+                    stage_details=f"Checking {len(pending_tech_crawler_jobs)} pending Tech Crawler jobs...",
+                    pending_tc=len(pending_tech_crawler_jobs),
+                    mode=mode
+                )
 
                 still_pending = []
                 for item in pending_tech_crawler_jobs:
@@ -3808,6 +3840,16 @@ async def Integrated_Extract_domains(
                                 config_funnel_name_Feed_Cached_Final_Status,
                                 token_rotator,
                                 created_timestamp=c_ts,
+                                mode=mode
+                            )
+                            processed += 1
+                            success_count += 1
+                            remaining_pending = len(still_pending) + (len(pending_tech_crawler_jobs) - 1)
+                            update_progress_file(
+                                processed, total_domains, success_count, fail_count,
+                                phase="Tech Crawler Polling & Processing",
+                                stage_details=f"Resolved job for {d} ({remaining_pending} pending)",
+                                pending_tc=remaining_pending,
                                 mode=mode
                             )
                         else:
@@ -3911,7 +3953,7 @@ async def Process_Review_domain(session, row, row_number, client, semaphore, SHE
 
 
 # Entry point
-async def Process_Review_Caller(client, mainheaders, SHEET_ID, EXTRACTING_SHEET_NAME, start_row_num=4):
+async def Process_Review_Caller(client, mainheaders, SHEET_ID, EXTRACTING_SHEET_NAME, start_row_num=4, mode="full"):
     if os.path.exists(STOP_FILE):
         logging.info("Stop requested before Process_Review_Caller. Skipping.")
         return
@@ -3920,6 +3962,19 @@ async def Process_Review_Caller(client, mainheaders, SHEET_ID, EXTRACTING_SHEET_
     semaphore = asyncio.Semaphore(MAX_WORKERS)
     batch_size = BATCH_SIZE
     domains_batches = [pf_data[i:i + batch_size] for i in range(0, len(pf_data), batch_size)]
+
+    total_review_domains = len(pf_data)
+    review_processed = 0
+    review_success = 0
+    review_fail = 0
+
+    update_progress_file(
+        review_processed, total_review_domains, review_success, review_fail,
+        phase="Phase 4: Review Write APIs",
+        stage_details=f"Starting review processing of {total_review_domains} domains...",
+        pending_tc=0,
+        mode=mode
+    )
 
     connector = aiohttp.TCPConnector(
         limit=100,
@@ -3950,21 +4005,164 @@ async def Process_Review_Caller(client, mainheaders, SHEET_ID, EXTRACTING_SHEET_
             for idx, res in enumerate(results):
                 orig_row = batch[idx] if idx < len(batch) else []
                 if isinstance(res, Exception) or res is None:
+                    review_fail += 1
                     # Accidental data loss prevention fallback: preserve existing row data
                     existing_slice = orig_row[19:68] if len(orig_row) >= 68 else (orig_row[19:] + [""] * max(0, 49 - len(orig_row[19:])))
                     batch_output_rows.append(existing_slice)
                 else:
+                    review_success += 1
                     batch_output_rows.append(res)
+                review_processed += 1
 
             if batch_output_rows:
                 await write_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, batch_output_rows, start_row, 20)
 
-            logging.info(f"Completed review batch {batch_index + 1} with {len(batch)} domains.")
+            update_progress_file(
+                review_processed, total_review_domains, review_success, review_fail,
+                phase="Phase 4: Review Write APIs",
+                stage_details=f"Batch {batch_index + 1}/{len(domains_batches)}: {review_processed}/{total_review_domains} domains checked",
+                pending_tc=0,
+                mode=mode
+            )
+            logging.info(f"Completed review batch {batch_index + 1}/{len(domains_batches)} with {len(batch)} domains.")
 
 #********************************************************************************************
 
+async def Execute_Phase4_Ingestion_Write_APIs(client, mainheaders, SHEET_ID, EXTRACTING_SHEET_NAME, start_row_num=4):
+    """Executes CF->IF and IF->PF Write APIs + Hashtags for rows that have predictions but uncommitted write APIs."""
+    if os.path.exists(STOP_FILE):
+        return
 
+    pf_data = await read_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, start_row=start_row_num)
+    total = len(pf_data)
+    semaphore = asyncio.Semaphore(MAX_WORKERS)
+    batch_size = BATCH_SIZE
+    batches = [pf_data[i:i + batch_size] for i in range(0, total, batch_size)]
 
+    processed = 0
+    success = 0
+    fail = 0
+
+    update_progress_file(
+        0, total, 0, 0,
+        phase="Phase 4: Ingestion Write APIs",
+        stage_details=f"Executing Tracxn Ingestion Write APIs for {total} rows...",
+        pending_tc=0,
+        mode="phase4"
+    )
+
+    connector = aiohttp.TCPConnector(limit=100, limit_per_host=25, ttl_dns_cache=300)
+    async with aiohttp.ClientSession(headers=mainheaders, connector=connector) as session:
+        for b_idx, batch in enumerate(batches):
+            if os.path.exists(STOP_FILE):
+                break
+            tasks = []
+            start_row = start_row_num + b_idx * batch_size
+
+            async def _process_row_ingestion(row, r_num):
+                async with semaphore:
+                    if not row or not row[0]:
+                        return None
+                    domain = row[0]
+                    domain_profile_id = row[10] if len(row) > 10 else ""
+                    filter_group_id = row[4] if len(row) > 4 else ""
+                    filter_id = row[6] if len(row) > 6 else ""
+                    source_funnel_id = row[2] if len(row) > 2 else ""
+
+                    # Predictions in row
+                    output_data_if = row[44] if len(row) > 44 else ""
+                    industry_funnel_id = row[46] if len(row) > 46 else ""
+                    output_data_if_validation = row[50] if len(row) > 50 else ""
+                    publish_funnel_id = row[60] if len(row) > 60 else ""
+                    cf_if_status = row[61] if len(row) > 61 else ""
+                    cf_if_time = row[62] if len(row) > 62 else ""
+                    if_pf_status = row[63] if len(row) > 63 else ""
+                    if_pf_time = row[64] if len(row) > 64 else ""
+                    tag_status_if = row[65] if len(row) > 65 else ""
+                    tag_status_pf = row[66] if len(row) > 66 else ""
+                    tag_status_discovery = row[68] if len(row) > 68 else ""
+
+                    token = Tracxn_API_Token
+                    comment = "This is a Write API Movement by Gemini"
+                    tag_name_if = "bu_llm_industry_prediction"
+                    tag_name_pf = "bu_llm_feed_prediction"
+                    if_pf_action = "MOVED_OUT"
+
+                    # If already done, skip calling Tracxn APIs
+                    if cf_if_status == "DONE" and if_pf_status == "DONE":
+                        return [cf_if_status, cf_if_time, if_pf_status, if_pf_time, tag_status_if, tag_status_pf, "", tag_status_discovery]
+
+                    # CF -> IF Write API & Tagging
+                    if EXTRACTING_SHEET_NAME == CF_EXTRACTING_SHEET_NAME and output_data_if_validation and "Yes" not in output_data_if_validation:
+                        tag_status_if = await Domain_HashTag_async(domain, Wrong_Validated_IF_Tag_Name, token)
+                        cf_if_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
+                        if source_funnel_id:
+                            cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id, filter_id, source_funnel_id, "MARKED_FOR_LATER", Wrong_Validation_COMMENT, token, session=session)
+                            cf_if_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
+                            if cf_if_status == "TRUE":
+                                cf_if_status = "DONE"
+                    elif (EXTRACTING_SHEET_NAME == CF_EXTRACTING_SHEET_NAME and "Yes" in output_data_if_validation) or (EXTRACTING_SHEET_NAME != CF_EXTRACTING_SHEET_NAME):
+                        if source_funnel_id and industry_funnel_id:
+                            tag_status_if = await Domain_HashTag_async(domain, tag_name_if, token)
+                            cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id, filter_id, industry_funnel_id, "MOVED_OUT", comment, token, session=session)
+                            cf_if_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
+                            if cf_if_status == "TRUE":
+                                cf_if_status = "DONE"
+                        elif source_funnel_id and (not industry_funnel_id and (output_data_if == "22" or "MARKED_IRRELEVANT" in output_data_if)):
+                            cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id, filter_id, source_funnel_id, "MARKED_IRRELEVANT", comment, token, session=session)
+                            cf_if_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
+                            if cf_if_status == "TRUE":
+                                cf_if_status = "DONE"
+                        elif source_funnel_id and (not industry_funnel_id and (output_data_if == "23" or "ESCALATED" in output_data_if)):
+                            cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id, filter_id, source_funnel_id, "ESCALATED", comment, token, session=session)
+                            cf_if_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
+                            if cf_if_status == "TRUE":
+                                cf_if_status = "DONE"
+                        elif source_funnel_id:
+                            cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id, filter_id, source_funnel_id, "SNOOZED", comment, token, session=session)
+                            cf_if_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
+                            if cf_if_status == "TRUE":
+                                cf_if_status = "DONE"
+
+                    # IF -> PF Write API & Tagging
+                    if industry_funnel_id and publish_funnel_id:
+                        tag_status_pf = await Domain_HashTag_async(domain, tag_name_pf, token)
+                        if_pf_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, industry_funnel_id, filter_group_id, filter_id, publish_funnel_id, if_pf_action, comment, token, session=session)
+                        if_pf_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
+                        if if_pf_status == "TRUE":
+                            if_pf_status = "DONE"
+
+                    if if_pf_status == "DONE":
+                        tag_status_discovery = await Domain_HashTag_async(domain, Discovery_Processing_TAG_NAME, token, session=session)
+
+                    discovery_bq = "yes" if str(tag_status_discovery).upper() in ("YES", "TRUE") else ""
+                    return [cf_if_status, cf_if_time, if_pf_status, if_pf_time, tag_status_if, tag_status_pf, "", discovery_bq]
+
+            for r_idx, row in enumerate(batch):
+                tasks.append(asyncio.create_task(_process_row_ingestion(row, start_row + r_idx)))
+
+            b_results = await asyncio.gather(*tasks, return_exceptions=True)
+            batch_write = []
+            for r in b_results:
+                processed += 1
+                if isinstance(r, Exception) or r is None:
+                    fail += 1
+                    batch_write.append([""] * 8)
+                else:
+                    success += 1
+                    batch_write.append(r)
+
+            if batch_write:
+                # Write to Cols 62 to 69 (start col 62 in 1-indexed)
+                await write_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, batch_write, start_row, 62)
+
+            update_progress_file(
+                processed, total, success, fail,
+                phase="Phase 4: Ingestion Write APIs",
+                stage_details=f"Batch {b_idx + 1}/{len(batches)}: {processed}/{total} rows processed",
+                pending_tc=0,
+                mode="phase4"
+            )
 
 # Async task wrapper
 def task():
@@ -3973,14 +4171,6 @@ def task():
     except Exception as e:
         logging.error(f"Scheduled task error: {e}")
 
-
-# async def main():
-#     client = await get_gspread_client()
-#     await Integrated_Extract_domains(client)
-    
-#     print("***************** Rejection Script Has Started *******************")
-
-#     await Process_Review_Caller(client, mainheaders)
 
 async def main():
     try:
@@ -4079,16 +4269,33 @@ async def main():
         else:
             logging.info("Phase 4 mode: skipping Integrated_Extract_domains phase.")
 
+        # Phase 4 Ingestion Write APIs
+        if mode_arg == "phase4" and not os.path.exists(STOP_FILE):
+            logging.info("***************** Phase 4: Ingestion Write APIs Started *******************")
+            try:
+                await Execute_Phase4_Ingestion_Write_APIs(client, mainheaders, active_sheet_id, CF_EXTRACTING_SHEET_NAME, start_row_num=start_row_arg)
+                logging.info("Execute_Phase4_Ingestion_Write_APIs completed.")
+            except Exception as e:
+                logging.error(f"Error in Execute_Phase4_Ingestion_Write_APIs: {e}")
+                raise
+
         # Review & Rejection Write API Phase
         if mode_arg in ("full", "phase4") and not os.path.exists(STOP_FILE):
             logging.info("***************** Review & Write API Phase Started *******************")
             try:
-                await Process_Review_Caller(client, mainheaders, active_sheet_id, CF_EXTRACTING_SHEET_NAME, start_row_num=start_row_arg)
+                await Process_Review_Caller(client, mainheaders, active_sheet_id, CF_EXTRACTING_SHEET_NAME, start_row_num=start_row_arg, mode=mode_arg)
                 logging.info("Process_Review_Caller phase completed.")
             except Exception as e:
                 logging.error(f"Error in Process_Review_Caller: {e}")
                 raise
 
+        update_progress_file(
+            100, 100, 100, 0,
+            phase="Completed",
+            stage_details="All pipeline phases completed successfully.",
+            pending_tc=0,
+            mode=mode_arg
+        )
         logging.info("Discovery Engine Pipeline completed successfully.")
     except Exception as e:
         logging.error(f"Fatal error in main(): {e}")

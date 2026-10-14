@@ -217,14 +217,19 @@ def _get_status_response():
     active_sheets = get_device_active_sheets()
     max_sheets = 999 if is_vishnu else 2
 
+    prog = state.get("progress", {})
     return {
         "status": current_status,
         "active": state["status"] in ("running", "stopping"),
         "is_stopping": is_stopping,
-        "progress_current": state["progress"].get("current", 0),
-        "progress_total": state["progress"].get("total", 0),
-        "progress_success": state["progress"].get("success", 0),
-        "progress_fail": state["progress"].get("fail", 0),
+        "progress_current": prog.get("current", 0),
+        "progress_total": prog.get("total", 0),
+        "progress_success": prog.get("success", 0),
+        "progress_fail": prog.get("fail", 0),
+        "phase": prog.get("phase", "Running" if state["status"] in ("running", "stopping") else "Idle"),
+        "stage_details": prog.get("stage_details", ""),
+        "pending_tc": prog.get("pending_tc", 0),
+        "pipeline_mode": prog.get("mode", ""),
         "workerName": f"{worker_identity}-CF-3-Pipeline",
         "sheet_id": settings.CF_SHEET_ID,
         "device_active_sheets": active_sheets,

@@ -236,15 +236,21 @@ function uiStartRun(resumeOnly = false) {
   htmlContent += '  const cur = s.progress_current || 0;';
   htmlContent += '  const pct = total > 0 ? Math.round((cur / total) * 100) : 0;';
   htmlContent += '  if(s.active){';
-  htmlContent += '    if(s.is_stopping) sText.textContent = "\u23F3 Stopping process...";';
-  htmlContent += '    else sText.textContent = "\u26A1 Running (Row " + cur + " of " + total + ")...";';
+  htmlContent += '    if(s.is_stopping) sText.textContent = "⏳ Stopping process...";';
+  htmlContent += '    else {';
+  htmlContent += '      let phaseTitle = s.phase || "Running";';
+  htmlContent += '      let detailsHtml = s.stage_details ? "<div style=\\"font-size:11.5px;color:#64748b;font-weight:400;margin-top:3px;\\">" + s.stage_details + "</div>" : "";';
+  htmlContent += '      sText.innerHTML = "⚡ <strong>" + phaseTitle + "</strong>" + detailsHtml;';
+  htmlContent += '    }';
   htmlContent += '  } else {';
-  htmlContent += '    if(s.status === "stopped"){ pFill.style.background = "#eab308"; sText.textContent = "\u23F9\uFE0F Stopped"; compMsg.textContent = "Pipeline stopped by user."; }';
-  htmlContent += '    else if(s.status === "failed"){ pFill.style.background = "#ef4444"; sText.textContent = "\u274C Failed"; compMsg.textContent = "Process encountered an error."; }';
-  htmlContent += '    else { pFill.style.background = "#10b981"; sText.textContent = "\u2705 Completed!"; compMsg.textContent = "All domains processed."; }';
+  htmlContent += '    if(s.status === "stopped"){ pFill.style.background = "#eab308"; sText.textContent = "⏹️ Stopped"; compMsg.textContent = "Pipeline stopped by user."; }';
+  htmlContent += '    else if(s.status === "failed"){ pFill.style.background = "#ef4444"; sText.textContent = "❌ Failed"; compMsg.textContent = "Process encountered an error."; }';
+  htmlContent += '    else { pFill.style.background = "#10b981"; sText.textContent = "✅ Completed!"; compMsg.textContent = "All domains and phases processed."; }';
   htmlContent += '  }';
   htmlContent += '  pFill.style.width = pct + "%";';
-  htmlContent += '  document.getElementById("count-text").textContent = cur + " / " + total + " rows (" + pct + "%)";';
+  htmlContent += '  let countStr = cur + " / " + total + " rows (" + pct + "%)";';
+  htmlContent += '  if(s.pending_tc && s.pending_tc > 0){ countStr += " • <span style=\\"color:#f59e0b;font-weight:600;\\">" + s.pending_tc + " in crawl</span>"; }';
+  htmlContent += '  document.getElementById("count-text").innerHTML = countStr;';
   htmlContent += '  document.getElementById("yield-text").textContent = (s.progress_success || 0) + " Successful";';
   htmlContent += '  if(s.workerName) document.getElementById("worker-info-progress").innerHTML = "Connected to: <strong>" + s.workerName + "</strong>";';
   htmlContent += '  fitHeight();';
@@ -253,7 +259,7 @@ function uiStartRun(resumeOnly = false) {
   htmlContent += 'function cancelRun(){';
   htmlContent += '  const btn = document.getElementById("stop-btn");';
   htmlContent += '  if(!isStopping){';
-  htmlContent += '    if(btn){ btn.textContent = "\u23F3 Stopping..."; btn.disabled = true; }';
+  htmlContent += '    if(btn){ btn.textContent = "⏳ Stopping..."; btn.disabled = true; }';
   htmlContent += '    google.script.run.withSuccessHandler(function(){ pollProgress(); }).executeCancelFromUi();';
   htmlContent += '    isStopping = true;';
   htmlContent += '  }';
@@ -261,15 +267,12 @@ function uiStartRun(resumeOnly = false) {
 
   htmlContent += '</script></body></html>';
 
-  const html = HtmlService.createHtmlOutput(htmlContent).setWidth(430).setHeight(460);
-  SpreadsheetApp.getUi().showModalDialog(html, '\uD83D\uDE80 Discovery Engine - CF-2 Wizard');
+  const html = HtmlService.createHtmlOutput(htmlContent).setWidth(430).setHeight(480);
+  SpreadsheetApp.getUi().showModelessDialog(html, '🚀 Discovery Engine - CF-2 Wizard');
 }
 
 function uiCheckStatus() {
-  const s = getStatusJson();
-  const ui = SpreadsheetApp.getUi();
-  const worker = PropertiesService.getDocumentProperties().getProperty(CONFIG.ACTIVE_WORKER_PROP + '_NAME') || 'None';
-  ui.alert('\uD83D\uDEA6 Status: ' + s.status.toUpperCase() + '\nWorker: ' + worker + '\nProgress: ' + (s.progress_current || 0) + '/' + (s.progress_total || 0));
+  uiStartRun(true);
 }
 
 function uiCheckHealth() {
