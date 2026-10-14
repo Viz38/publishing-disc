@@ -65,6 +65,11 @@ def _optimize_file_descriptor_limit(target_limit: int = 65536) -> int:
         return 256
 
 _optimize_file_descriptor_limit()
+try:
+    if hasattr(os, "nice"):
+        os.nice(10)
+except Exception:
+    pass
 
 # SR Orchestration Configuration
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -181,7 +186,7 @@ IF_SHEET_ID = settings.IF_SHEET_ID
 IF_EXTRACTING_SHEET_NAME = "IF_Engine_Database"
 
 CREDENTIALS_FILE = settings.CREDENTIALS_FILE
-MAX_WORKERS = 10  # Adjusted for better async processing
+MAX_WORKERS = 5  # Calibrated for Pentium G4400 (2 cores, 2 threads) to stay <= 40% CPU
 BATCH_SIZE = settings.BATCH_SIZE  # Default 100 rows per batch
 _WORKSHEET_CACHE = {}
 Config_Sheet_ID = settings.Config_Sheet_ID
@@ -3907,8 +3912,8 @@ async def Integrated_Extract_domains(
     ]
 
     connector = aiohttp.TCPConnector(
-        limit=100,
-        limit_per_host=25,
+        limit=30,
+        limit_per_host=10,
         ttl_dns_cache=300
     )
     async with aiohttp.ClientSession(headers=mainheaders, connector=connector) as session:
@@ -3957,21 +3962,28 @@ async def Integrated_Extract_domains(
                     # 3. Check S3 markdown if Tech Crawler succeeded
                     if not raw_content and len(row) > 28 and safe_str(row[28]).strip() and len(row) > 25 and safe_str(row[25]).strip() == "SUCCESS":
                         s3_md = safe_str(row[28]).strip()
-                        tc_client = TechCrawlerClient(token=Tracxn_API_Token)
-                        signed_url = await tc_client.get_signed_s3_url(session, s3_md)
-                        if signed_url:
-                            raw_content = await tc_client.fetch_raw_markdown(session, signed_url) or ""
+                        try:
+                            tc_client = TechCrawlerClient(token=Tracxn_API_Token)
+                            signed_url = await tc_client.get_signed_s3_url(session, s3_md)
+                            if signed_url:
+                                raw_content = await tc_client.fetch_raw_markdown(session, signed_url) or ""
+                        except Exception as s3_err:
+                            logging.warning(f"Could not fetch S3 markdown for {domain}: {s3_err}")
 
                     if raw_content:
                         if len(raw_content) > 48000:
                             raw_content = raw_content[:48000]
-                        prompt_msg = Utility_Replace_Response(raw_content, summery_base_prompt, "YYYY")
-                        prompt_msg = Utility_Replace_Response(domain, prompt_msg, "XXXX")
+                        prompt_msg = Utility_Replace_Response(raw_content, summery_base_prompt, replacable_char)
+                        prompt_msg = Utility_Replace_Response(domain, prompt_msg, replacable_char_Domain)
+                        if "YYYY" in prompt_msg:
+                            prompt_msg = prompt_msg.replace("YYYY", raw_content)
+                        if "XXXX" in prompt_msg:
+                            prompt_msg = prompt_msg.replace("XXXX", domain)
                         to_summarize[domain] = prompt_msg
 
                 # 10-Cycle Retry loop for all domains needing NIM summary in this batch
                 if to_summarize:
-                    nim_sem = asyncio.Semaphore(15)
+                    nim_sem = asyncio.Semaphore(5)
                     async def _single_nim(d, p):
                         async with nim_sem:
                             return await Nvidia_API_ASYNC(p, token_rotator=token_rotator, max_attempts=1, session=session)
@@ -4050,6 +4062,10 @@ async def Integrated_Extract_domains(
                         )
                     )
                     tasks.append(task)
+                else:
+                    async def _noop():
+                        return None
+                    tasks.append(asyncio.create_task(_noop()))
 
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -4136,6 +4152,8 @@ async def Integrated_Extract_domains(
             logging.info(
                 f"Completed batch {batch_index + 1}/{len(domains_batches)} with {len(batch)} domains. Progress: {processed}/{total_domains} (Pending TC: {len(pending_tech_crawler_jobs)})"
             )
+            import gc
+            gc.collect()
 
         if pending_tech_crawler_jobs:
             logging.info(
