@@ -3432,7 +3432,7 @@ async def Integrated_Process_domain(
                         tc_status = "PROCESSING"
 
                 # 2. Track Job once if in progress
-                if tc_job_id and (tc_status in ("", "PROCESSING") or not home_body):
+                if tc_job_id and tc_status in ("", "PROCESSING") and not home_body:
                     track_res = await tc_client.track_job_id(session, tc_job_id)
                     tc_status = track_res.get("status") or tc_status
                     if track_res.get("final_url"):
@@ -3799,13 +3799,27 @@ async def Integrated_Process_domain(
             logging.error(f"Error processing {domain}: {e}")
             return None
         
-async def reconcile_existing_tech_crawler_jobs(session, rows, client, SHEET_ID, sheet_name, start_row_num=4):
+async def reconcile_existing_tech_crawler_jobs(
+    session,
+    rows,
+    client,
+    SHEET_ID,
+    sheet_name,
+    start_row_num=4,
+    sheet_write_queue=None,
+    batch_size=50
+):
     """
-    When resuming a run (especially if the script stopped >3 hours ago):
+    When resuming/starting a run:
     Finds all rows that already have a tc_job_id but where scraping is not yet completed.
-    First checks the status of all these job IDs with Tech Crawler API.
-    For any job returning SUCCESS, retrieves the signed S3 markdown and updates the row/cache/sheet.
-    Only genuinely non-successful cases remain to be picked up by the fallback scraper.
+    Sweeps them in batches of 50 domains:
+    - Retries each candidate once with tc_client.track_job_id.
+    - If SUCCESS and s3_markdown exists: retrieves markdown, updates row/cache/sheet to SUCCESS.
+    - If status is FAILED or still PROCESSING after >= 3 hours from creation: marks as FAILED immediately (no retry).
+      When normal workers reach this row, they immediately run the Waterfall Scraper fallback.
+    - If still PROCESSING and < 3 hours old: retains in pending_tech_crawler_jobs to be monitored
+      in the background 15-minute retry loop.
+    Returns the list of remaining pending jobs (< 3 hours old) for the background poller.
     """
     candidates = []
     for idx, r in enumerate(rows):
@@ -3822,68 +3836,163 @@ async def reconcile_existing_tech_crawler_jobs(session, rows, client, SHEET_ID, 
             candidates.append((start_row_num + idx, r))
 
     if not candidates:
-        return
+        return []
 
-    logging.info(f"🔄 Resumption check: Reconciling status of {len(candidates)} existing Tech Crawler jobs before proceeding...")
-    tc_client = TechCrawlerClient(token=Tracxn_API_Token)
+    total_candidates = len(candidates)
+    logging.info(f"🔄 Startup Sweep: Reconciling {total_candidates} pending Tech Crawler jobs in batches of {batch_size}...")
+
+    tc_client = TechCrawlerClient(token_rotator=TRACXN_KEY_MANAGER) if 'TRACXN_KEY_MANAGER' in globals() else TechCrawlerClient(token=Tracxn_API_Token)
     reconcile_sem = asyncio.Semaphore(25)
+    pending_retained = []
+    resolved_success = 0
+    resolved_failed = 0
 
-    async def _check_one_candidate(r_num, row_data):
-        async with reconcile_sem:
-            domain = row_data[0]
-            job_id = row_data[23]
-            try:
-                track_res = await tc_client.track_job_id(session, job_id)
-                status = track_res.get("status")
-                if status == "SUCCESS" and track_res.get("s3_markdown"):
-                    signed_url = await tc_client.get_signed_s3_url(session, track_res["s3_markdown"])
-                    if signed_url:
-                        md = await tc_client.fetch_raw_markdown(session, signed_url)
-                        if md:
-                            row_data[25] = "SUCCESS"
-                            if track_res.get("final_url"): row_data[26] = track_res["final_url"]
-                            if track_res.get("s3_html"): row_data[27] = track_res["s3_html"]
-                            row_data[28] = track_res["s3_markdown"]
-                            if track_res.get("http_status"): row_data[29] = str(track_res["http_status"])
-                            if track_res.get("signals"): row_data[30] = str(track_res["signals"])
-                            row_data[31] = md
-                            LOCAL_CACHE.save_record(domain, {
-                                "tc_job_id": job_id,
-                                "tc_status": "SUCCESS",
-                                "tc_final_url": row_data[26],
-                                "tc_s3_html": row_data[27],
-                                "tc_s3_markdown": row_data[28],
-                                "tc_http_status": row_data[29],
-                                "tc_signals": row_data[30],
-                                "scrappingBeautySoup": md,
-                                "updated_at": datetime.datetime.now().strftime("%d/%b/%Y %H:%M:%S")
-                            })
-                            sheet_slice = [
-                                row_data[23], row_data[24], row_data[25], row_data[26],
-                                row_data[27], row_data[28], row_data[29], row_data[30],
-                                row_data[31][:49500]
-                            ]
-                            return (r_num, sheet_slice)
-                elif status == "FAILED":
-                    row_data[25] = "FAILED"
-            except Exception as e:
-                logging.debug(f"Error checking candidate {job_id} for {domain}: {e}")
-            return None
+    num_batches = (total_candidates + batch_size - 1) // batch_size
 
-    tasks = [_check_one_candidate(r_num, r) for r_num, r in candidates]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    for b_idx in range(num_batches):
+        if is_5am_ist_cutoff() or os.path.exists(STOP_FILE):
+            logging.warning("Cutoff or stop requested during Tech Crawler bulk sweep. Halting sweep.")
+            break
 
-    success_count = 0
-    for res in results:
-        if res and not isinstance(res, Exception):
-            r_num, sheet_slice = res
-            success_count += 1
-            try:
-                await write_sheet_data(client, SHEET_ID, sheet_name, [sheet_slice], r_num, 24)
-            except Exception as we:
-                logging.warning(f"Could not write reconciled Tech Crawler slice to sheet for row {r_num}: {we}")
+        batch = candidates[b_idx * batch_size : (b_idx + 1) * batch_size]
+        batch_num = b_idx + 1
 
-    logging.info(f"✅ Reconciled {success_count}/{len(candidates)} existing Tech Crawler jobs to SUCCESS. Markdown harvested.")
+        async def _check_one_candidate(r_num, row_data):
+            async with reconcile_sem:
+                domain = row_data[0]
+                job_id = row_data[23]
+                c_ts = None
+                tc_job_gen_time = safe_str(row_data[24]).strip()
+                if tc_job_gen_time:
+                    try:
+                        c_ts = datetime.datetime.strptime(tc_job_gen_time, "%d/%b/%Y %H:%M:%S").timestamp()
+                    except Exception:
+                        c_ts = None
+                if c_ts is None:
+                    c_ts = time.time()
+
+                age_sec = time.time() - c_ts
+                is_over_3hr = age_sec >= (3 * 3600)
+
+                try:
+                    track_res = await tc_client.track_job_id(session, job_id)
+                    status = track_res.get("status")
+
+                    if status == "SUCCESS" and track_res.get("s3_markdown"):
+                        signed_url = await tc_client.get_signed_s3_url(session, track_res["s3_markdown"])
+                        if signed_url:
+                            md = await tc_client.fetch_raw_markdown(session, signed_url)
+                            if md:
+                                row_data[25] = "SUCCESS"
+                                if track_res.get("final_url"): row_data[26] = track_res["final_url"]
+                                if track_res.get("s3_html"): row_data[27] = track_res["s3_html"]
+                                row_data[28] = track_res["s3_markdown"]
+                                if track_res.get("http_status"): row_data[29] = str(track_res["http_status"])
+                                if track_res.get("signals"): row_data[30] = str(track_res["signals"])
+                                row_data[31] = md
+                                LOCAL_CACHE.save_record(domain, {
+                                    "tc_job_id": job_id,
+                                    "tc_status": "SUCCESS",
+                                    "tc_final_url": row_data[26],
+                                    "tc_s3_html": row_data[27],
+                                    "tc_s3_markdown": row_data[28],
+                                    "tc_http_status": row_data[29],
+                                    "tc_signals": row_data[30],
+                                    "scrappingBeautySoup": md,
+                                    "updated_at": datetime.datetime.now().strftime("%d/%b/%Y %H:%M:%S")
+                                })
+                                sheet_slice = [
+                                    row_data[23], row_data[24], "SUCCESS", row_data[26],
+                                    row_data[27], row_data[28], row_data[29], row_data[30],
+                                    row_data[31][:49500]
+                                ]
+                                return ("SUCCESS", r_num, sheet_slice, None)
+
+                    if status == "FAILED" or is_over_3hr:
+                        # Over 3 hours and still PROCESSING, or FAILED: mark FAILED immediately (no retry)
+                        row_data[25] = "FAILED"
+                        LOCAL_CACHE.save_record(domain, {
+                            "tc_job_id": job_id,
+                            "tc_status": "FAILED",
+                            "updated_at": datetime.datetime.now().strftime("%d/%b/%Y %H:%M:%S")
+                        })
+                        sheet_slice = [
+                            row_data[23], row_data[24], "FAILED", row_data[26] if len(row_data) > 26 else "",
+                            row_data[27] if len(row_data) > 27 else "", row_data[28] if len(row_data) > 28 else "",
+                            row_data[29] if len(row_data) > 29 else "", row_data[30] if len(row_data) > 30 else "",
+                            ""
+                        ]
+                        return ("FAILED", r_num, sheet_slice, None)
+
+                    # Still PROCESSING and < 3 hours old: retain for 15-min background loop
+                    return ("RETAIN", r_num, None, {
+                        "domain": domain,
+                        "row": r_num,
+                        "tc_job_id": job_id,
+                        "tc_job_gen_time": tc_job_gen_time,
+                        "created_timestamp": c_ts,
+                        "rowData": row_data
+                    })
+
+                except Exception as e:
+                    logging.debug(f"Error checking candidate {job_id} for {domain}: {e}")
+                    if is_over_3hr:
+                        row_data[25] = "FAILED"
+                        sheet_slice = [
+                            row_data[23], row_data[24], "FAILED", "", "", "", "", "", ""
+                        ]
+                        return ("FAILED", r_num, sheet_slice, None)
+                    return ("RETAIN", r_num, None, {
+                        "domain": domain,
+                        "row": r_num,
+                        "tc_job_id": job_id,
+                        "tc_job_gen_time": tc_job_gen_time,
+                        "created_timestamp": c_ts,
+                        "rowData": row_data
+                    })
+
+        tasks = [_check_one_candidate(r_num, r) for r_num, r in batch]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        for res in results:
+            if res and not isinstance(res, Exception):
+                outcome, r_num, sheet_slice, item = res
+                if outcome == "SUCCESS":
+                    resolved_success += 1
+                    if sheet_write_queue:
+                        await sheet_write_queue.put((r_num, 24, sheet_slice))
+                    elif client:
+                        try: await write_sheet_data(client, SHEET_ID, sheet_name, [sheet_slice], r_num, 24)
+                        except Exception: pass
+                elif outcome == "FAILED":
+                    resolved_failed += 1
+                    if sheet_write_queue:
+                        await sheet_write_queue.put((r_num, 24, sheet_slice))
+                    elif client:
+                        try: await write_sheet_data(client, SHEET_ID, sheet_name, [sheet_slice], r_num, 24)
+                        except Exception: pass
+                elif outcome == "RETAIN" and item:
+                    pending_retained.append(item)
+
+        processed_so_far = min((b_idx + 1) * batch_size, total_candidates)
+        update_progress_file(
+            0, len(rows), resolved_success, resolved_failed,
+            phase="Startup Tech Crawler Sweep",
+            stage_details=f"Reconciling TC jobs: batch {batch_num}/{num_batches} ({processed_so_far}/{total_candidates} checked | {resolved_success} SUCCESS, {resolved_failed} FAILED, {len(pending_retained)} queued for 15m retry)",
+            pending_tc=len(pending_retained)
+        )
+        logging.info(
+            f"🔄 Batch {batch_num}/{num_batches} ({len(batch)} jobs) sweep complete: "
+            f"+{resolved_success} SUCCESS, +{resolved_failed} FAILED, {len(pending_retained)} pending (<3h)"
+        )
+
+    logging.info(
+        f"✅ Startup Tech Crawler sweep complete! Total checked: {total_candidates} | "
+        f"Resolved to SUCCESS: {resolved_success} | Marked FAILED (>3h): {resolved_failed} | "
+        f"Retained for 15m polling loop (<3h): {len(pending_retained)}"
+    )
+    return pending_retained
+
 
 
 async def Integrated_Extract_domains(
@@ -4144,6 +4253,20 @@ async def Integrated_Extract_domains(
                         mode=mode
                     )
                     trim_memory()
+
+        # Startup Bulk Sweep: Reconcile all pending Tech Crawler jobs in batches of 50
+        initial_pending = await reconcile_existing_tech_crawler_jobs(
+            session=session,
+            rows=pf_data,
+            client=client,
+            SHEET_ID=SHEET_ID,
+            sheet_name=EXTRACTING_SHEET_NAME,
+            start_row_num=start_row_num,
+            sheet_write_queue=sheet_write_queue,
+            batch_size=50
+        )
+        if initial_pending:
+            pending_tech_crawler_jobs.extend(initial_pending)
 
         # Continuous domain worker pool: workers pull rows dynamically on a domain-to-domain basis
         domain_queue = asyncio.Queue()
