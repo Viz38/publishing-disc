@@ -177,6 +177,8 @@ class TracxnKeyManager:
 class NIMKeyManager:
     """
     Thread-safe, round-robin key manager for Nvidia NIM API keys.
+    Supports asynchronous and synchronous token rotation, rate-limit cooldowns,
+    and invalid key deactivation across all configured keys.
     """
 
     def __init__(self, keys: Optional[List[str]] = None):
@@ -191,32 +193,75 @@ class NIMKeyManager:
 
         self._index = 0
         self._penalties: Dict[str, float] = {}
+        self._lock = threading.Lock()
+        self._async_lock: Optional[asyncio.Lock] = None
+
+    def _get_async_lock(self) -> asyncio.Lock:
+        if self._async_lock is None:
+            self._async_lock = asyncio.Lock()
+        return self._async_lock
 
     def get_total_keys(self) -> int:
-        return len(self.keys)
+        with self._lock:
+            return len(self.keys)
 
-    def mark_rate_limited(self, key: str, penalty_sec: float = 30.0) -> None:
+    @property
+    def total_tokens(self) -> int:
+        return self.get_total_keys()
+
+    def mark_rate_limited(self, key: str, penalty_sec: float = 25.0, cooldown_seconds: Optional[float] = None) -> None:
+        sec = cooldown_seconds if cooldown_seconds is not None else penalty_sec
         if key:
-            self._penalties[key] = time.time() + penalty_sec
+            with self._lock:
+                self._penalties[key] = time.time() + sec
+            logger.warning(f"NIM key ...{key[-6:]} penalized for {sec:.1f}s")
 
-    def penalize_key(self, key: str, cooldown_seconds: float = 30.0) -> None:
+    def penalize_key(self, key: str, cooldown_seconds: float = 25.0) -> None:
         self.mark_rate_limited(key, penalty_sec=cooldown_seconds)
 
+    def mark_invalid(self, key: str) -> None:
+        with self._lock:
+            if key in self.keys:
+                self.keys.remove(key)
+            if key in self._penalties:
+                del self._penalties[key]
+        logger.warning(f"Permanently disabled invalid NIM key ...{key[-6:]}. Active keys remaining: {len(self.keys)}")
+
     def get_next_key(self) -> str:
-        if not self.keys:
-            return ""
+        with self._lock:
+            if not self.keys:
+                return ""
 
-        now = time.time()
-        n = len(self.keys)
+            now = time.time()
+            n = len(self.keys)
 
-        for _ in range(n):
-            key = self.keys[self._index % n]
-            self._index = (self._index + 1) % n
-            if self._penalties.get(key, 0) <= now:
-                return key
+            for _ in range(n):
+                key = self.keys[self._index % n]
+                self._index = (self._index + 1) % n
+                if self._penalties.get(key, 0) <= now:
+                    return key
 
-        earliest_key = min(self.keys, key=lambda k: self._penalties.get(k, 0))
-        return earliest_key
+            earliest_key = min(self.keys, key=lambda k: self._penalties.get(k, 0))
+            return earliest_key
+
+    async def get_next_key_async(self):
+        async with self._get_async_lock():
+            with self._lock:
+                if not self.keys:
+                    return "", 0.0
+
+                now = time.time()
+                n = len(self.keys)
+
+                for _ in range(n):
+                    key = self.keys[self._index % n]
+                    self._index = (self._index + 1) % n
+                    if self._penalties.get(key, 0) <= now:
+                        return key, 0.0
+
+                earliest_key = min(self.keys, key=lambda k: self._penalties.get(k, 0))
+                wait_time = max(0.5, self._penalties.get(earliest_key, 0) - now)
+                return earliest_key, wait_time
 
     def get_key(self) -> str:
         return self.get_next_key()

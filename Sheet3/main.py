@@ -216,6 +216,7 @@ Nvidia_Endpoint = "https://integrate.api.nvidia.com/v1/chat/completions"
 
 # NIM API keys loaded from environment (.env)
 NIM_HARDCODED_KEYS = settings.NIM_API_KEYS
+NIM_KEY_MANAGER = NIMKeyManager(list(settings.NIM_API_KEYS))
 
 # Error strings to check
 CHECK_STRINGS = ["403 Forbidden", "Not Acceptable", "Coming Soon", "Javascript Enable", "Enable JavaScript", "Error 403", "Page Not Found"]
@@ -658,10 +659,12 @@ _nim_use_unverified_ssl = False
 
 async def Nvidia_API_ASYNC(promptMsg, token_rotator: NIMKeyManager = None, max_attempts: int = None, session: aiohttp.ClientSession = None):
     global _nim_use_unverified_ssl
+    if token_rotator is None and 'NIM_KEY_MANAGER' in globals() and NIM_KEY_MANAGER is not None:
+        token_rotator = NIM_KEY_MANAGER
     system_instruction = "You are a professional website information extractor and summarizer."
     if max_attempts is None:
         tt = getattr(token_rotator, "total_tokens", None)
-        max_attempts = int(tt) * 2 if isinstance(tt, (int, float)) else 5
+        max_attempts = int(tt) * 2 if isinstance(tt, (int, float)) else 10
 
     payload = {
         "model": Nvidia_Base_Model,
@@ -1752,69 +1755,70 @@ def Utility_AI_Feed_Prediction(
 #********************************** Domain Hashtag Addition **********************************************
 
 
-def get_api_result(payload=None, api_url="https://platform.tracxn.com/api/2.2/domains", method='POST', token=Tracxn_API_Token):
-    if token == '':
-        print("Please pass the Token as it is mandatory for this project")
-        return
-
+def get_api_result(payload=None, api_url="https://platform.tracxn.com/api/2.2/domains", method='POST', token=None, max_retries=3):
     if method == '':
         method = 'POST'
-    
-    headers = {
-        "X-Request-Source": "Discovery Team",
-        "accessToken": token,
-        "cache-control": "no-cache",
-        "Content-Type": "application/json"
-    }
-    
-    options = {
-        'headers': headers,
-        'allow_redirects': True
-    }
-    
     if payload is None:
         payload = {}
-    
     if 'dataset' not in payload:
         payload['dataset'] = 'internal'
-    
-    if 'blank' not in payload:
-        options['json'] = payload
 
-    try:
-        if method.upper() == 'POST':
-            response = requests.post(api_url, **options)
-        elif method.upper() == 'PUT':
-            # print("Payload :- ",payload)
-            response = requests.put(api_url, headers=headers, json=payload)  #put(url, headers=headers, json=data)   #put(api_url, **options)
+    for attempt in range(max_retries):
+        if token and str(token).strip() and token != Tracxn_API_Token:
+            tok = str(token).strip()
+        elif 'TRACXN_KEY_MANAGER' in globals() and TRACXN_KEY_MANAGER is not None:
+            tok = TRACXN_KEY_MANAGER.acquire_sync() if hasattr(TRACXN_KEY_MANAGER, "acquire_sync") else TRACXN_KEY_MANAGER.get_token()
         else:
-            raise ValueError("Invalid HTTP method. Use 'POST' or 'PUT'.")
-        
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        print(f"Error in getting API result: {e}")
-        return {'error': str(e)}
+            tok = token or Tracxn_API_Token
+
+        if not tok:
+            print("Please pass the Token as it is mandatory for this project")
+            return {'error': 'Missing Tracxn token'}
+
+        headers = {
+            "X-Request-Source": "Discovery Team",
+            "accessToken": tok,
+            "cache-control": "no-cache",
+            "Content-Type": "application/json"
+        }
+        options = {
+            'headers': headers,
+            'allow_redirects': True
+        }
+        if 'blank' not in payload:
+            options['json'] = payload
+
+        try:
+            if method.upper() == 'POST':
+                response = requests.post(api_url, **options)
+            elif method.upper() == 'PUT':
+                response = requests.put(api_url, headers=headers, json=payload)
+            else:
+                raise ValueError("Invalid HTTP method. Use 'POST' or 'PUT'.")
+
+            if response.status_code in (401, 403, 429) and 'TRACXN_KEY_MANAGER' in globals():
+                TRACXN_KEY_MANAGER.handle_http_error(tok, response.status_code)
+                if attempt < max_retries - 1:
+                    continue
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            status_code = getattr(getattr(e, 'response', None), 'status_code', None)
+            if status_code in (401, 403, 429) and 'TRACXN_KEY_MANAGER' in globals():
+                TRACXN_KEY_MANAGER.handle_http_error(tok, status_code)
+                if attempt < max_retries - 1:
+                    continue
+            print(f"Error in getting API result (attempt {attempt+1}): {e}")
+            if attempt == max_retries - 1:
+                return {'error': str(e)}
+    return {'error': 'Max retries exceeded'}
 
 
-async def get_api_result_async(payload=None, api_url="https://platform.tracxn.com/api/2.2/domains", method='POST', token=Tracxn_API_Token, session: aiohttp.ClientSession = None):
-    if token == '':
-        print("Please pass the Token as it is mandatory for this project")
-        return
-
+async def get_api_result_async(payload=None, api_url="https://platform.tracxn.com/api/2.2/domains", method='POST', token=None, session: aiohttp.ClientSession = None, max_retries: int = 3):
     if method == '':
         method = 'POST'
-
-    headers = {
-        "X-Request-Source": "Discovery Team",
-        "accessToken": token,
-        "cache-control": "no-cache",
-        "Content-Type": "application/json"
-    }
-
     if payload is None:
         payload = {}
-    
     if 'dataset' not in payload:
         payload['dataset'] = 'internal'
 
@@ -1823,26 +1827,66 @@ async def get_api_result_async(payload=None, api_url="https://platform.tracxn.co
     if active_sess is None:
         active_sess = aiohttp.ClientSession()
         close_sess = True
+
     try:
-        if method.upper() == 'POST':
-            async with active_sess.post(api_url, json=payload, headers=headers) as response:
-                response.raise_for_status()
-                return await response.json()
-        elif method.upper() == 'PUT':
-            async with active_sess.put(api_url, json=payload, headers=headers) as response:
-                response.raise_for_status()
-                return await response.json()
-        else:
-            raise ValueError("Invalid HTTP method. Use 'POST' or 'PUT'.")
-    except aiohttp.ClientError as e:
-        print(f"Error in getting API result: {e}")
-        return {'error': str(e)}
+        for attempt in range(max_retries):
+            if token and str(token).strip() and token != Tracxn_API_Token:
+                tok = str(token).strip()
+            elif 'TRACXN_KEY_MANAGER' in globals() and TRACXN_KEY_MANAGER is not None:
+                tok = await TRACXN_KEY_MANAGER.acquire() if hasattr(TRACXN_KEY_MANAGER, "acquire") else TRACXN_KEY_MANAGER.get_token()
+            else:
+                tok = token or Tracxn_API_Token
+
+            if not tok:
+                print("Please pass the Token as it is mandatory for this project")
+                return {'error': 'Missing Tracxn token'}
+
+            headers = {
+                "X-Request-Source": "Discovery Team",
+                "accessToken": tok,
+                "cache-control": "no-cache",
+                "Content-Type": "application/json"
+            }
+
+            try:
+                if method.upper() == 'POST':
+                    async with active_sess.post(api_url, json=payload, headers=headers) as response:
+                        if response.status in (401, 403, 429) and 'TRACXN_KEY_MANAGER' in globals():
+                            TRACXN_KEY_MANAGER.handle_http_error(tok, response.status)
+                            if attempt < max_retries - 1:
+                                continue
+                        response.raise_for_status()
+                        return await response.json()
+                elif method.upper() == 'PUT':
+                    async with active_sess.put(api_url, json=payload, headers=headers) as response:
+                        if response.status in (401, 403, 429) and 'TRACXN_KEY_MANAGER' in globals():
+                            TRACXN_KEY_MANAGER.handle_http_error(tok, response.status)
+                            if attempt < max_retries - 1:
+                                continue
+                        response.raise_for_status()
+                        return await response.json()
+                else:
+                    raise ValueError("Invalid HTTP method. Use 'POST' or 'PUT'.")
+            except aiohttp.ClientResponseError as e:
+                if e.status in (401, 403, 429) and 'TRACXN_KEY_MANAGER' in globals():
+                    TRACXN_KEY_MANAGER.handle_http_error(tok, e.status)
+                    if attempt < max_retries - 1:
+                        continue
+                print(f"Error in getting API result (attempt {attempt+1}): {e}")
+                if attempt == max_retries - 1:
+                    return {'error': str(e)}
+            except aiohttp.ClientError as e:
+                print(f"Network error in getting API result (attempt {attempt+1}): {e}")
+                if attempt == max_retries - 1:
+                    return {'error': str(e)}
+        return {'error': 'Max retries exceeded'}
     finally:
         if close_sess:
             try:
                 await active_sess.close()
             except Exception:
                 pass
+
     
 
 #**************************** Tag Addition ***********************************
@@ -1947,11 +1991,11 @@ async def Domain_HashTag_async(domain, newtag='NO', token=Tracxn_API_Token, sess
 
 #**************************** Tag Remove ***********************************
 
-async def Domain_HashTag_Remove_async(domain, remove_tag='NO', token=Tracxn_API_Token):
+async def Domain_HashTag_Remove_async(domain, remove_tag='NO', token=None, session: aiohttp.ClientSession = None):
     payload = {"filter": {"domain": [domain]}, "dataset": "internal"}
     api_url = "https://platform.tracxn.com/api/2.2/domains"
 
-    response = await get_api_result_async(payload, api_url, 'POST', token)
+    response = await get_api_result_async(payload, api_url, 'POST', token, session=session)
 
     if response and response.get("result") and response["result"][0] is not None:
         result = response["result"][0]
@@ -2009,140 +2053,194 @@ async def Domain_HashTag_Remove_async(domain, remove_tag='NO', token=Tracxn_API_
 
 # ******************************* Funnel Movement - Caller  **********************************
 
-def WriteAPI_Domain_Funnel(domainProfileId, source_funnelID, filterGroupId,filterId,dest_Funnel, status, comments, token = Tracxn_API_Token):
-    if domainProfileId == "" or source_funnelID == '' or dest_Funnel == '' or status == '':
+def _resolve_tracxn_sync_token(token=None) -> str:
+    if token and str(token).strip() and token != Tracxn_API_Token:
+        return str(token).strip()
+    if 'TRACXN_KEY_MANAGER' in globals() and TRACXN_KEY_MANAGER is not None:
+        return TRACXN_KEY_MANAGER.acquire_sync() if hasattr(TRACXN_KEY_MANAGER, "acquire_sync") else TRACXN_KEY_MANAGER.get_token()
+    return token or Tracxn_API_Token
+
+async def _resolve_tracxn_async_token(token=None) -> str:
+    if token and str(token).strip() and token != Tracxn_API_Token:
+        return str(token).strip()
+    if 'TRACXN_KEY_MANAGER' in globals() and TRACXN_KEY_MANAGER is not None:
+        return await TRACXN_KEY_MANAGER.acquire() if hasattr(TRACXN_KEY_MANAGER, "acquire") else TRACXN_KEY_MANAGER.get_token()
+    return token or Tracxn_API_Token
+
+def WriteAPI_Domain_Funnel(domainProfileId, source_funnelID, filterGroupId, filterId, dest_Funnel, status, comments, token=None):
+    if not domainProfileId or not source_funnelID or not dest_Funnel or not status:
         return 'FALSE'
-  
-    # time.sleep(0.5)
-  
-    retdata = 'FALSE'
-    ret = ''
-  
-  
-    filterGroupId  = filterGroupId
-    filterId       = filterId
-  
-    if status == 'SNOOZED' or status == 'MARKED_IRRELEVANT' or status == 'MARKED_FOR_LATER':
-        Domain_Funnel_Assign(domainProfileId, source_funnelID,filterGroupId,filterId, comments, token)
+    tok = _resolve_tracxn_sync_token(token)
+    ret = 'NO'
+    if status in ('SNOOZED', 'MARKED_IRRELEVANT', 'MARKED_FOR_LATER', 'ESCALATED'):
+        Domain_Funnel_Assign(domainProfileId, source_funnelID, filterGroupId, filterId, comments, tok)
         time.sleep(0.5)
-        ret = Change_Domain_Funnel_Status(domainProfileId, source_funnelID,filterGroupId,filterId, status, comments, token)
-  
-    if status == 'MOVED_OUT':
-        Domain_Funnel_Assign(domainProfileId, source_funnelID,filterGroupId,filterId, comments, token)
-        time.sleep(0.5)
-        ret = Change_Domain_Funnel_Moved_Out(domainProfileId, source_funnelID,filterGroupId,filterId, dest_Funnel, comments, token)
-          
-    # if status == 'SENT_BACK':
-    #     Domain_Funnel_Assign(domainProfileId, source_funnelID, filterGroupId,filterId, comments,token)
-    #     time.sleep(0.5)
-    #     ret = Change_Domain_Funnel_Send_Back(domainProfileId, source_funnelID, comments, token)
-  
-    if ret == 'YES':
-        retdata = 'TRUE'
-  
-    # print('retdata', retdata)
-    return retdata
-
-async def WriteAPI_Domain_Funnel_async(domainProfileId, source_funnelID, filterGroupId, filterId, dest_Funnel, status, comments, token = Tracxn_API_Token, session: aiohttp.ClientSession = None):
-    if domainProfileId == "" or source_funnelID == '' or dest_Funnel == '' or status == '':
-        return 'FALSE'
-
-    retdata = 'FALSE'
-    ret = ''
-
-    if status in ('SNOOZED', 'MARKED_IRRELEVANT', 'MARKED_FOR_LATER','ESCALATED'):
-        await Domain_Funnel_Assign_async(domainProfileId, source_funnelID, filterGroupId, filterId, comments, token)
-        await asyncio.sleep(0.5)
-        ret = await Change_Domain_Funnel_Status_async(domainProfileId, source_funnelID, filterGroupId, filterId, status, comments, token)
-
+        ret = Change_Domain_Funnel_Status(domainProfileId, source_funnelID, filterGroupId, filterId, status, comments, tok)
     elif status == 'MOVED_OUT':
-        await Domain_Funnel_Assign_async(domainProfileId, source_funnelID, filterGroupId, filterId, comments, token)
-        await asyncio.sleep(0.5)
-        ret = await Change_Domain_Funnel_Moved_Out_async(domainProfileId, source_funnelID, filterGroupId, filterId, dest_Funnel, comments, token)
+        Domain_Funnel_Assign(domainProfileId, source_funnelID, filterGroupId, filterId, comments, tok)
+        time.sleep(0.5)
+        ret = Change_Domain_Funnel_Moved_Out(domainProfileId, source_funnelID, filterGroupId, filterId, dest_Funnel, comments, tok)
+    return 'TRUE' if ret == 'YES' else 'FALSE'
 
-    # elif status == 'SENT_BACK':
-    #     await Domain_Funnel_Assign_async(domainProfileId, source_funnelID, filterGroupId, filterId, comments, token)
-    #     await asyncio.sleep(0.5)
-    #     ret = await Change_Domain_Funnel_Send_Back_async(domainProfileId, source_funnelID, comments, token)
+async def WriteAPI_Domain_Funnel_async(domainProfileId, source_funnelID, filterGroupId, filterId, dest_Funnel, status, comments, token=None, session: aiohttp.ClientSession = None):
+    if not domainProfileId or not source_funnelID or not dest_Funnel or not status:
+        return 'FALSE'
 
-    if ret == 'YES':
-        retdata = 'TRUE'
+    close_sess = False
+    active_sess = session
+    if active_sess is None:
+        active_sess = aiohttp.ClientSession()
+        close_sess = True
 
-    return retdata
+    try:
+        tok = str(token).strip() if (token and str(token).strip() and token != Tracxn_API_Token) else None
+        if 'TRACXN_CLIENT' in globals() and TRACXN_CLIENT is not None:
+            await TRACXN_CLIENT.force_assign_domain(
+                active_sess, domainProfileId, source_funnelID, filterGroupId, filterId, comments, token=tok
+            )
+            ret = "NO"
+            if status == 'MOVED_OUT':
+                ret = await TRACXN_CLIENT.move_domain_funnel(
+                    active_sess, domainProfileId, source_funnelID, filterGroupId, filterId, dest_Funnel, comments, token=tok
+                )
+            elif status == 'SNOOZED':
+                ret = await TRACXN_CLIENT.snooze_domain(
+                    active_sess, domainProfileId, source_funnelID, filterGroupId, filterId, comments, token=tok
+                )
+            elif status == 'ESCALATED':
+                ret = await TRACXN_CLIENT.escalate_domain(
+                    active_sess, domainProfileId, source_funnelID, filterGroupId, filterId, comments, token=tok
+                )
+            elif status == 'MARKED_FOR_LATER':
+                ret = await TRACXN_CLIENT.mark_domain_for_later(
+                    active_sess, domainProfileId, source_funnelID, filterGroupId, filterId, comments, token=tok
+                )
+            elif status == 'MARKED_IRRELEVANT':
+                ret = await TRACXN_CLIENT.mark_domain_irrelevant(
+                    active_sess, domainProfileId, source_funnelID, filterGroupId, filterId, comments, token=tok
+                )
+            return 'TRUE' if ret == 'YES' else 'FALSE'
+        else:
+            await Domain_Funnel_Assign_async(domainProfileId, source_funnelID, filterGroupId, filterId, comments, tok, session=active_sess)
+            await asyncio.sleep(0.5)
+            if status in ('SNOOZED', 'MARKED_IRRELEVANT', 'MARKED_FOR_LATER', 'ESCALATED'):
+                ret = await Change_Domain_Funnel_Status_async(domainProfileId, source_funnelID, filterGroupId, filterId, status, comments, tok, session=active_sess)
+            elif status == 'MOVED_OUT':
+                ret = await Change_Domain_Funnel_Moved_Out_async(domainProfileId, source_funnelID, filterGroupId, filterId, dest_Funnel, comments, tok, session=active_sess)
+            else:
+                ret = "NO"
+            return 'TRUE' if ret == 'YES' else 'FALSE'
+    finally:
+        if close_sess:
+            try:
+                await active_sess.close()
+            except Exception:
+                pass
 
 
 # ********************* Funnel Movement - Status Change call ****************************
 
-def Change_Domain_Funnel_Status(domainProfileId, currentfunnelID,filterGroupId,filterId, status, comments, token = Tracxn_API_Token):
+def Change_Domain_Funnel_Status(domainProfileId, currentfunnelID, filterGroupId, filterId, status, comments, token=None):
     ret = "NO"
-
-    if(status == 'SNOOZED') :
-        ret = Domain_Snoozed(domainProfileId, currentfunnelID,filterGroupId,filterId, status, comments, token)
-
-    if(status == 'MARKED_IRRELEVANT') :
-        ret = Domain_MARKED_IRRELEVANT(domainProfileId, currentfunnelID,filterGroupId,filterId, status, comments, token)
-
-    if(status == "ESCALATED") :
-        ret = Domain_ESCALATED_With_Tab_async(domainProfileId, currentfunnelID, filterGroupId, filterId, status, comments, token)
-
-    if(status == "MARKED_FOR_LATER") :
-        ret = Domain_MARKED_FOR_LATER_With_Tab_async(domainProfileId, currentfunnelID, filterGroupId, filterId, status, comments, token)
-        
-
+    tok = _resolve_tracxn_sync_token(token)
+    if status == 'SNOOZED':
+        ret = Domain_Snoozed(domainProfileId, currentfunnelID, filterGroupId, filterId, status, comments, tok)
+    elif status == 'MARKED_IRRELEVANT':
+        ret = Domain_MARKED_IRRELEVANT(domainProfileId, currentfunnelID, filterGroupId, filterId, status, comments, tok)
+    elif status == "ESCALATED":
+        ret = asyncio.run(Domain_ESCALATED_With_Tab_async(domainProfileId, currentfunnelID, filterGroupId, filterId, status, comments, tok))
+    elif status == "MARKED_FOR_LATER":
+        ret = asyncio.run(Domain_MARKED_FOR_LATER_With_Tab_async(domainProfileId, currentfunnelID, filterGroupId, filterId, status, comments, tok))
     return ret
 
-async def Change_Domain_Funnel_Status_async(domainProfileId, currentfunnelID, filterGroupId, filterId, status, comments, token = Tracxn_API_Token):
+async def Change_Domain_Funnel_Status_async(domainProfileId, currentfunnelID, filterGroupId, filterId, status, comments, token=None, session: aiohttp.ClientSession = None):
     ret = "NO"
+    if 'TRACXN_CLIENT' in globals() and TRACXN_CLIENT is not None:
+        close_sess = False
+        active_sess = session
+        if active_sess is None:
+            active_sess = aiohttp.ClientSession()
+            close_sess = True
+        try:
+            tok = str(token).strip() if (token and str(token).strip() and token != Tracxn_API_Token) else None
+            if status == 'SNOOZED':
+                ret = await TRACXN_CLIENT.snooze_domain(active_sess, domainProfileId, currentfunnelID, filterGroupId, filterId, comments, token=tok)
+            elif status == 'MARKED_IRRELEVANT':
+                ret = await TRACXN_CLIENT.mark_domain_irrelevant(active_sess, domainProfileId, currentfunnelID, filterGroupId, filterId, comments, token=tok)
+            elif status == "ESCALATED":
+                ret = await TRACXN_CLIENT.escalate_domain(active_sess, domainProfileId, currentfunnelID, filterGroupId, filterId, comments, token=tok)
+            elif status == "MARKED_FOR_LATER":
+                ret = await TRACXN_CLIENT.mark_domain_for_later(active_sess, domainProfileId, currentfunnelID, filterGroupId, filterId, comments, token=tok)
+            return ret
+        finally:
+            if close_sess:
+                try:
+                    await active_sess.close()
+                except Exception:
+                    pass
 
     if status == 'SNOOZED':
-        ret = await Domain_Snoozed_async(domainProfileId, currentfunnelID, filterGroupId, filterId, status, comments, token)
-
-    if status == 'MARKED_IRRELEVANT':
-        ret = await Domain_MARKED_IRRELEVANT_async(domainProfileId, currentfunnelID, filterGroupId, filterId, status, comments, token)
-
-    if(status == "ESCALATED") :
-        ret = await Domain_ESCALATED_With_Tab_async(domainProfileId, currentfunnelID, filterGroupId, filterId, status, comments, token)
-
-    if(status == "MARKED_FOR_LATER") :
-        ret = await Domain_MARKED_FOR_LATER_With_Tab_async(domainProfileId, currentfunnelID, filterGroupId, filterId, status, comments, token)
-
+        ret = await Domain_Snoozed_async(domainProfileId, currentfunnelID, filterGroupId, filterId, status, comments, token, session=session)
+    elif status == 'MARKED_IRRELEVANT':
+        ret = await Domain_MARKED_IRRELEVANT_async(domainProfileId, currentfunnelID, filterGroupId, filterId, status, comments, token, session=session)
+    elif status == "ESCALATED":
+        ret = await Domain_ESCALATED_With_Tab_async(domainProfileId, currentfunnelID, filterGroupId, filterId, status, comments, token, session=session)
+    elif status == "MARKED_FOR_LATER":
+        ret = await Domain_MARKED_FOR_LATER_With_Tab_async(domainProfileId, currentfunnelID, filterGroupId, filterId, status, comments, token, session=session)
     return ret
 
 # ************************* Funnel Movement - MOVED_OUT *************************
 
-def Change_Domain_Funnel_Moved_Out(domainProfileId, currentfunnelID,filterGroupId,filterId, dest_Funnel, comments, token = Tracxn_API_Token):
+def Change_Domain_Funnel_Moved_Out(domainProfileId, currentfunnelID, filterGroupId, filterId, dest_Funnel, comments, token=None):
+    tok = _resolve_tracxn_sync_token(token)
     url = "https://platform.tracxn.com/data/funnel-action/move"
-    headers = {"accessToken": token, "Content-Type": 'application/json', "X-Request-Source": '123'}
+    headers = {"accessToken": tok, "Content-Type": 'application/json', "X-Request-Source": '123'}
     data = {
-    "funnelId": currentfunnelID ,
-    "domainProfileId": domainProfileId ,
-    "movedTo": [dest_Funnel],
-    "comment": comments ,
-    "sourceDetails": {
-        "source": "Write API",
-        "sourceData": {
-            "view": "Card",
-            "tab": "Funnel Filter Group",
-            "tabData": {
-                "id": filterGroupId,
-                "funnelFilterId":  filterId
-             }
+        "funnelId": currentfunnelID,
+        "domainProfileId": domainProfileId,
+        "movedTo": [dest_Funnel],
+        "comment": comments,
+        "sourceDetails": {
+            "source": "Write API",
+            "sourceData": {
+                "view": "Card",
+                "tab": "Funnel Filter Group",
+                "tabData": {
+                    "id": filterGroupId,
+                    "funnelFilterId": filterId
+                }
+            }
         }
     }
-}  
     time.sleep(1)
     response = requests.put(url, headers=headers, json=data)
+    if response.status_code in (401, 403, 429) and 'TRACXN_KEY_MANAGER' in globals():
+        TRACXN_KEY_MANAGER.handle_http_error(tok, response.status_code)
+    return "YES" if response.status_code == 200 else "NO"
 
+async def Change_Domain_Funnel_Moved_Out_async(domainProfileId, currentfunnelID, filterGroupId, filterId, dest_Funnel, comments, token=None, session: aiohttp.ClientSession = None):
+    if 'TRACXN_CLIENT' in globals() and TRACXN_CLIENT is not None:
+        close_sess = False
+        active_sess = session
+        if active_sess is None:
+            active_sess = aiohttp.ClientSession()
+            close_sess = True
+        try:
+            tok = str(token).strip() if (token and str(token).strip() and token != Tracxn_API_Token) else None
+            return await TRACXN_CLIENT.move_domain_funnel(
+                active_sess, domainProfileId, currentfunnelID, filterGroupId, filterId, dest_Funnel, comments, token=tok
+            )
+        finally:
+            if close_sess:
+                try:
+                    await active_sess.close()
+                except Exception:
+                    pass
 
-    if response.status_code == 200:
-        return "YES"
-    else :
-        return "NO"
-  
-async def Change_Domain_Funnel_Moved_Out_async(domainProfileId, currentfunnelID, filterGroupId, filterId, dest_Funnel, comments, token = Tracxn_API_Token):
+    tok = await _resolve_tracxn_async_token(token)
     url = "https://platform.tracxn.com/data/funnel-action/move"
     headers = {
-        "accessToken": token,
+        "accessToken": tok,
         "Content-Type": "application/json",
         "X-Request-Source": "123"
     }
@@ -2152,8 +2250,8 @@ async def Change_Domain_Funnel_Moved_Out_async(domainProfileId, currentfunnelID,
         "movedTo": [dest_Funnel],
         "comment": comments,
         "sourceDetails": {
-            "source": "Write API"
-            ,"sourceData": {
+            "source": "Write API",
+            "sourceData": {
                 "view": "Card",
                 "tab": "Funnel Filter Group",
                 "tabData": {
@@ -2163,39 +2261,34 @@ async def Change_Domain_Funnel_Moved_Out_async(domainProfileId, currentfunnelID,
             }
         }
     }
-
-    # if filterGroupId and str(filterGroupId).strip():  # Check if filterGroupId is not None and not empty after stripping whitespace
-    #     data["sourceDetails"]["sourceData"] = {  #Corrected to sourceDetails instead of data
-    #         "view": "Card",
-    #         "tab": "Funnel Filter Group",
-    #         "tabData": {
-    #             "id": filterGroupId,
-    #             "funnelFilterId": filterId
-    #         }
-    #     }
-
-    await asyncio.sleep(1)  # Replacing time.sleep(1) with async sleep
-
-    async with aiohttp.ClientSession() as session:
-        async with session.put(url, headers=headers, json=data) as response:
-            if response.status == 200:
-                return "YES"
-            else:
-                print(f"Error Response: {response.status}, {await response.text()}")
-                return "NO"
+    close_sess = False
+    active_sess = session
+    if active_sess is None:
+        active_sess = aiohttp.ClientSession()
+        close_sess = True
+    try:
+        async with active_sess.put(url, headers=headers, json=data) as response:
+            if response.status in (401, 403, 429) and 'TRACXN_KEY_MANAGER' in globals():
+                TRACXN_KEY_MANAGER.handle_http_error(tok, response.status)
+            return "YES" if response.status == 200 else "NO"
+    finally:
+        if close_sess:
+            try:
+                await active_sess.close()
+            except Exception:
+                pass
 
 
 # ******************************* Funnel Movement - SNOOZED **********************************
 
-def Domain_Snoozed(domainProfileId, currentfunnelID,filterGroupId,filterId, status, comments, token = Tracxn_API_Token):
-    headers = {"accessToken": token}
-
+def Domain_Snoozed(domainProfileId, currentfunnelID, filterGroupId, filterId, status, comments, token=None):
+    tok = _resolve_tracxn_sync_token(token)
+    headers = {"accessToken": tok, "Content-Type": "application/json"}
     url = "https://platform.tracxn.com/data/funnel-action/snooze"
-
     data = {
-        "funnelId": currentfunnelID ,
+        "funnelId": currentfunnelID,
         "domainProfileId": domainProfileId,
-        "comment": comments ,
+        "comment": comments,
         "sourceDetails": {
             "source": "Write API",
             "sourceData": {
@@ -2205,40 +2298,47 @@ def Domain_Snoozed(domainProfileId, currentfunnelID,filterGroupId,filterId, stat
                     "id": filterGroupId,
                     "funnelFilterId": filterId
                 }
-             }
+            }
         },
         "snoozeMethod": {
             "type": "period",
             "value": "30"
         }
-    } 
-    
-    response = requests.put(url, headers=headers, json=data)
-
-    print("For Snoozed , Response Code : ",response.status_code)
-
-
-    if response.status_code == 200:
-        return "YES"
-    else :
-        return "NO"
-
-
-async def Domain_Snoozed_async(domainProfileId, currentfunnelID, filterGroupId, filterId, status, comments, token = Tracxn_API_Token):
-    headers = {
-        "accessToken": Tracxn_API_Token,
-        "Content-Type": "application/json"
     }
+    response = requests.put(url, headers=headers, json=data)
+    if response.status_code in (401, 403, 429) and 'TRACXN_KEY_MANAGER' in globals():
+        TRACXN_KEY_MANAGER.handle_http_error(tok, response.status_code)
+    return "YES" if response.status_code == 200 else "NO"
 
+async def Domain_Snoozed_async(domainProfileId, currentfunnelID, filterGroupId, filterId, status, comments, token=None, session: aiohttp.ClientSession = None):
+    if 'TRACXN_CLIENT' in globals() and TRACXN_CLIENT is not None:
+        close_sess = False
+        active_sess = session
+        if active_sess is None:
+            active_sess = aiohttp.ClientSession()
+            close_sess = True
+        try:
+            tok = str(token).strip() if (token and str(token).strip() and token != Tracxn_API_Token) else None
+            return await TRACXN_CLIENT.snooze_domain(
+                active_sess, domainProfileId, currentfunnelID, filterGroupId, filterId, comments, token=tok
+            )
+        finally:
+            if close_sess:
+                try:
+                    await active_sess.close()
+                except Exception:
+                    pass
+
+    tok = await _resolve_tracxn_async_token(token)
+    headers = {"accessToken": tok, "Content-Type": "application/json"}
     url = "https://platform.tracxn.com/data/funnel-action/snooze"
-
     data = {
         "funnelId": currentfunnelID,
         "domainProfileId": domainProfileId,
         "comment": comments,
         "sourceDetails": {
-            "source": "Write API"
-            ,"sourceData": {
+            "source": "Write API",
+            "sourceData": {
                 "view": "Card",
                 "tab": "Funnel Filter Group",
                 "tabData": {
@@ -2252,138 +2352,148 @@ async def Domain_Snoozed_async(domainProfileId, currentfunnelID, filterGroupId, 
             "value": "30"
         }
     }
+    close_sess = False
+    active_sess = session
+    if active_sess is None:
+        active_sess = aiohttp.ClientSession()
+        close_sess = True
+    try:
+        async with active_sess.put(url, headers=headers, json=data) as response:
+            if response.status in (401, 403, 429) and 'TRACXN_KEY_MANAGER' in globals():
+                TRACXN_KEY_MANAGER.handle_http_error(tok, response.status)
+            return "YES" if response.status == 200 else "NO"
+    finally:
+        if close_sess:
+            try:
+                await active_sess.close()
+            except Exception:
+                pass
 
-    async with aiohttp.ClientSession() as session:
-        async with session.put(url, headers=headers, json=data) as response:
-            print("For Snoozed, Response Code:", response.status)
-            if response.status == 200:
-                return "YES"
-            else:
-                print(f"Error Response: {response.status}, {await response.text()}")
-                return "NO"
-            
+
 # *********************** Funnel Movement - ESCALATED *************************
 
+async def Domain_ESCALATED_With_Tab_async(domainProfileId, currentfunnelID, filterGroupId, filterId, status, comments, token=None, session: aiohttp.ClientSession = None):
+    if 'TRACXN_CLIENT' in globals() and TRACXN_CLIENT is not None:
+        close_sess = False
+        active_sess = session
+        if active_sess is None:
+            active_sess = aiohttp.ClientSession()
+            close_sess = True
+        try:
+            tok = str(token).strip() if (token and str(token).strip() and token != Tracxn_API_Token) else None
+            return await TRACXN_CLIENT.escalate_domain(
+                active_sess, domainProfileId, currentfunnelID, filterGroupId, filterId, comments, token=tok
+            )
+        finally:
+            if close_sess:
+                try:
+                    await active_sess.close()
+                except Exception:
+                    pass
 
-async def Domain_ESCALATED_With_Tab_async(domainProfileId, currentfunnelID, filterGroupId, filterId, status, comments, token):
+    tok = await _resolve_tracxn_async_token(token)
     url = "https://platform.tracxn.com/data/funnel-action/escalate"
-
-    # Build base payload
     payload = {
         "funnelId": currentfunnelID,
         "domainProfileId": domainProfileId,
         "comment": comments,
-        "sourceDetails": {
-            "source": "Write API",
-            "sourceData": {}
-        }
+        "sourceDetails": {"source": "Write API", "sourceData": {}}
     }
-
-    # Conditionally add filterGroupId and filterId
     if filterGroupId:
         payload["sourceDetails"]["sourceData"] = {
             "view": "Card",
             "tab": "Funnel Filter Group",
-            "tabData": {
-                "id": filterGroupId
-            }
+            "tabData": {"id": filterGroupId}
         }
-
         if filterId:
             payload["sourceDetails"]["sourceData"]["tabData"]["funnelFilterId"] = filterId
 
-    headers = {
-        "accessToken": Tracxn_API_Token,
-        "Content-Type": "application/json"
-    }
-
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.put(url, headers=headers, json=payload) as response:
-                response_text = await response.text()
-                if response.status == 200:
-                    try:
-                        msg = await response.json()
-                        return 'YES'
-                    except Exception as e:
-                        print("JSON parse error:", e)
-                        return 'NO'
-                else:
-                    print(f"Error {response.status}: {response_text}")
-                    return 'NO'
-        except Exception as e:
-            print(f"Request failed: {e}")
-            return 'NO'
+    headers = {"accessToken": tok, "Content-Type": "application/json"}
+    close_sess = False
+    active_sess = session
+    if active_sess is None:
+        active_sess = aiohttp.ClientSession()
+        close_sess = True
+    try:
+        async with active_sess.put(url, headers=headers, json=payload) as response:
+            if response.status in (401, 403, 429) and 'TRACXN_KEY_MANAGER' in globals():
+                TRACXN_KEY_MANAGER.handle_http_error(tok, response.status)
+            return "YES" if response.status == 200 else "NO"
+    finally:
+        if close_sess:
+            try:
+                await active_sess.close()
+            except Exception:
+                pass
 
 
-  
 # ****************** Funnel Movement - MARKED_FOR_LATER *******************
 
+async def Domain_MARKED_FOR_LATER_With_Tab_async(domainProfileId, currentfunnelID, filterGroupId, filterId, status, comments, token=None, session: aiohttp.ClientSession = None):
+    if 'TRACXN_CLIENT' in globals() and TRACXN_CLIENT is not None:
+        close_sess = False
+        active_sess = session
+        if active_sess is None:
+            active_sess = aiohttp.ClientSession()
+            close_sess = True
+        try:
+            tok = str(token).strip() if (token and str(token).strip() and token != Tracxn_API_Token) else None
+            return await TRACXN_CLIENT.mark_domain_for_later(
+                active_sess, domainProfileId, currentfunnelID, filterGroupId, filterId, comments, token=tok
+            )
+        finally:
+            if close_sess:
+                try:
+                    await active_sess.close()
+                except Exception:
+                    pass
 
-async def Domain_MARKED_FOR_LATER_With_Tab_async(domainProfileId, currentfunnelID, filterGroupId, filterId, status, comments, token):
+    tok = await _resolve_tracxn_async_token(token)
     url = "https://platform.tracxn.com/data/funnel-action/mark-for-later"
-
-    # Build base payload
     payload = {
         "funnelId": currentfunnelID,
         "domainProfileId": domainProfileId,
         "comment": comments,
-        "sourceDetails": {
-            "source": "Write API",
-            "sourceData": {}
-        }
+        "sourceDetails": {"source": "Write API", "sourceData": {}}
     }
-
-    # Conditionally add filterGroupId and filterId
     if filterGroupId:
         payload["sourceDetails"]["sourceData"] = {
             "view": "Card",
             "tab": "Funnel Filter Group",
-            "tabData": {
-                "id": filterGroupId
-            }
+            "tabData": {"id": filterGroupId}
         }
-
         if filterId:
             payload["sourceDetails"]["sourceData"]["tabData"]["funnelFilterId"] = filterId
 
-    headers = {
-        "accessToken": Tracxn_API_Token,
-        "Content-Type": "application/json"
-    }
-
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.put(url, headers=headers, json=payload) as response:
-                response_text = await response.text()
-                if response.status == 200:
-                    try:
-                        msg = await response.json()
-                        return 'YES'
-                    except Exception as e:
-                        print("JSON parse error:", e)
-                        return 'NO'
-                else:
-                    print(f"Error {response.status}: {response_text}")
-                    return 'NO'
-        except Exception as e:
-            print(f"Request failed: {e}")
-            return 'NO'
-
+    headers = {"accessToken": tok, "Content-Type": "application/json"}
+    close_sess = False
+    active_sess = session
+    if active_sess is None:
+        active_sess = aiohttp.ClientSession()
+        close_sess = True
+    try:
+        async with active_sess.put(url, headers=headers, json=payload) as response:
+            if response.status in (401, 403, 429) and 'TRACXN_KEY_MANAGER' in globals():
+                TRACXN_KEY_MANAGER.handle_http_error(tok, response.status)
+            return "YES" if response.status == 200 else "NO"
+    finally:
+        if close_sess:
+            try:
+                await active_sess.close()
+            except Exception:
+                pass
 
 
 # *********************** Funnel Movement - MARKED_IRRELEVANT *****************
 
-def Domain_MARKED_IRRELEVANT(domainProfileId, currentfunnelID,filterGroupId,filterId, status, comments, token):
-
-    headers = {"accessToken": Tracxn_API_Token}
-
+def Domain_MARKED_IRRELEVANT(domainProfileId, currentfunnelID, filterGroupId, filterId, status, comments, token=None):
+    tok = _resolve_tracxn_sync_token(token)
+    headers = {"accessToken": tok, "Content-Type": "application/json"}
     url = "https://platform.tracxn.com/data/funnel-action/mark-irrelevant"
-
     data = {
-        "funnelId": currentfunnelID ,
+        "funnelId": currentfunnelID,
         "domainProfileId": domainProfileId,
-        "comment": comments ,
+        "comment": comments,
         "sourceDetails": {
             "source": "Write API",
             "sourceData": {
@@ -2393,32 +2503,43 @@ def Domain_MARKED_IRRELEVANT(domainProfileId, currentfunnelID,filterGroupId,filt
                     "id": filterGroupId,
                     "funnelFilterId": filterId
                 }
-             }
+            }
         }
     }
-  
     response = requests.put(url, headers=headers, json=data)
+    if response.status_code in (401, 403, 429) and 'TRACXN_KEY_MANAGER' in globals():
+        TRACXN_KEY_MANAGER.handle_http_error(tok, response.status_code)
+    return "YES" if response.status_code == 200 else "NO"
 
-    if response.status_code == 200:
-        return "YES"
-    else :
-        return "NO"
-  
-async def Domain_MARKED_IRRELEVANT_async(domainProfileId, currentfunnelID, filterGroupId, filterId, status, comments, token):
-    headers = {
-        "accessToken": Tracxn_API_Token,
-        "Content-Type": "application/json"
-    }
+async def Domain_MARKED_IRRELEVANT_async(domainProfileId, currentfunnelID, filterGroupId, filterId, status, comments, token=None, session: aiohttp.ClientSession = None):
+    if 'TRACXN_CLIENT' in globals() and TRACXN_CLIENT is not None:
+        close_sess = False
+        active_sess = session
+        if active_sess is None:
+            active_sess = aiohttp.ClientSession()
+            close_sess = True
+        try:
+            tok = str(token).strip() if (token and str(token).strip() and token != Tracxn_API_Token) else None
+            return await TRACXN_CLIENT.mark_domain_irrelevant(
+                active_sess, domainProfileId, currentfunnelID, filterGroupId, filterId, comments, token=tok
+            )
+        finally:
+            if close_sess:
+                try:
+                    await active_sess.close()
+                except Exception:
+                    pass
 
+    tok = await _resolve_tracxn_async_token(token)
+    headers = {"accessToken": tok, "Content-Type": "application/json"}
     url = "https://platform.tracxn.com/data/funnel-action/mark-irrelevant"
-
     data = {
         "funnelId": currentfunnelID,
         "domainProfileId": domainProfileId,
         "comment": comments,
         "sourceDetails": {
-            "source": "Write API"
-            ,"sourceData": {
+            "source": "Write API",
+            "sourceData": {
                 "view": "Card",
                 "tab": "Funnel Filter Group",
                 "tabData": {
@@ -2428,65 +2549,37 @@ async def Domain_MARKED_IRRELEVANT_async(domainProfileId, currentfunnelID, filte
             }
         }
     }
-
-    async with aiohttp.ClientSession() as session:
-        async with session.put(url, headers=headers, json=data) as response:
-            if response.status == 200:
-                return "YES"
-            else:
-                print(f"Error Response: {response.status}, {await response.text()}")
-                return "NO"
+    close_sess = False
+    active_sess = session
+    if active_sess is None:
+        active_sess = aiohttp.ClientSession()
+        close_sess = True
+    try:
+        async with active_sess.put(url, headers=headers, json=data) as response:
+            if response.status in (401, 403, 429) and 'TRACXN_KEY_MANAGER' in globals():
+                TRACXN_KEY_MANAGER.handle_http_error(tok, response.status)
+            return "YES" if response.status == 200 else "NO"
+    finally:
+        if close_sess:
+            try:
+                await active_sess.close()
+            except Exception:
+                pass
 
 
 # *******************************  Funnel Movement - Assign  **********************************
 
-def Domain_Funnel_Assign(domainProfileId, funnelID,filterGroupId,filterId, comments,token):
-
-    filterGroupId = filterGroupId
-    filterId      = filterId
-
-    # print("Token : ",token)
-
+def Domain_Funnel_Assign(domainProfileId, funnelID, filterGroupId, filterId, comments, token=None):
+    tok = _resolve_tracxn_sync_token(token)
     url = "https://platform.tracxn.com/data/funnel-action/force-assign"
-    headers = {"accessToken": Tracxn_API_Token}
-    data = {
-    "funnelId": funnelID,
-    "domainProfileId": domainProfileId ,
-    "comment": comments,
-    "sourceDetails": {
-        "source": "Write API",
-        "sourceData": {
-            "view": "Card",
-            "tab": "Funnel Filter Group",
-            "tabData": {
-                "id": filterGroupId,
-                "funnelFilterId":  filterId
-             }
-        }
-    }
-}
-    
-    time.sleep(1)
-    response = requests.put(url, headers=headers, json=data)
-
-    if response.status_code == 200:
-        return "YES"
-    else :
-        return "NO"
-
-    # return response
-    
-
-async def Domain_Funnel_Assign_async(domainProfileId, funnelID, filterGroupId, filterId, comments, token):
-    url = "https://platform.tracxn.com/data/funnel-action/force-assign"
-    headers = {"accessToken": Tracxn_API_Token, "Content-Type": "application/json"}
+    headers = {"accessToken": tok, "Content-Type": "application/json"}
     data = {
         "funnelId": funnelID,
         "domainProfileId": domainProfileId,
         "comment": comments,
         "sourceDetails": {
-            "source": "Write API"
-            ,"sourceData": {
+            "source": "Write API",
+            "sourceData": {
                 "view": "Card",
                 "tab": "Funnel Filter Group",
                 "tabData": {
@@ -2496,26 +2589,67 @@ async def Domain_Funnel_Assign_async(domainProfileId, funnelID, filterGroupId, f
             }
         }
     }
-    
-    # if filterGroupId and str(filterGroupId).strip():  # Check if filterGroupId is not None and not empty after stripping whitespace
-    #     data["sourceDetails"]["sourceData"] = {  #Corrected to sourceDetails instead of data
-    #         "view": "Card",
-    #         "tab": "Funnel Filter Group",
-    #         "tabData": {
-    #             "id": filterGroupId,
-    #             "funnelFilterId": filterId
-    #         }
-    #     }
-        
-    await asyncio.sleep(1)  # async version of time.sleep(1)
+    time.sleep(1)
+    response = requests.put(url, headers=headers, json=data)
+    if response.status_code in (401, 403, 429) and 'TRACXN_KEY_MANAGER' in globals():
+        TRACXN_KEY_MANAGER.handle_http_error(tok, response.status_code)
+    return "YES" if response.status_code == 200 else "NO"
 
-    async with aiohttp.ClientSession() as session:
-        async with session.put(url, headers=headers, json=data) as response:
-            if response.status == 200:
-                return "YES"
-            else:
-                print(f"Error Response: {response.status}, {await response.text()}")
-                return "NO"
+async def Domain_Funnel_Assign_async(domainProfileId, funnelID, filterGroupId, filterId, comments, token=None, session: aiohttp.ClientSession = None):
+    if 'TRACXN_CLIENT' in globals() and TRACXN_CLIENT is not None:
+        close_sess = False
+        active_sess = session
+        if active_sess is None:
+            active_sess = aiohttp.ClientSession()
+            close_sess = True
+        try:
+            tok = str(token).strip() if (token and str(token).strip() and token != Tracxn_API_Token) else None
+            return await TRACXN_CLIENT.force_assign_domain(
+                active_sess, domainProfileId, funnelID, filterGroupId, filterId, comments, token=tok
+            )
+        finally:
+            if close_sess:
+                try:
+                    await active_sess.close()
+                except Exception:
+                    pass
+
+    tok = await _resolve_tracxn_async_token(token)
+    url = "https://platform.tracxn.com/data/funnel-action/force-assign"
+    headers = {"accessToken": tok, "Content-Type": "application/json"}
+    data = {
+        "funnelId": funnelID,
+        "domainProfileId": domainProfileId,
+        "comment": comments,
+        "sourceDetails": {
+            "source": "Write API",
+            "sourceData": {
+                "view": "Card",
+                "tab": "Funnel Filter Group",
+                "tabData": {
+                    "id": filterGroupId,
+                    "funnelFilterId": filterId
+                }
+            }
+        }
+    }
+    await asyncio.sleep(1)
+    close_sess = False
+    active_sess = session
+    if active_sess is None:
+        active_sess = aiohttp.ClientSession()
+        close_sess = True
+    try:
+        async with active_sess.put(url, headers=headers, json=data) as response:
+            if response.status in (401, 403, 429) and 'TRACXN_KEY_MANAGER' in globals():
+                TRACXN_KEY_MANAGER.handle_http_error(tok, response.status)
+            return "YES" if response.status == 200 else "NO"
+    finally:
+        if close_sess:
+            try:
+                await active_sess.close()
+            except Exception:
+                pass
 
 
 
