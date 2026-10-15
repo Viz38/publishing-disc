@@ -3860,6 +3860,10 @@ async def reconcile_existing_tech_crawler_jobs(
         async def _check_one_candidate(r_num, row_data):
             async with reconcile_sem:
                 domain = row_data[0]
+                rec = LOCAL_CACHE.get_record(domain)
+                # If already scraped or completed by a concurrent foreground worker, skip
+                if safe_str(row_data[31]).strip() or (isinstance(rec, dict) and (rec.get("scrappingBeautySoup") or rec.get("tc_status") in ("SUCCESS", "FAILED"))):
+                    return ("SKIP", r_num, None, None)
                 job_id = row_data[23]
                 c_ts = None
                 tc_job_gen_time = safe_str(row_data[24]).strip()
@@ -3957,7 +3961,9 @@ async def reconcile_existing_tech_crawler_jobs(
         for res in results:
             if res and not isinstance(res, Exception):
                 outcome, r_num, sheet_slice, item = res
-                if outcome == "SUCCESS":
+                if outcome == "SKIP":
+                    continue
+                elif outcome == "SUCCESS":
                     resolved_success += 1
                     if sheet_write_queue:
                         await sheet_write_queue.put((r_num, 24, sheet_slice))
@@ -3975,12 +3981,18 @@ async def reconcile_existing_tech_crawler_jobs(
                     pending_retained.append(item)
 
         processed_so_far = min((b_idx + 1) * batch_size, total_candidates)
-        update_progress_file(
-            0, len(rows), resolved_success, resolved_failed,
-            phase="Startup Tech Crawler Sweep",
-            stage_details=f"Reconciling TC jobs: batch {batch_num}/{num_batches} ({processed_so_far}/{total_candidates} checked | {resolved_success} SUCCESS, {resolved_failed} FAILED, {len(pending_retained)} queued for 15m retry)",
-            pending_tc=len(pending_retained)
-        )
+        try:
+            if os.path.exists(PROGRESS_FILE):
+                with open(PROGRESS_FILE, 'r') as pf:
+                    pdata = json.load(pf)
+                pdata['pending_tc'] = len(pending_retained)
+                pdata['stage_details'] = f"Streaming active | Reconciling TC jobs: batch {batch_num}/{num_batches} ({processed_so_far}/{total_candidates} checked | {resolved_success} SUCCESS, {resolved_failed} FAILED)"
+                tmp_path = f"{PROGRESS_FILE}.tmp.{os.getpid()}"
+                with open(tmp_path, 'w') as pf:
+                    json.dump(pdata, pf)
+                os.replace(tmp_path, PROGRESS_FILE)
+        except Exception:
+            pass
         logging.info(
             f"🔄 Batch {batch_num}/{num_batches} ({len(batch)} jobs) sweep complete: "
             f"+{resolved_success} SUCCESS, +{resolved_failed} FAILED, {len(pending_retained)} pending (<3h)"
@@ -4254,19 +4266,25 @@ async def Integrated_Extract_domains(
                     )
                     trim_memory()
 
-        # Startup Bulk Sweep: Reconcile all pending Tech Crawler jobs in batches of 50
-        initial_pending = await reconcile_existing_tech_crawler_jobs(
-            session=session,
-            rows=pf_data,
-            client=client,
-            SHEET_ID=SHEET_ID,
-            sheet_name=EXTRACTING_SHEET_NAME,
-            start_row_num=start_row_num,
-            sheet_write_queue=sheet_write_queue,
-            batch_size=50
-        )
-        if initial_pending:
-            pending_tech_crawler_jobs.extend(initial_pending)
+        # Concurrent Background Sweep: Reconcile all pending Tech Crawler jobs in batches of 50
+        async def _run_background_sweep():
+            try:
+                initial_pending = await reconcile_existing_tech_crawler_jobs(
+                    session=session,
+                    rows=pf_data,
+                    client=client,
+                    SHEET_ID=SHEET_ID,
+                    sheet_name=EXTRACTING_SHEET_NAME,
+                    start_row_num=start_row_num,
+                    sheet_write_queue=sheet_write_queue,
+                    batch_size=50
+                )
+                if initial_pending:
+                    pending_tech_crawler_jobs.extend(initial_pending)
+            except Exception as e:
+                logging.error(f"Error in background Tech Crawler sweep: {e}")
+
+        sweep_task = asyncio.create_task(_run_background_sweep())
 
         # Continuous domain worker pool: workers pull rows dynamically on a domain-to-domain basis
         domain_queue = asyncio.Queue()
@@ -4287,6 +4305,14 @@ async def Integrated_Extract_domains(
         num_workers = min(MAX_WORKERS, max(1, len(pf_data)))
         workers = [asyncio.create_task(worker()) for _ in range(num_workers)]
         await asyncio.gather(*workers)
+
+        # Ensure background sweep finishes before closing sheet write queue
+        if not sweep_task.done():
+            logging.info("Domain workers completed; waiting for background Tech Crawler sweep to finish...")
+            try:
+                await sweep_task
+            except Exception as se:
+                logging.error(f"Error awaiting background sweep task: {se}")
 
         # Signal sheet writer worker to flush remaining writes and exit
         await sheet_write_queue.put(None)
