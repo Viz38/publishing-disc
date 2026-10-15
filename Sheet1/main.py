@@ -67,8 +67,11 @@ max_threads = os.cpu_count()
 
 _SHEET_DIR = os.path.dirname(os.path.abspath(__file__))
 LOCAL_CACHE = LocalSheetCache(os.path.join(_SHEET_DIR, "discovery_cache.csv"))
-EXEC_TRACKER = ExecutionTracker(os.path.join(_SHEET_DIR, ".execution_state.json"))
-SYSTEM_HEALTH = SystemHealthMonitor(cpu_threshold=75.0, mem_threshold=75.0)
+SYSTEM_HEALTH = SystemHealthMonitor(
+    cpu_threshold=float(os.getenv("SYSTEM_HEALTH_CPU_THRESHOLD_5321", os.getenv("SYSTEM_HEALTH_CPU_THRESHOLD", "82.0"))),
+    mem_threshold=float(os.getenv("SYSTEM_HEALTH_MEM_THRESHOLD_5321", os.getenv("SYSTEM_HEALTH_MEM_THRESHOLD", "80.0"))),
+    cache_ttl=1.0
+)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -189,7 +192,7 @@ IF_SHEET_ID = settings.IF_SHEET_ID
 IF_EXTRACTING_SHEET_NAME = "IF_Engine_Database"
 
 CREDENTIALS_FILE = settings.CREDENTIALS_FILE
-MAX_WORKERS = int(os.getenv("MAX_WORKERS", "16"))  # Scaled for 2,500+ domains/hr combined fleet throughput
+MAX_WORKERS = int(os.getenv("MAX_WORKERS_SHEET1", os.getenv("MAX_WORKERS_5321", getattr(settings, "MAX_WORKERS", 14))))
 BATCH_SIZE = settings.BATCH_SIZE  # Default 100 rows per batch
 _WORKSHEET_CACHE = {}
 Config_Sheet_ID = settings.Config_Sheet_ID

@@ -36,9 +36,12 @@ class SystemHealthMonitor:
     Defaults to 75% for CPU and Memory as configured for Pentium G4400 / 8GB RAM machines.
     """
 
-    def __init__(self, cpu_threshold: float = 75.0, mem_threshold: float = 75.0):
+    def __init__(self, cpu_threshold: float = 75.0, mem_threshold: float = 75.0, cache_ttl: float = 1.0):
         self.cpu_threshold = cpu_threshold
         self.mem_threshold = mem_threshold
+        self.cache_ttl = cache_ttl
+        self._last_check: float = 0.0
+        self._cached_health: Tuple[bool, str] = (True, "Healthy")
         import psutil
         self._psutil = psutil
         # Prime the CPU counter so non-blocking reads are accurate
@@ -47,22 +50,38 @@ class SystemHealthMonitor:
         except Exception:
             pass
 
-    def is_healthy(self) -> Tuple[bool, str]:
+    def is_healthy(self, force_refresh: bool = False) -> Tuple[bool, str]:
+        now = time.time()
+        if not force_refresh and (now - self._last_check) < self.cache_ttl:
+            return self._cached_health
+
         try:
             cpu = self._psutil.cpu_percent(interval=None)
             if cpu > self.cpu_threshold:
-                return False, f"CPU too high ({cpu}%)"
+                res = (False, f"CPU too high ({cpu}%)")
+                self._cached_health = res
+                self._last_check = now
+                return res
 
             mem = self._psutil.virtual_memory().percent
             if mem > self.mem_threshold:
                 trim_memory()
                 mem_after = self._psutil.virtual_memory().percent
                 if mem_after > self.mem_threshold:
-                    return False, f"Memory too high ({mem_after}%)"
-            return True, "Healthy"
+                    res = (False, f"Memory too high ({mem_after}%)")
+                    self._cached_health = res
+                    self._last_check = now
+                    return res
+            res = (True, "Healthy")
+            self._cached_health = res
+            self._last_check = now
+            return res
         except Exception as e:
             logger.debug(f"Error checking system health: {e}")
-            return True, "Healthy"
+            res = (True, "Healthy")
+            self._cached_health = res
+            self._last_check = now
+            return res
 
     async def wait_for_resources(self, log_handler: Optional[logging.Logger] = None, timeout: Optional[float] = 60.0) -> None:
         """

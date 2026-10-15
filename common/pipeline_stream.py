@@ -42,7 +42,10 @@ class PipelineCoordinator:
         self.sheet_commit_batch_size = sheet_commit_batch_size
 
         self.session = session
-        self.health_monitor = health_monitor or SystemHealthMonitor(cpu_threshold=75.0, mem_threshold=75.0)
+        self.health_monitor = health_monitor or SystemHealthMonitor(
+            cpu_threshold=float(os.getenv("SYSTEM_HEALTH_CPU_THRESHOLD", "75.0")),
+            mem_threshold=float(os.getenv("SYSTEM_HEALTH_MEM_THRESHOLD", "75.0"))
+        )
 
         # Decoupled streaming queues
         self.scraping_queue: asyncio.Queue = asyncio.Queue()
