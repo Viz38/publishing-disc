@@ -16,10 +16,10 @@ graph TD
     end
 
     subgraph Tunnel["Cloudflare Zero Trust (Desktops 5321 & 5080)"]
-        CF1["*-sheet1.ecosuyaenergies.com"]
-        CF2["*-sheet2.ecosuyaenergies.com"]
-        CF3["*-sheet3.ecosuyaenergies.com"]
-        CF4["*-sheet4.ecosuyaenergies.com"]
+        CF1["*-sheet1.rajath.world"]
+        CF2["*-sheet2.rajath.world"]
+        CF3["*-sheet3.rajath.world"]
+        CF4["*-sheet4.rajath.world"]
     end
 
     subgraph Engines["Discovery Engine Instances"]
@@ -40,16 +40,16 @@ graph TD
 ## Fleet Specification
 
 The fleet consists of strictly 3 worker machines:
-- **Desktop-5321**: `5321-*.ecosuyaenergies.com` (Production Worker)
-- **Desktop-5080**: `5080-*.ecosuyaenergies.com` (Production Worker)
-- **Device-Vishnu**: `vishnu-*.ecosuyaenergies.com` (Testing / Development Worker)
+- **Desktop-5321**: `5321-*.rajath.world` (Production Worker)
+- **Desktop-5080**: `5080-*.rajath.world` (Production Worker)
+- **Device-Vishnu**: `vishnu-*.rajath.world` (Testing / Development Worker)
 
 | Sheet / Pipeline | Folder | Port | Google Spreadsheet Link & ID | Cloudflare Hostnames (5321, 5080, Vishnu) |
 | :--- | :--- | :--- | :--- | :--- |
-| **CF-1** | `Sheet1/` | `8769` | [CF-1 Python Automation](https://docs.google.com/spreadsheets/d/1Sil5fw0l0rc0aMoydtnn7ZHdDbY5hwl7D9rda7bETkc/)<br>`1Sil5fw0l0rc0aMoydtnn7ZHdDbY5hwl7D9rda7bETkc` | `https://5321-sheet1.ecosuyaenergies.com`<br>`https://5080-sheet1.ecosuyaenergies.com`<br>`https://vishnu-sheet1.ecosuyaenergies.com` |
-| **CF-2** | `Sheet2/` | `8770` | [CF-2 Python Automation](https://docs.google.com/spreadsheets/d/1xphjNDv0hHEr8ZXv4PEVDmnEeVrsw_XAUMGaDf8ySUY/)<br>`1xphjNDv0hHEr8ZXv4PEVDmnEeVrsw_XAUMGaDf8ySUY` | `https://5321-sheet2.ecosuyaenergies.com`<br>`https://5080-sheet2.ecosuyaenergies.com`<br>`https://vishnu-sheet2.ecosuyaenergies.com` |
-| **CF-3** | `Sheet3/` | `8771` | [CF-3 Python Automation](https://docs.google.com/spreadsheets/d/10pacDW-6EqAdWslv9DTJBrRZDsybMczwMSpmKJebWFc/)<br>`10pacDW-6EqAdWslv9DTJBrRZDsybMczwMSpmKJebWFc` | `https://5321-sheet3.ecosuyaenergies.com`<br>`https://5080-sheet3.ecosuyaenergies.com`<br>`https://vishnu-sheet3.ecosuyaenergies.com` |
-| **Filter-V2** | `Sheet4/` | `8772` | [Nandan Filter-V2 Python Automation](https://docs.google.com/spreadsheets/d/14kC-RUMrpJB1Ur4CGpXMh1Te-yv7qBjsINJgM7NqySY/)<br>`14kC-RUMrpJB1Ur4CGpXMh1Te-yv7qBjsINJgM7NqySY` | `https://5321-sheet4.ecosuyaenergies.com`<br>`https://5080-sheet4.ecosuyaenergies.com`<br>`https://vishnu-sheet4.ecosuyaenergies.com` |
+| **CF-1** | `Sheet1/` | `8769` | [CF-1 Python Automation](https://docs.google.com/spreadsheets/d/1Sil5fw0l0rc0aMoydtnn7ZHdDbY5hwl7D9rda7bETkc/)<br>`1Sil5fw0l0rc0aMoydtnn7ZHdDbY5hwl7D9rda7bETkc` | `https://5321-sheet1.rajath.world`<br>`https://5080-sheet1.rajath.world`<br>`https://vishnu-sheet1.rajath.world` |
+| **CF-2** | `Sheet2/` | `8770` | [CF-2 Python Automation](https://docs.google.com/spreadsheets/d/1xphjNDv0hHEr8ZXv4PEVDmnEeVrsw_XAUMGaDf8ySUY/)<br>`1xphjNDv0hHEr8ZXv4PEVDmnEeVrsw_XAUMGaDf8ySUY` | `https://5321-sheet2.rajath.world`<br>`https://5080-sheet2.rajath.world`<br>`https://vishnu-sheet2.rajath.world` |
+| **CF-3** | `Sheet3/` | `8771` | [CF-3 Python Automation](https://docs.google.com/spreadsheets/d/10pacDW-6EqAdWslv9DTJBrRZDsybMczwMSpmKJebWFc/)<br>`10pacDW-6EqAdWslv9DTJBrRZDsybMczwMSpmKJebWFc` | `https://5321-sheet3.rajath.world`<br>`https://5080-sheet3.rajath.world`<br>`https://vishnu-sheet3.rajath.world` |
+| **Filter-V2** | `Sheet4/` | `8772` | [Nandan Filter-V2 Python Automation](https://docs.google.com/spreadsheets/d/14kC-RUMrpJB1Ur4CGpXMh1Te-yv7qBjsINJgM7NqySY/)<br>`14kC-RUMrpJB1Ur4CGpXMh1Te-yv7qBjsINJgM7NqySY` | `https://5321-sheet4.rajath.world`<br>`https://5080-sheet4.rajath.world`<br>`https://vishnu-sheet4.rajath.world` |
 
 ---
 
@@ -187,10 +187,10 @@ For each desktop (`5321`, `5080`, `Device-Vishnu`), configure **4 Public Hostnam
 ### Ingress Rules per Machine
 | Sheet | Public Hostname (5321) | Public Hostname (5080) | Public Hostname (Vishnu) | Local Service URL |
 | :--- | :--- | :--- | :--- | :--- |
-| **Sheet1** | `5321-sheet1.ecosuyaenergies.com` | `5080-sheet1.ecosuyaenergies.com` | `vishnu-sheet1.ecosuyaenergies.com` | `http://localhost:8769` |
-| **Sheet2** | `5321-sheet2.ecosuyaenergies.com` | `5080-sheet2.ecosuyaenergies.com` | `vishnu-sheet2.ecosuyaenergies.com` | `http://localhost:8770` |
-| **Sheet3** | `5321-sheet3.ecosuyaenergies.com` | `5080-sheet3.ecosuyaenergies.com` | `vishnu-sheet3.ecosuyaenergies.com` | `http://localhost:8771` |
-| **Sheet4** | `5321-sheet4.ecosuyaenergies.com` | `5080-sheet4.ecosuyaenergies.com` | `vishnu-sheet4.ecosuyaenergies.com` | `http://localhost:8772` |
+| **Sheet1** | `5321-sheet1.rajath.world` | `5080-sheet1.rajath.world` | `vishnu-sheet1.rajath.world` | `http://localhost:8769` |
+| **Sheet2** | `5321-sheet2.rajath.world` | `5080-sheet2.rajath.world` | `vishnu-sheet2.rajath.world` | `http://localhost:8770` |
+| **Sheet3** | `5321-sheet3.rajath.world` | `5080-sheet3.rajath.world` | `vishnu-sheet3.rajath.world` | `http://localhost:8771` |
+| **Sheet4** | `5321-sheet4.rajath.world` | `5080-sheet4.rajath.world` | `vishnu-sheet4.rajath.world` | `http://localhost:8772` |
 
 ---
 

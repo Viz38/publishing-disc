@@ -45,22 +45,22 @@ def load_default_token() -> str:
 
 DESKTOP_DOMAINS = {
     "5321": {
-        "Sheet1": "https://5321-sheet1.ecosuyaenergies.com",
-        "Sheet2": "https://5321-sheet2.ecosuyaenergies.com",
-        "Sheet3": "https://5321-sheet3.ecosuyaenergies.com",
-        "Sheet4": "https://5321-sheet4.ecosuyaenergies.com",
+        "Sheet1": "https://5321-sheet1.rajath.world",
+        "Sheet2": "https://5321-sheet2.rajath.world",
+        "Sheet3": "https://5321-sheet3.rajath.world",
+        "Sheet4": "https://5321-sheet4.rajath.world",
     },
     "5080": {
-        "Sheet1": "https://5080-sheet1.ecosuyaenergies.com",
-        "Sheet2": "https://5080-sheet2.ecosuyaenergies.com",
-        "Sheet3": "https://5080-sheet3.ecosuyaenergies.com",
-        "Sheet4": "https://5080-sheet4.ecosuyaenergies.com",
+        "Sheet1": "https://5080-sheet1.rajath.world",
+        "Sheet2": "https://5080-sheet2.rajath.world",
+        "Sheet3": "https://5080-sheet3.rajath.world",
+        "Sheet4": "https://5080-sheet4.rajath.world",
     },
     "vishnu": {
-        "Sheet1": "https://vishnu-sheet1.ecosuyaenergies.com",
-        "Sheet2": "https://vishnu-sheet2.ecosuyaenergies.com",
-        "Sheet3": "https://vishnu-sheet3.ecosuyaenergies.com",
-        "Sheet4": "https://vishnu-sheet4.ecosuyaenergies.com",
+        "Sheet1": "https://vishnu-sheet1.rajath.world",
+        "Sheet2": "https://vishnu-sheet2.rajath.world",
+        "Sheet3": "https://vishnu-sheet3.rajath.world",
+        "Sheet4": "https://vishnu-sheet4.rajath.world",
     },
     "local": {
         "Sheet1": "http://localhost:8769",

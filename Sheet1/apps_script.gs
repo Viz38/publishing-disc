@@ -9,9 +9,9 @@ const CONFIG = {
   TYPE: 'CF-1',
   SHEET_NAME: 'Discovery AI - CF-1 (Domains DB)',
   WORKER_URLS: [
-    { name: '5321-CF-1-Pipeline', url: 'https://5321-sheet1.ecosuyaenergies.com', hostId: '5321', isProduction: true },
-    { name: '5080-CF-1-Pipeline', url: 'https://5080-sheet1.ecosuyaenergies.com', hostId: '5080', isProduction: true },
-    { name: 'Vishnu-CF-1-Pipeline', url: 'https://vishnu-sheet1.ecosuyaenergies.com', hostId: 'Vishnu', isTesting: true }
+    { name: '5321-CF-1-Pipeline', url: 'https://5321-sheet1.rajath.world', hostId: '5321', isProduction: true },
+    { name: '5080-CF-1-Pipeline', url: 'https://5080-sheet1.rajath.world', hostId: '5080', isProduction: true },
+    { name: 'Vishnu-CF-1-Pipeline', url: 'https://vishnu-sheet1.rajath.world', hostId: 'Vishnu', isTesting: true }
   ],
   AUTH_TOKEN: '', // Loaded dynamically from Script Properties (SERVICE_AUTH_TOKEN)
   DEFAULT_MODE: 'full',

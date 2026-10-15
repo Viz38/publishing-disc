@@ -9,9 +9,9 @@ const CONFIG = {
   TYPE: 'Filter-V2',
   SHEET_NAME: 'Discovery AI - Filter-V2 (Nandan Filter)',
   WORKER_URLS: [
-    { name: '5321-Filter-V2-Pipeline', url: 'https://5321-sheet4.ecosuyaenergies.com', hostId: '5321', isProduction: true },
-    { name: '5080-Filter-V2-Pipeline', url: 'https://5080-sheet4.ecosuyaenergies.com', hostId: '5080', isProduction: true },
-    { name: 'Vishnu-Filter-V2-Pipeline', url: 'https://vishnu-sheet4.ecosuyaenergies.com', hostId: 'Vishnu', isTesting: true }
+    { name: '5321-Filter-V2-Pipeline', url: 'https://5321-sheet4.rajath.world', hostId: '5321', isProduction: true },
+    { name: '5080-Filter-V2-Pipeline', url: 'https://5080-sheet4.rajath.world', hostId: '5080', isProduction: true },
+    { name: 'Vishnu-Filter-V2-Pipeline', url: 'https://vishnu-sheet4.rajath.world', hostId: 'Vishnu', isTesting: true }
   ],
   AUTH_TOKEN: '', // Loaded dynamically from Script Properties (SERVICE_AUTH_TOKEN)
   DEFAULT_MODE: 'full',

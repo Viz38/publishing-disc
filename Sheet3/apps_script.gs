@@ -9,9 +9,9 @@ const CONFIG = {
   TYPE: 'CF-3',
   SHEET_NAME: 'Discovery AI - CF-3 (Nandan Domains DB)',
   WORKER_URLS: [
-    { name: '5321-CF-3-Pipeline', url: 'https://5321-sheet3.ecosuyaenergies.com', hostId: '5321', isProduction: true },
-    { name: '5080-CF-3-Pipeline', url: 'https://5080-sheet3.ecosuyaenergies.com', hostId: '5080', isProduction: true },
-    { name: 'Vishnu-CF-3-Pipeline', url: 'https://vishnu-sheet3.ecosuyaenergies.com', hostId: 'Vishnu', isTesting: true }
+    { name: '5321-CF-3-Pipeline', url: 'https://5321-sheet3.rajath.world', hostId: '5321', isProduction: true },
+    { name: '5080-CF-3-Pipeline', url: 'https://5080-sheet3.rajath.world', hostId: '5080', isProduction: true },
+    { name: 'Vishnu-CF-3-Pipeline', url: 'https://vishnu-sheet3.rajath.world', hostId: 'Vishnu', isTesting: true }
   ],
   AUTH_TOKEN: '', // Loaded dynamically from Script Properties (SERVICE_AUTH_TOKEN)
   DEFAULT_MODE: 'full',
