@@ -30,6 +30,20 @@ class TechCrawlerClient:
             return self.token_rotator.get_next_token()
         return self.static_token or os.getenv("TRACXN_API_TOKEN", "")
 
+    def _handle_token_error(self, token: str, status_code: int) -> None:
+        if self.token_rotator is not None:
+            if hasattr(self.token_rotator, "handle_http_error"):
+                self.token_rotator.handle_http_error(token, status_code)
+            else:
+                penalty = 60.0 if status_code == 429 else 30.0
+                if hasattr(self.token_rotator, "mark_rate_limited"):
+                    self.token_rotator.mark_rate_limited(token, penalty_sec=penalty)
+
+    async def _acquire_token(self) -> str:
+        if self.token_rotator is not None and hasattr(self.token_rotator, "acquire"):
+            return await self.token_rotator.acquire()
+        return self.get_token()
+
     def _headers(self, token: Optional[str] = None) -> Dict[str, str]:
         tok = token or self.get_token()
         return {
@@ -64,7 +78,7 @@ class TechCrawlerClient:
             },
         }
 
-        tok = self.get_token()
+        tok = await self._acquire_token()
         try:
             async with session.post(
                 self.GENERATE_URL,
@@ -78,7 +92,7 @@ class TechCrawlerClient:
                     logger.info(f"Generated Tech Crawler Job ID for {clean_url}: {job_id}")
                     return job_id
                 elif resp.status in (401, 403, 429) and self.token_rotator is not None:
-                    self.token_rotator.mark_rate_limited(tok, penalty_sec=30)
+                    self._handle_token_error(tok, resp.status)
                     logger.warning(f"Tech Crawler generate token ...{tok[-6:]} returned status {resp.status}")
                     return None
                 else:
@@ -112,7 +126,7 @@ class TechCrawlerClient:
             return result
 
         payload = {"jobId": job_id}
-        tok = self.get_token()
+        tok = await self._acquire_token()
 
         try:
             async with session.post(
@@ -143,7 +157,7 @@ class TechCrawlerClient:
                         )
                     return result
                 elif resp.status in (401, 403, 429) and self.token_rotator is not None:
-                    self.token_rotator.mark_rate_limited(tok, penalty_sec=30)
+                    self._handle_token_error(tok, resp.status)
                     result["status"] = "FAILED"
                     result["error_code"] = str(resp.status)
                     result["error_reason"] = f"Token rate limited/unauthorized: {resp.status}"
@@ -196,30 +210,44 @@ class TechCrawlerClient:
         self,
         session: aiohttp.ClientSession,
         s3_url: str,
+        max_retries: int = 3,
     ) -> Optional[str]:
         if not s3_url:
             return None
 
         payload = {"url": s3_url}
-        tok = self.get_token()
 
-        try:
-            async with session.post(
-                self.S3_SIGN_URL,
-                json=payload,
-                headers=self._headers(tok),
-                timeout=aiohttp.ClientTimeout(total=30),
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    return data.get("url")
-                else:
-                    text = await resp.text()
-                    logger.warning(f"S3 signed URL generation failed ({resp.status}): {text}")
-                    return None
-        except Exception as e:
-            logger.error(f"Error getting signed S3 URL for {s3_url}: {e}")
-            return None
+        for attempt in range(max_retries):
+            tok = await self._acquire_token()
+            try:
+                async with session.post(
+                    self.S3_SIGN_URL,
+                    json=payload,
+                    headers=self._headers(tok),
+                    timeout=aiohttp.ClientTimeout(total=30),
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        return data.get("url")
+                    elif resp.status in (401, 403, 429):
+                        self._handle_token_error(tok, resp.status)
+                        text = await resp.text()
+                        logger.warning(f"S3 signed URL generation attempt {attempt+1}/{max_retries} failed ({resp.status}): {text}")
+                        if attempt < max_retries - 1:
+                            await asyncio.sleep(0.5)
+                            continue
+                        return None
+                    else:
+                        text = await resp.text()
+                        logger.warning(f"S3 signed URL generation failed ({resp.status}): {text}")
+                        return None
+            except Exception as e:
+                logger.error(f"Error getting signed S3 URL for {s3_url} (attempt {attempt+1}): {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(0.5)
+                    continue
+                return None
+        return None
 
     async def fetch_raw_markdown(
         self,

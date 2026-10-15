@@ -3420,7 +3420,7 @@ async def Integrated_Process_domain(
                 home_body = existing_raw_data
                 status_code = ""
             else:
-                tc_client = TechCrawlerClient(token=Tracxn_API_Token)
+                tc_client = TechCrawlerClient(token_rotator=TRACXN_KEY_MANAGER) if 'TRACXN_KEY_MANAGER' in globals() else TechCrawlerClient(token=Tracxn_API_Token)
 
                 # 1. Generate Job ID if missing
                 if not tc_job_id and domain:

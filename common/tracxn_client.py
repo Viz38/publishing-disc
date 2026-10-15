@@ -57,8 +57,24 @@ class TracxnClient:
                 source_details["sourceData"]["tabData"]["funnelFilterId"] = str(filter_id).strip()
         return source_details
 
+    def _handle_token_error(self, token: str, status_code: int) -> None:
+        if self.token_rotator is not None:
+            if hasattr(self.token_rotator, "handle_http_error"):
+                self.token_rotator.handle_http_error(token, status_code)
+            else:
+                penalty = 60.0 if status_code == 429 else 30.0
+                if hasattr(self.token_rotator, "mark_rate_limited"):
+                    self.token_rotator.mark_rate_limited(token, penalty_sec=penalty)
+
+    async def _acquire_token(self, override_token: Optional[str] = None) -> str:
+        if override_token and str(override_token).strip():
+            return str(override_token).strip()
+        if self.token_rotator is not None and hasattr(self.token_rotator, "acquire"):
+            return await self.token_rotator.acquire()
+        return self.get_token(override_token)
+
     async def _send_put(self, session: aiohttp.ClientSession, url: str, payload: Dict[str, Any], token: Optional[str] = None) -> str:
-        tok = self.get_token(token)
+        tok = await self._acquire_token(token)
         try:
             async with session.put(
                 url,
@@ -69,7 +85,7 @@ class TracxnClient:
                 if resp.status == 200:
                     return "YES"
                 elif resp.status in (401, 403, 429) and self.token_rotator is not None:
-                    self.token_rotator.mark_rate_limited(tok, penalty_sec=30)
+                    self._handle_token_error(tok, resp.status)
                     logger.warning(f"Tracxn token ...{tok[-6:]} got status {resp.status} on PUT {url}")
                     return "NO"
                 else:
@@ -222,7 +238,7 @@ class TracxnClient:
         tag: str = "NO",
         token: Optional[str] = None,
     ) -> str:
-        tok = self.get_token(token)
+        tok = await self._acquire_token(token)
         url = f"{self.DOMAINS_API_URL}/{domain}/hashtag"
         payload = {"domain": domain, "hashTag": tag}
         try:
@@ -234,6 +250,9 @@ class TracxnClient:
             ) as resp:
                 if resp.status == 200:
                     return "YES"
+                elif resp.status in (401, 403, 429) and self.token_rotator is not None:
+                    self._handle_token_error(tok, resp.status)
+                    logger.warning(f"Tracxn token ...{tok[-6:]} got status {resp.status} on POST {url}")
                 return "NO"
         except Exception as e:
             logger.error(f"Error adding hashtag to domain {domain}: {e}")
@@ -246,7 +265,7 @@ class TracxnClient:
         tag: str = "NO",
         token: Optional[str] = None,
     ) -> str:
-        tok = self.get_token(token)
+        tok = await self._acquire_token(token)
         url = f"{self.DOMAINS_API_URL}/{domain}/hashtag"
         payload = {"domain": domain, "hashTag": tag}
         try:
@@ -258,6 +277,9 @@ class TracxnClient:
             ) as resp:
                 if resp.status == 200:
                     return "YES"
+                elif resp.status in (401, 403, 429) and self.token_rotator is not None:
+                    self._handle_token_error(tok, resp.status)
+                    logger.warning(f"Tracxn token ...{tok[-6:]} got status {resp.status} on DELETE {url}")
                 return "NO"
         except Exception as e:
             logger.error(f"Error removing hashtag from domain {domain}: {e}")
