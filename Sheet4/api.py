@@ -184,7 +184,7 @@ async def _daily_5am_ist_watchdog():
                         f"Autonomous Smart Resume triggered by supervisor in 15s (attempt {cnt}/{EXEC_TRACKER.MAX_AUTO_RETRIES})..."
                     )
                     req = RunRequest(
-                        start_row=saved_state.get("start_row", 4),
+                        start_row=saved_state.get("start_row", 3),
                         mode=saved_state.get("mode", "full"),
                         sheet_id=saved_state.get("sheet_id", settings.CF_SHEET_ID)
                     )
@@ -222,7 +222,7 @@ async def startup_event():
             f"Autonomous Smart Resume initiating in 10 seconds (attempt {cnt}/{EXEC_TRACKER.MAX_AUTO_RETRIES})..."
         )
         req = RunRequest(
-            start_row=saved_state.get("start_row", 4),
+            start_row=saved_state.get("start_row", 3),
             mode=saved_state.get("mode", "full"),
             sheet_id=saved_state.get("sheet_id", settings.CF_SHEET_ID)
         )

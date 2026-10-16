@@ -159,6 +159,22 @@ try:
 except Exception:
     pass
 
+def is_row_fully_completed(row: list) -> bool:
+    """
+    Returns True if full end-to-end processing is already completed for this domain.
+    A row is fully completed if it has a domain and:
+    - Col U (idx 20) Engine Cleared Time is populated AND Col V (idx 21) Engine Cleared Status is populated ('DONE' / 'To be checked')
+      OR
+    - Col BK (idx 62) CF->IF Status is populated ('DONE', 'YES', 'TRUE', or timestamp)
+    """
+    if not row or not row[0]:
+        return False
+    u = str(row[20]).strip() if len(row) > 20 else ""
+    v = str(row[21]).strip() if len(row) > 21 else ""
+    bk = str(row[62]).strip() if len(row) > 62 else ""
+    return bool(u and v) or bool(bk)
+
+
 # **************************************************************************************************************************
 # *************************************** Configuration *************************************************
 # **************************************************************************************************************************
@@ -375,7 +391,7 @@ def open_sheet_with_fallback(client, sheet_id: str):
     raise ValueError(f"Unable to open sheet {sheet_id}: No valid credentials available.")
 
 
-async def read_sheet_data(client, SHEET_ID, sheet_name, start_row=4, start_col=1):
+async def read_sheet_data(client, SHEET_ID, sheet_name, start_row=3, start_col=1):
     logging.info(f"Opening sheet {SHEET_ID} [{sheet_name}] to load rows starting from row {start_row}...")
     is_pipe = is_pipeline_sheet(SHEET_ID)
     primary_mgr = await get_gspread_client()
@@ -3877,7 +3893,7 @@ async def reconcile_existing_tech_crawler_jobs(
     client,
     SHEET_ID,
     sheet_name,
-    start_row_num=4,
+    start_row_num=3,
     sheet_write_queue=None,
     batch_size=50
 ):
@@ -3896,6 +3912,8 @@ async def reconcile_existing_tech_crawler_jobs(
     candidates = []
     for idx, r in enumerate(rows):
         if not r or not r[0]:
+            continue
+        if is_row_fully_completed(r):
             continue
         min_len = 38
         if len(r) < min_len:
@@ -4097,18 +4115,19 @@ async def Integrated_Extract_domains(
     config_funnel_name_Feed_Cached_Gen_Date,
     config_funnel_name_Feed_Cached_Final_Status,
     token_rotator,
-    start_row_num=4,
+    start_row_num=3,
     mode="full",
 ):
 
     pf_data = await read_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, start_row=start_row_num)
 
     total_domains = len(pf_data)
-    processed = 0
-    success_count = 0
+    pre_completed = sum(1 for r in pf_data if is_row_fully_completed(r))
+    processed = pre_completed
+    success_count = pre_completed
     fail_count = 0
     phase_title = f"Phase 1: Initial Crawl & Predictions ({mode})" if mode == "full" else f"Mode: {mode.upper()}"
-    update_progress_file(processed, total_domains, success_count, fail_count, phase=phase_title, stage_details=f"Starting batch processing of {total_domains} rows...", pending_tc=0, mode=mode)
+    update_progress_file(processed, total_domains, success_count, fail_count, phase=phase_title, stage_details=f"Starting batch processing of {total_domains} rows ({pre_completed} already completed)...", pending_tc=0, mode=mode)
 
     semaphore = asyncio.Semaphore(MAX_WORKERS)
     pending_tech_crawler_jobs = []
@@ -4230,6 +4249,9 @@ async def Integrated_Extract_domains(
             row_number = start_row_num + idx
             if not row or not row[0]:
                 processed += 1
+                return
+
+            if is_row_fully_completed(row):
                 return
 
             domain = row[0]
@@ -4605,7 +4627,7 @@ async def Process_Review_domain(session, row, row_number, client, semaphore, SHE
 
 
 # Entry point
-async def Process_Review_Caller(client, mainheaders, SHEET_ID, EXTRACTING_SHEET_NAME, start_row_num=4, mode="full"):
+async def Process_Review_Caller(client, mainheaders, SHEET_ID, EXTRACTING_SHEET_NAME, start_row_num=3, mode="full"):
     if os.path.exists(STOP_FILE):
         logging.info("Stop requested before Process_Review_Caller. Skipping.")
         return
@@ -4686,7 +4708,7 @@ async def Process_Review_Caller(client, mainheaders, SHEET_ID, EXTRACTING_SHEET_
 
 #********************************************************************************************
 
-async def Execute_Phase4_Ingestion_Write_APIs(client, mainheaders, SHEET_ID, EXTRACTING_SHEET_NAME, start_row_num=4):
+async def Execute_Phase4_Ingestion_Write_APIs(client, mainheaders, SHEET_ID, EXTRACTING_SHEET_NAME, start_row_num=3):
     """Executes CF->IF and IF->PF Write APIs + Hashtags for rows that have predictions but uncommitted write APIs."""
     if os.path.exists(STOP_FILE):
         return
@@ -4847,12 +4869,9 @@ def task():
 
 async def main():
     try:
-        start_row_arg = 4
+        start_row_arg = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isdigit() else 3
         mode_arg = "full"
         custom_sheet_id = None
-
-        if len(sys.argv) > 1 and sys.argv[1].isdigit():
-            start_row_arg = int(sys.argv[1])
         if len(sys.argv) > 2 and not sys.argv[2].startswith("--"):
             mode_arg = sys.argv[2]
         if "--sheet_id" in sys.argv:
