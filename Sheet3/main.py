@@ -3951,6 +3951,7 @@ async def reconcile_existing_tech_crawler_jobs(
     sheet_name,
     start_row_num=3,
     sheet_write_queue=None,
+    domain_queue=None,
     batch_size=50
 ):
     """
@@ -4056,7 +4057,7 @@ async def reconcile_existing_tech_crawler_jobs(
                                     row_data[27], row_data[28], row_data[29], row_data[30],
                                     row_data[31][:49500]
                                 ]
-                                return ("SUCCESS", r_num, sheet_slice, None)
+                                return ("SUCCESS", r_num, sheet_slice, row_data)
 
                     if status == "FAILED" or is_over_3hr:
                         # Over 3 hours and still PROCESSING, or FAILED: mark FAILED immediately (no retry)
@@ -4116,6 +4117,10 @@ async def reconcile_existing_tech_crawler_jobs(
                     elif client:
                         try: await write_sheet_data(client, SHEET_ID, sheet_name, [sheet_slice], r_num, 24)
                         except Exception: pass
+                    if domain_queue is not None and item:
+                        idx = r_num - start_row_num
+                        await domain_queue.put((idx, item))
+                        logging.info(f"⚡ [Auto Re-Queue] Newly scraped domain '{item[0]}' from row {r_num} fed into NIM pipeline")
                 elif outcome == "FAILED":
                     resolved_failed += 1
                     if sheet_write_queue:
@@ -4299,24 +4304,66 @@ async def Integrated_Extract_domains(
         downstream_semaphore = asyncio.Semaphore(num_downstream_workers)
 
         domain_queue = asyncio.Queue()
+        # Fast-Track Prioritization:
+        # Tier 1: Uncompleted domains with existing scraped markdown ready for immediate NIM summarization
+        # Tier 2: Uncompleted domains needing initial Tech Crawler job generation or crawling
+        # Tier 3: Completed or empty domains (handled quickly by skip)
+        priority_items = []
+        regular_items = []
+        completed_items = []
+
         for idx, r in enumerate(pf_data):
-            await domain_queue.put((idx, r))
+            if not r or not r[0] or is_row_fully_completed(r):
+                completed_items.append((idx, r))
+                continue
+
+            raw_scraped = (safe_str(r[31]).strip() or safe_str(r[37]).strip()) if len(r) > 31 else ""
+            tc_status = safe_str(r[25]).strip().upper() if len(r) > 25 else ""
+            nim_txt = safe_str(r[40]).strip() if len(r) > 40 else ""
+
+            if (raw_scraped or tc_status == "SUCCESS") and len(nim_txt) <= 10:
+                priority_items.append((idx, r))
+            else:
+                regular_items.append((idx, r))
+
+        logging.info(
+            f"🚀 [Queue Partitioning] {len(priority_items)} pre-scraped domains fast-tracked for immediate NIM processing | "
+            f"{len(regular_items)} domains queued for Tech Crawler | {len(completed_items)} completed/empty"
+        )
+        for item in priority_items:
+            await domain_queue.put(item)
+        for item in regular_items:
+            await domain_queue.put(item)
+        for item in completed_items:
+            await domain_queue.put(item)
 
         # Bounded queue (maxsize 150) enforces backpressure so producers never overwhelm consumer RAM
         summarized_queue = asyncio.Queue(maxsize=150)
+        sweep_task = None
 
         # Stage 1: Dedicated NIM Summarizer Producer
         async def nim_producer_worker():
             nonlocal nim_completed_count
-            while not domain_queue.empty():
+            while True:
                 if is_5am_ist_cutoff() or os.path.exists(STOP_FILE) or is_pre_cutoff_window() or os.path.exists(FLUSH_FILE):
                     break
                 try:
-                    idx, row = domain_queue.get_nowait()
+                    item = await asyncio.wait_for(domain_queue.get(), timeout=2.0)
+                except asyncio.TimeoutError:
+                    if sweep_task is not None and sweep_task.done() and domain_queue.empty():
+                        break
+                    continue
                 except asyncio.QueueEmpty:
+                    if sweep_task is not None and sweep_task.done():
+                        break
+                    await asyncio.sleep(0.5)
+                    continue
+
+                if item is None:
+                    domain_queue.task_done()
                     break
 
-                row_number = start_row_num + idx
+                idx, row = item
                 if not row or not row[0]:
                     await summarized_queue.put((idx, row, None, True))
                     domain_queue.task_done()
@@ -4526,6 +4573,7 @@ async def Integrated_Extract_domains(
                     sheet_name=EXTRACTING_SHEET_NAME,
                     start_row_num=start_row_num,
                     sheet_write_queue=sheet_write_queue,
+                    domain_queue=domain_queue,
                     batch_size=50
                 )
                 if initial_pending:
