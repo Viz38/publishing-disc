@@ -96,6 +96,10 @@ class TracxnClient:
                             f"Retrying with next active token (attempt {attempt+1}/{max_attempts})..."
                         )
                         continue
+                    elif resp.status == 422:
+                        text = await resp.text()
+                        logger.warning(f"Tracxn PUT {url} failed with 422 (unassignable/assigned to other user): {text[:100]}. Fast-skipping.")
+                        return "UNASSIGNABLE"
                     else:
                         text = await resp.text()
                         logger.warning(f"Tracxn PUT {url} failed ({resp.status}): {text}")

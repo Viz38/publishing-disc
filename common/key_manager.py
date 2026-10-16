@@ -582,3 +582,65 @@ class NIMKeyManager:
     @classmethod
     def from_env(cls) -> "NIMKeyManager":
         return cls()
+
+    @classmethod
+    def for_sheet(
+        cls,
+        sheet_num: int,
+        total_sheets: int = 4,
+        keys: Optional[List[str]] = None
+    ) -> "NIMKeyManager":
+        sharded = get_sharded_nim_keys(sheet_num, total_sheets=total_sheets, keys=keys)
+        logger.info(
+            f"Initialized dedicated NIMKeyManager for Sheet {sheet_num}/{total_sheets} "
+            f"with {len(sharded)} isolated keys (0 cross-process collisions)."
+        )
+        return cls(keys=sharded)
+
+
+def get_sharded_nim_keys(
+    sheet_num: int,
+    total_sheets: int = 4,
+    keys: Optional[List[str]] = None
+) -> List[str]:
+    """
+    Partitions the full NIM key pool into disjoint, dedicated subsets for each sheet.
+    Ensures 0 key collision across parallel sheet processes.
+
+    For a 35-key pool across 4 sheets:
+    - Sheet 1: 9 keys
+    - Sheet 2: 9 keys
+    - Sheet 3: 9 keys
+    - Sheet 4: 8 keys
+    """
+    if sheet_num < 1 or sheet_num > total_sheets:
+        raise ValueError(f"sheet_num must be between 1 and {total_sheets}, got {sheet_num}")
+
+    if keys is not None:
+        raw_keys = [str(k).strip() for k in keys if str(k).strip()]
+    else:
+        raw_env = os.getenv("NIM_API_KEYS", "")
+        if raw_env:
+            raw_keys = [k.strip() for k in raw_env.split(",") if k.strip()]
+        else:
+            raw_keys = []
+
+    if not raw_keys:
+        return []
+
+    n = len(raw_keys)
+    base_size = n // total_sheets
+    remainder = n % total_sheets
+
+    # Determine slice [start, end)
+    # The first `remainder` sheets get (base_size + 1) keys each,
+    # the remaining sheets get `base_size` keys each.
+    idx = sheet_num - 1
+    if idx < remainder:
+        start = idx * (base_size + 1)
+        end = start + (base_size + 1)
+    else:
+        start = remainder * (base_size + 1) + (idx - remainder) * base_size
+        end = start + base_size
+
+    return raw_keys[start:end]

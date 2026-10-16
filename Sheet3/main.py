@@ -12,6 +12,7 @@ from config import settings
 from common import (
     TracxnKeyManager,
     NIMKeyManager,
+    get_sharded_nim_keys,
     TechCrawlerClient,
     WaterfallScraper,
     LocalSheetCache,
@@ -208,7 +209,7 @@ IF_SHEET_ID = settings.IF_SHEET_ID
 IF_EXTRACTING_SHEET_NAME = "IF_Engine_Database"
 
 CREDENTIALS_FILE = settings.CREDENTIALS_FILE
-MAX_WORKERS = int(os.getenv("MAX_WORKERS_SHEET3", os.getenv("MAX_WORKERS_5080", getattr(settings, "MAX_WORKERS", 14))))
+MAX_WORKERS = int(os.getenv("MAX_WORKERS_SHEET3", os.getenv("MAX_WORKERS_5321", getattr(settings, "MAX_WORKERS", 8))))
 BATCH_SIZE = settings.BATCH_SIZE  # Default 100 rows per batch
 _WORKSHEET_CACHE = {}
 Config_Sheet_ID = settings.Config_Sheet_ID
@@ -230,9 +231,9 @@ BACKLOG_MANAGER = BacklogManager()
 Nvidia_Base_Model  = "meta/muse-glimmer-30b"
 Nvidia_Endpoint = "https://integrate.api.nvidia.com/v1/chat/completions"
 
-# NIM API keys loaded from environment (.env)
-NIM_HARDCODED_KEYS = settings.NIM_API_KEYS
-NIM_KEY_MANAGER = NIMKeyManager(list(settings.NIM_API_KEYS))
+# Dedicated sharded NIM API keys for Sheet 3 (9 isolated keys, 0 cross-process collisions)
+NIM_HARDCODED_KEYS = get_sharded_nim_keys(3, total_sheets=4, keys=settings.NIM_API_KEYS)
+NIM_KEY_MANAGER = NIMKeyManager(list(NIM_HARDCODED_KEYS))
 
 # Error strings to check
 CHECK_STRINGS = ["403 Forbidden", "Not Acceptable", "Coming Soon", "Javascript Enable", "Enable JavaScript", "Error 403", "Page Not Found"]
@@ -585,7 +586,7 @@ def Return_NIM_Config_Details(client=None):
     if _RUN_CACHE.get("nim_config"):
         return _RUN_CACHE["nim_config"]
 
-    tokens = [["", "", "", "", k] for k in settings.NIM_API_KEYS]
+    tokens = [["", "", "", "", k] for k in NIM_HARDCODED_KEYS]
     result_map = {
         "NIM_Model_To_Pick": settings.Nvidia_Base_Model,
         "tokenArray": tokens
@@ -1175,7 +1176,7 @@ def load_or_refresh_run_config(gc, force_refresh=False):
             }
 
             # 3. NIM - Models & Keys (Direct from .env, sheet fetch skipped)
-            tokens = [["", "", "", "", k] for k in settings.NIM_API_KEYS]
+            tokens = [["", "", "", "", k] for k in NIM_HARDCODED_KEYS]
             nim_config = {
                 "NIM_Model_To_Pick": settings.Nvidia_Base_Model,
                 "tokenArray": tokens
@@ -2065,9 +2066,11 @@ async def WriteAPI_Domain_Funnel_async(domainProfileId, source_funnelID, filterG
     try:
         tok = str(token).strip() if (token and str(token).strip() and token != Tracxn_API_Token) else None
         if 'TRACXN_CLIENT' in globals() and TRACXN_CLIENT is not None:
-            await TRACXN_CLIENT.force_assign_domain(
+            assign_res = await TRACXN_CLIENT.force_assign_domain(
                 active_sess, domainProfileId, source_funnelID, filterGroupId, filterId, comments, token=tok
             )
+            if assign_res == "UNASSIGNABLE":
+                return 'FALSE'
             ret = "NO"
             if status == 'MOVED_OUT':
                 ret = await TRACXN_CLIENT.move_domain_funnel(
@@ -4103,6 +4106,8 @@ async def reconcile_existing_tech_crawler_jobs(
             f"🔄 Batch {batch_num}/{num_batches} ({len(batch)} jobs) sweep complete: "
             f"+{resolved_success} SUCCESS, +{resolved_failed} FAILED, {len(pending_retained)} pending (<3h)"
         )
+        # Yield briefly between batches to prevent CPU spikes and prioritize streaming workers
+        await asyncio.sleep(0.5)
 
     logging.info(
         f"✅ Startup Tech Crawler sweep complete! Total checked: {total_candidates} | "
@@ -4956,11 +4961,11 @@ async def main():
         config_feed_num_funnel_map = config_feed_wise_funnel["FeedNumFunnelMap"]
         config_feed_name_funnel_map = config_feed_wise_funnel["FeedNameFunnelMap"]
 
-        # Caller - NIM Model Detail & Tokens (Direct from .env, sheet fetch skipped)
-        unique_tokens = list(settings.NIM_API_KEYS)
+        # Caller - NIM Model Detail & Tokens (Direct from sharded pool)
+        unique_tokens = list(NIM_HARDCODED_KEYS)
         model_to_pick = settings.Nvidia_Base_Model
 
-        token_rotator = NIMKeyManager(unique_tokens)
+        token_rotator = NIM_KEY_MANAGER or NIMKeyManager(unique_tokens)
         logging.info(f"NIMKeyManager initialized with {token_rotator.total_tokens} keys from environment.")
 
         # Pre-flight validate and prune invalid/expired tokens for Tracxn and NIM APIs
