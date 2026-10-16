@@ -1900,7 +1900,7 @@ async def get_api_result_async(payload=None, api_url="https://platform.tracxn.co
 #**************************** Tag Addition ***********************************
 
 # @timeout(20)
-def Domain_HashTag(domain, newtag='NO', token=Tracxn_API_Token):
+def Domain_HashTag(domain, newtag='NO', token=None):
     payload = {"filter": {"domain": [domain]}, "dataset": "internal"}
     api_url = "https://platform.tracxn.com/api/2.2/domains"
 
@@ -1954,7 +1954,7 @@ def Domain_HashTag(domain, newtag='NO', token=Tracxn_API_Token):
         else:
             return 'YES'
 
-async def Domain_HashTag_async(domain, newtag='NO', token=Tracxn_API_Token, session: aiohttp.ClientSession = None):
+async def Domain_HashTag_async(domain, newtag='NO', token=None, session: aiohttp.ClientSession = None):
     payload = {"filter": {"domain": [domain]}, "dataset": "internal"}
     api_url = "https://platform.tracxn.com/api/2.2/domains"
 
@@ -4182,7 +4182,7 @@ async def Integrated_Extract_domains(
 
     total_domains = len(pf_data)
     pre_completed = sum(1 for r in pf_data if is_row_fully_completed(r))
-    processed = pre_completed
+    processed = 0
     success_count = pre_completed
     fail_count = 0
     nim_completed_count = pre_completed
@@ -4385,7 +4385,6 @@ async def Integrated_Extract_domains(
 
                 try:
                     if is_skip:
-                        processed += 1
                         continue
 
                     if is_5am_ist_cutoff() or os.path.exists(STOP_FILE):
@@ -4915,7 +4914,7 @@ async def Execute_Phase4_Ingestion_Write_APIs(client, mainheaders, SHEET_ID, EXT
                     tag_status_pf = row[66] if len(row) > 66 else ""
                     tag_status_discovery = row[68] if len(row) > 68 else ""
 
-                    token = Tracxn_API_Token
+                    token = None
                     comment = "This is a Write API Movement by Gemini"
                     tag_name_if = "bu_llm_industry_prediction"
                     tag_name_pf = "bu_llm_feed_prediction"
