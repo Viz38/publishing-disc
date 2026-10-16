@@ -78,30 +78,39 @@ class TechCrawlerClient:
             },
         }
 
-        tok = await self._acquire_token()
-        try:
-            async with session.post(
-                self.GENERATE_URL,
-                json=payload,
-                headers=self._headers(tok),
-                timeout=aiohttp.ClientTimeout(total=30),
-            ) as resp:
-                if resp.status in (200, 201, 202):
-                    data = await resp.json()
-                    job_id = data.get("jobId")
-                    logger.info(f"Generated Tech Crawler Job ID for {clean_url}: {job_id}")
-                    return job_id
-                elif resp.status in (401, 403, 429) and self.token_rotator is not None:
-                    self._handle_token_error(tok, resp.status)
-                    logger.warning(f"Tech Crawler generate token ...{tok[-6:]} returned status {resp.status}")
-                    return None
-                else:
-                    text = await resp.text()
-                    logger.warning(f"Failed to generate Tech Crawler Job ID ({resp.status}): {text}")
-                    return None
-        except Exception as e:
-            logger.error(f"Error calling Tech Crawler generate API for {clean_url}: {e}")
-            return None
+        max_attempts = max(3, len(getattr(self.token_rotator, "tokens", []))) if self.token_rotator else 3
+        for attempt in range(max_attempts):
+            tok = await self._acquire_token()
+            if not tok:
+                logger.error(f"No valid Tracxn token available for generate_job_id on {clean_url}")
+                return None
+            try:
+                async with session.post(
+                    self.GENERATE_URL,
+                    json=payload,
+                    headers=self._headers(tok),
+                    timeout=aiohttp.ClientTimeout(total=30),
+                ) as resp:
+                    if resp.status in (200, 201, 202):
+                        data = await resp.json()
+                        job_id = data.get("jobId")
+                        logger.info(f"Generated Tech Crawler Job ID for {clean_url}: {job_id}")
+                        return job_id
+                    elif resp.status in (401, 403, 429) and self.token_rotator is not None:
+                        self._handle_token_error(tok, resp.status)
+                        logger.warning(
+                            f"Tech Crawler generate token ...{tok[-6:]} returned status {resp.status}. "
+                            f"Retrying with next active token (attempt {attempt+1}/{max_attempts})..."
+                        )
+                        continue
+                    else:
+                        text = await resp.text()
+                        logger.warning(f"Failed to generate Tech Crawler Job ID ({resp.status}): {text}")
+                        return None
+            except Exception as e:
+                logger.error(f"Error calling Tech Crawler generate API for {clean_url}: {e}")
+                return None
+        return None
 
     async def track_job_id(
         self,
@@ -126,54 +135,65 @@ class TechCrawlerClient:
             return result
 
         payload = {"jobId": job_id}
-        tok = await self._acquire_token()
+        max_attempts = max(3, len(getattr(self.token_rotator, "tokens", []))) if self.token_rotator else 3
 
-        try:
-            async with session.post(
-                self.TRACK_URL,
-                json=payload,
-                headers=self._headers(tok),
-                timeout=aiohttp.ClientTimeout(total=30),
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    result["status"] = data.get("status", "")
-                    result["last_updated_at"] = data.get("lastUpdatedAt", "")
+        for attempt in range(max_attempts):
+            tok = await self._acquire_token()
+            if not tok:
+                result["status"] = "FAILED"
+                result["error_reason"] = "No valid Tracxn token available"
+                return result
 
-                    output = data.get("output") or {}
-                    result["final_url"] = output.get("finalUrl", "")
-                    result["s3_html"] = output.get("html", "")
-                    result["s3_markdown"] = output.get("markdown", "")
-                    result["http_status"] = str(output.get("pageHttpStatus", "") or "")
-                    result["signals"] = str(output.get("signals", "") or "")
+            try:
+                async with session.post(
+                    self.TRACK_URL,
+                    json=payload,
+                    headers=self._headers(tok),
+                    timeout=aiohttp.ClientTimeout(total=30),
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        result["status"] = data.get("status", "")
+                        result["last_updated_at"] = data.get("lastUpdatedAt", "")
 
-                    if result["status"] == "FAILED":
-                        error_obj = output.get("error") or {}
-                        result["error_code"] = str(
-                            error_obj.get("code") or output.get("pageHttpStatus") or ""
+                        output = data.get("output") or {}
+                        result["final_url"] = output.get("finalUrl", "")
+                        result["s3_html"] = output.get("html", "")
+                        result["s3_markdown"] = output.get("markdown", "")
+                        result["http_status"] = str(output.get("pageHttpStatus", "") or "")
+                        result["signals"] = str(output.get("signals", "") or "")
+
+                        if result["status"] == "FAILED":
+                            error_obj = output.get("error") or {}
+                            result["error_code"] = str(
+                                error_obj.get("code") or output.get("pageHttpStatus") or ""
+                            )
+                            result["error_reason"] = str(
+                                error_obj.get("reason") or output.get("signals") or ""
+                            )
+                        return result
+                    elif resp.status in (401, 403, 429) and self.token_rotator is not None:
+                        self._handle_token_error(tok, resp.status)
+                        logger.warning(
+                            f"Track Job API token ...{tok[-6:]} returned status {resp.status}. "
+                            f"Retrying with next active token (attempt {attempt+1}/{max_attempts})..."
                         )
-                        result["error_reason"] = str(
-                            error_obj.get("reason") or output.get("signals") or ""
-                        )
-                    return result
-                elif resp.status in (401, 403, 429) and self.token_rotator is not None:
-                    self._handle_token_error(tok, resp.status)
-                    result["status"] = "FAILED"
-                    result["error_code"] = str(resp.status)
-                    result["error_reason"] = f"Token rate limited/unauthorized: {resp.status}"
-                    return result
-                else:
-                    text = await resp.text()
-                    logger.warning(f"Track Job API returned status {resp.status} for {job_id}: {text}")
-                    result["status"] = "FAILED"
-                    result["error_code"] = str(resp.status)
-                    result["error_reason"] = text
-                    return result
-        except Exception as e:
-            logger.error(f"Error querying Tech Crawler track API for {job_id}: {e}")
-            result["status"] = "FAILED"
-            result["error_reason"] = str(e)
-            return result
+                        continue
+                    else:
+                        text = await resp.text()
+                        logger.warning(f"Track Job API returned status {resp.status} for {job_id}: {text}")
+                        result["status"] = "FAILED"
+                        result["error_code"] = str(resp.status)
+                        result["error_reason"] = text
+                        return result
+            except Exception as e:
+                logger.error(f"Error querying Tech Crawler track API for {job_id}: {e}")
+                result["status"] = "FAILED"
+                result["error_reason"] = str(e)
+                return result
+        result["status"] = "FAILED"
+        result["error_reason"] = "Exhausted token retries for track_job_id"
+        return result
 
     async def check_job_status_with_cadence(
         self,
@@ -216,9 +236,11 @@ class TechCrawlerClient:
             return None
 
         payload = {"url": s3_url}
-
-        for attempt in range(max_retries):
+        retries = max(max_retries, len(getattr(self.token_rotator, "tokens", []))) if self.token_rotator else max_retries
+        for attempt in range(retries):
             tok = await self._acquire_token()
+            if not tok:
+                return None
             try:
                 async with session.post(
                     self.S3_SIGN_URL,
@@ -232,9 +254,9 @@ class TechCrawlerClient:
                     elif resp.status in (401, 403, 429):
                         self._handle_token_error(tok, resp.status)
                         text = await resp.text()
-                        logger.warning(f"S3 signed URL generation attempt {attempt+1}/{max_retries} failed ({resp.status}): {text}")
-                        if attempt < max_retries - 1:
-                            await asyncio.sleep(0.5)
+                        logger.warning(f"S3 signed URL generation attempt {attempt+1}/{retries} failed ({resp.status}): {text}")
+                        if attempt < retries - 1:
+                            await asyncio.sleep(0.1)
                             continue
                         return None
                     else:

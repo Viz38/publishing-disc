@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==========================================================
-# 🚀 DISCOVERY ENGINE - PRODUCTION v0.1
+# 🚀 DISCOVERY ENGINE - PRODUCTION v3.1.1
 # ==========================================================
 # Supports: macOS (Intel/Silicon) & Ubuntu Linux
 # ==========================================================

@@ -74,27 +74,37 @@ class TracxnClient:
         return self.get_token(override_token)
 
     async def _send_put(self, session: aiohttp.ClientSession, url: str, payload: Dict[str, Any], token: Optional[str] = None) -> str:
-        tok = await self._acquire_token(token)
-        try:
-            async with session.put(
-                url,
-                json=payload,
-                headers=self._headers(tok),
-                timeout=aiohttp.ClientTimeout(total=20),
-            ) as resp:
-                if resp.status == 200:
-                    return "YES"
-                elif resp.status in (401, 403, 429) and self.token_rotator is not None:
-                    self._handle_token_error(tok, resp.status)
-                    logger.warning(f"Tracxn token ...{tok[-6:]} got status {resp.status} on PUT {url}")
+        max_attempts = max(3, len(getattr(self.token_rotator, "tokens", []))) if self.token_rotator else 1
+        for attempt in range(max_attempts):
+            tok = await self._acquire_token(token if attempt == 0 else None)
+            if not tok:
+                logger.error(f"No valid Tracxn token available for PUT {url}")
+                return "NO"
+            try:
+                async with session.put(
+                    url,
+                    json=payload,
+                    headers=self._headers(tok),
+                    timeout=aiohttp.ClientTimeout(total=20),
+                ) as resp:
+                    if resp.status == 200:
+                        return "YES"
+                    elif resp.status in (401, 403, 429) and self.token_rotator is not None:
+                        self._handle_token_error(tok, resp.status)
+                        logger.warning(
+                            f"Tracxn token ...{tok[-6:]} got status {resp.status} on PUT {url}. "
+                            f"Retrying with next active token (attempt {attempt+1}/{max_attempts})..."
+                        )
+                        continue
+                    else:
+                        text = await resp.text()
+                        logger.warning(f"Tracxn PUT {url} failed ({resp.status}): {text}")
+                        return "NO"
+            except Exception as e:
+                logger.error(f"Error executing Tracxn PUT {url} on attempt {attempt+1}: {e}")
+                if attempt == max_attempts - 1:
                     return "NO"
-                else:
-                    text = await resp.text()
-                    logger.warning(f"Tracxn PUT {url} failed ({resp.status}): {text}")
-                    return "NO"
-        except Exception as e:
-            logger.error(f"Error executing Tracxn PUT {url}: {e}")
-            return "NO"
+        return "NO"
 
     async def move_domain_funnel(
         self,

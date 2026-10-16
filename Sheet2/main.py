@@ -557,72 +557,8 @@ def get_nim_ssl_context() -> ssl.SSLContext:
     except Exception:
         return ssl._create_unverified_context()
 
-class NIMKeyManager:
-    """Manages round-robin rotation of NIM API keys with rate-limit cooldowns."""
-
-    def __init__(self, keys: List[str]):
-        self.keys = [k.strip() for k in keys if k.strip()]
-        if not self.keys:
-            raise ValueError("No valid NIM API keys provided.")
-        self._index = 0
-        self._lock: Optional[asyncio.Lock] = None
-        self._cooldowns: Dict[str, float] = {}
-
-    def _get_lock(self) -> asyncio.Lock:
-        if self._lock is None:
-            self._lock = asyncio.Lock()
-        return self._lock
-
-    def get_next_key(self) -> str:
-        now = time.time()
-        expired = [k for k, expire_time in self._cooldowns.items() if now >= expire_time]
-        for k in expired:
-            del self._cooldowns[k]
-
-        total = len(self.keys)
-        for _ in range(total):
-            key = self.keys[self._index % total]
-            self._index += 1
-            if key not in self._cooldowns:
-                return key
-
-        if self._cooldowns:
-            earliest_key = min(self._cooldowns.keys(), key=lambda k: self._cooldowns[k])
-            return earliest_key
-        return self.keys[0]
-
-    async def get_next_key_async(self) -> Tuple[str, float]:
-        async with self._get_lock():
-            now = time.time()
-            expired = [k for k, exp in self._cooldowns.items() if now >= exp]
-            for k in expired:
-                del self._cooldowns[k]
-
-            total = len(self.keys)
-            for _ in range(total):
-                key = self.keys[self._index % total]
-                self._index += 1
-                if key not in self._cooldowns:
-                    return key, 0.0
-
-            earliest_key = min(self._cooldowns.keys(), key=lambda k: self._cooldowns[k])
-            wait_time = max(0.5, self._cooldowns[earliest_key] - now)
-            return earliest_key, wait_time
-
-    def mark_rate_limited(self, key: str, cooldown_seconds: float = 25.0):
-        self._cooldowns[key] = time.time() + cooldown_seconds
-
-    def mark_invalid(self, key: str):
-        if key in self.keys:
-            self.keys.remove(key)
-        if key in self._cooldowns:
-            del self._cooldowns[key]
-        logging.warning(f"Permanently disabled invalid NIM key ...{key[-6:]}. Active keys remaining: {len(self.keys)}")
-
-    @property
-    def total_tokens(self) -> int:
-        return len(self.keys)
-
+# NIMKeyManager is imported from common (common.key_manager.NIMKeyManager)
+# with automatic preflight validation, dynamic permanent sleep, and token rotation.
 TokenRotator = NIMKeyManager
 
 #********************************** Getting NVDIA Tokens ************************************
@@ -4986,6 +4922,15 @@ async def main():
 
         token_rotator = NIMKeyManager(unique_tokens)
         logging.info(f"NIMKeyManager initialized with {token_rotator.total_tokens} keys from environment.")
+
+        # Pre-flight validate and prune invalid/expired tokens for Tracxn and NIM APIs
+        logging.info("Starting pre-flight validation of Tracxn API tokens...")
+        await TRACXN_KEY_MANAGER.validate_and_prune_all_tokens()
+        logging.info("Starting pre-flight validation of NVIDIA NIM API keys...")
+        await token_rotator.validate_and_prune_all_keys()
+        if 'NIM_KEY_MANAGER' in globals() and NIM_KEY_MANAGER is not None:
+            NIM_KEY_MANAGER.keys = list(token_rotator.keys)
+            NIM_KEY_MANAGER.invalid_keys = set(token_rotator.invalid_keys)
 
         if model_to_pick:
             global Nvidia_Base_Model
