@@ -233,8 +233,8 @@ class PipelineCoordinator:
         prompt = item.get("summary_prompt") or f"Summarize website: {raw_content[:4000]}"
         summary = ""
 
-        for attempt in range(1, 11):  # Exactly 10 cycles
-            key = self.nim_keys.get_next_key()
+        for attempt in range(1, 5):  # 4 fast-fail cycles
+            key, _ = await self.nim_keys.get_next_key_async()
             try:
                 summary = await self.call_nim_api(prompt, key)
                 if summary and str(summary).strip():
@@ -243,10 +243,15 @@ class PipelineCoordinator:
                     item["summary_attempt"] = attempt
                     return item
             except Exception as e:
-                logger.debug(f"NIM attempt {attempt}/10 failed for {item.get('domain')}: {e}")
+                logger.debug(f"NIM attempt {attempt}/4 failed for {item.get('domain')}: {e}")
+                if key:
+                    self.nim_keys.mark_rate_limited(key, penalty_sec=15.0)
+            finally:
+                if key:
+                    self.nim_keys.release_key(key)
 
-        # All 10 NIM retries failed -> Fallback to Gemini
-        logger.warning(f"All 10 NIM retries failed for {item.get('domain')}. Switching to Gemini fallback summarizer.")
+        # All NIM retries failed -> Fallback to Gemini
+        logger.warning(f"All NIM retries failed for {item.get('domain')}. Switching to Gemini fallback summarizer.")
         try:
             summary = await self.call_gemini_summary_fallback(prompt)
             if summary and str(summary).strip():

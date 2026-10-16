@@ -621,7 +621,7 @@ async def Nvidia_API_ASYNC(promptMsg, token_rotator: NIMKeyManager = None, max_a
     )
     if max_attempts is None:
         tt = getattr(token_rotator, "total_tokens", None)
-        max_attempts = int(tt) * 2 if isinstance(tt, (int, float)) else 10
+        max_attempts = min(4, int(tt)) if isinstance(tt, (int, float)) and int(tt) > 0 else 4
 
     payload = {
         "model": Nvidia_Base_Model,
@@ -638,7 +638,7 @@ async def Nvidia_API_ASYNC(promptMsg, token_rotator: NIMKeyManager = None, max_a
     original_user_content = str(promptMsg)
 
     ssl_ctx = False if _nim_use_unverified_ssl else get_nim_ssl_context()
-    timeout = aiohttp.ClientTimeout(total=60.0, sock_connect=5.0, sock_read=55.0)
+    timeout = aiohttp.ClientTimeout(total=15.0, sock_connect=4.0, sock_read=12.0)
 
     attempt = 0
     while attempt < max_attempts and (token_rotator is None or token_rotator.keys):
@@ -741,8 +741,10 @@ async def Nvidia_API_ASYNC(promptMsg, token_rotator: NIMKeyManager = None, max_a
                 await asyncio.sleep(backoff)
 
             except asyncio.TimeoutError:
-                logging.warning(f"NIM API timeout on key ...{api_key[-6:]} (>55s, attempt {attempt}/{max_attempts})")
-                await asyncio.sleep(min(2.0, 0.5 + attempt * 0.5))
+                logging.warning(f"NIM API timeout on key ...{api_key[-6:]} (>12s, attempt {attempt}/{max_attempts}). Applying 15s cooldown...")
+                if token_rotator and api_key:
+                    token_rotator.mark_rate_limited(api_key, penalty_sec=15.0)
+                await asyncio.sleep(min(1.0, 0.2 + attempt * 0.2))
 
             except Exception as e:
                 err_str = str(e).lower()
@@ -2854,12 +2856,12 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
         input_data_summery = Utility_Replace_Response(domain, input_data_summery, replacable_char_Domain)
 
         try:
-            # 1. Primary Attempt: NVIDIA API Call (10 retries with key rotation)
-            output_data_summery = await Nvidia_API_ASYNC(input_data_summery, token_rotator=token_rotator, max_attempts=10, session=session)
+            # 1. Primary Attempt: NVIDIA API Call (4 retries with key rotation)
+            output_data_summery = await Nvidia_API_ASYNC(input_data_summery, token_rotator=token_rotator, max_attempts=4, session=session)
             
-            # 2. Fallback Attempt: Gemini API Call if NVIDIA exhausted 10 retries
+            # 2. Fallback Attempt: Gemini API Call if NVIDIA exhausted retries
             if not output_data_summery:
-                logging.info(f"Nvidia API exhausted 10 retries for {domain}. Falling back to Gemini API...")
+                logging.info(f"Nvidia API exhausted retries for {domain}. Falling back to Gemini API...")
                 
                 try:
                     gemini_res = await Gemini_API_ASYNC(input_data_summery, session=session)
@@ -4254,7 +4256,9 @@ async def Integrated_Extract_domains(
         # Decoupled SEDA Two-Stage Architecture
         # Stage 1: Fast Dedicated NIM Summarizer Producer Pool (leases keys at maximum 35-40 RPM rate)
         # Stage 2: Paced Gemini Predictions & Tracxn Movements Consumer Pool (consumes precomputed summaries)
-        num_nim_workers = min(int(os.getenv("MAX_NIM_WORKERS", "20")), max(1, len(pf_data)))
+        sharded_key_count = token_rotator.get_total_keys() if token_rotator else 8
+        default_nim_workers = max(1, sharded_key_count)
+        num_nim_workers = min(int(os.getenv("MAX_NIM_WORKERS", str(default_nim_workers))), max(1, len(pf_data)))
         num_downstream_workers = min(MAX_WORKERS, max(1, len(pf_data)))
         nim_semaphore = asyncio.Semaphore(num_nim_workers)
         downstream_semaphore = asyncio.Semaphore(num_downstream_workers)
