@@ -223,12 +223,22 @@ class LocalSheetCache:
             return False
         has_summary = bool(rec.get("output_data_summery"))
         has_if = bool(rec.get("output_data_if"))
-        has_write = (
-            rec.get("cf_if_status") in ("DONE", "SUCCESS", "SKIPPED") or
-            rec.get("engineClearedStatus") == "DONE" or
-            bool(rec.get("engineClearedTime"))
+        valid_statuses = {
+            "DONE", "YES", "TRUE", "MOVED", "MOVED_OUT",
+            "SNOOZED", "MARKED_IRRELEVANT", "MARKED_FOR_LATER", "ESCALATED", "SKIPPED_UNASSIGNABLE", "SUCCESS", "SKIPPED"
+        }
+        cf_if_s = str(rec.get("cf_if_status", "")).strip().upper()
+        if_pf_s = str(rec.get("if_pf_status", "")).strip().upper()
+        cf_if_t = str(rec.get("cf_if_time", "")).strip()
+        if_pf_t = str(rec.get("if_pf_time", "")).strip()
+
+        has_tracxn_movement = (
+            cf_if_s in valid_statuses or
+            if_pf_s in valid_statuses or
+            (len(cf_if_t) >= 8 and (":" in cf_if_t or "/" in cf_if_t)) or
+            (len(if_pf_t) >= 8 and (":" in if_pf_t or "/" in if_pf_t))
         )
-        return has_summary and has_if and has_write
+        return has_summary and has_if and has_tracxn_movement
 
     def hydrate_row_from_cache(self, domain: str, row: List[Any]) -> Tuple[List[Any], bool]:
         """

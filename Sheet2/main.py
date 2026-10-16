@@ -162,18 +162,54 @@ except Exception:
 
 def is_row_fully_completed(row: list) -> bool:
     """
-    Returns True if full end-to-end processing is already completed for this domain.
-    A row is fully completed if it has a domain and:
-    - Col U (idx 20) Engine Cleared Time is populated AND Col V (idx 21) Engine Cleared Status is populated ('DONE' / 'To be checked')
-      OR
-    - Col BK (idx 62) CF->IF Status is populated ('DONE', 'YES', 'TRUE', or timestamp)
+    Returns True if full end-to-end processing INCLUDING Tracxn movement is completed.
+    A domain is fully completed only when:
+    1. It has a non-empty domain name (row[0]).
+    2. Tracxn movement has completed via any of the terminal conditions:
+       - Col BJ (idx 61) or Col BK (idx 62) cf_if_status in terminal statuses
+         (DONE, YES, TRUE, MOVED, MOVED_OUT, SNOOZED, MARKED_IRRELEVANT, MARKED_FOR_LATER, ESCALATED, SKIPPED_UNASSIGNABLE)
+       - Col BK (idx 62) or Col BL (idx 63) cf_if_time contains a valid movement timestamp
+       - Col BL (idx 63) or Col BM (idx 64) if_pf_status in (DONE, YES, TRUE) or if_pf_time timestamp
+       - Col AD (idx 29) movementStatus in terminal statuses or Col AC (idx 28) movementTime timestamp
     """
-    if not row or not row[0]:
+    if not row or not row[0] or not str(row[0]).strip():
         return False
-    u = str(row[20]).strip() if len(row) > 20 else ""
-    v = str(row[21]).strip() if len(row) > 21 else ""
-    bk = str(row[62]).strip() if len(row) > 62 else ""
-    return bool(u and v) or bool(bk)
+
+    valid_statuses = {
+        "DONE", "YES", "TRUE", "MOVED", "MOVED_OUT",
+        "SNOOZED", "MARKED_IRRELEVANT", "MARKED_FOR_LATER", "ESCALATED", "SKIPPED_UNASSIGNABLE"
+    }
+
+    # Check CF -> IF movement status (Col BJ / idx 61, or Col BK / idx 62)
+    s_61 = str(row[61]).strip().upper() if len(row) > 61 else ""
+    s_62 = str(row[62]).strip().upper() if len(row) > 62 else ""
+    if s_61 in valid_statuses or s_62 in valid_statuses:
+        return True
+
+    # Check CF -> IF movement timestamp (Col BK / idx 62, or Col BL / idx 63)
+    t_62 = str(row[62]).strip() if len(row) > 62 else ""
+    t_63 = str(row[63]).strip() if len(row) > 63 else ""
+    if (len(t_62) >= 8 and (":" in t_62 or "/" in t_62) and t_62.upper() not in valid_statuses) or \
+       (len(t_63) >= 8 and (":" in t_63 or "/" in t_63) and t_63.upper() not in valid_statuses):
+        return True
+
+    # Check IF -> PF movement status (Col BL / idx 63, or Col BM / idx 64)
+    s_63 = str(row[63]).strip().upper() if len(row) > 63 else ""
+    s_64 = str(row[64]).strip().upper() if len(row) > 64 else ""
+    if s_63 in valid_statuses or s_64 in valid_statuses:
+        return True
+
+    # Check Col AD (idx 29) movementStatus (Filter-V2 / General sheets)
+    s_29 = str(row[29]).strip().upper() if len(row) > 29 else ""
+    if s_29 in valid_statuses:
+        return True
+
+    # Check Col AC (idx 28) movementTime (Filter-V2 / General sheets)
+    t_28 = str(row[28]).strip() if len(row) > 28 else ""
+    if len(t_28) >= 8 and (":" in t_28 or "/" in t_28):
+        return True
+
+    return False
 
 
 # **************************************************************************************************************************
