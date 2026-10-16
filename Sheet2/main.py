@@ -4183,10 +4183,11 @@ async def Integrated_Extract_domains(
 
     total_domains = len(pf_data)
     pre_completed = sum(1 for r in pf_data if is_row_fully_completed(r))
+    pre_nim_completed = sum(1 for r in pf_data if is_row_fully_completed(r) or (len(r) > 40 and len(safe_str(r[40]).strip()) > 10))
     processed = 0
     success_count = pre_completed
     fail_count = 0
-    nim_completed_count = pre_completed
+    nim_completed_count = pre_nim_completed
     phase_title = f"Phase 1: Initial Crawl & Predictions ({mode})" if mode == "full" else f"Mode: {mode.upper()}"
     update_progress_file(processed, total_domains, success_count, fail_count, phase=phase_title, stage_details=f"Starting batch processing of {total_domains} rows ({pre_completed} already completed)...", pending_tc=0, mode=mode)
 
@@ -4334,8 +4335,8 @@ async def Integrated_Extract_domains(
         for item in completed_items:
             await domain_queue.put(item)
 
-        # Bounded queue (maxsize 150) enforces backpressure so producers never overwhelm consumer RAM
-        summarized_queue = asyncio.Queue(maxsize=150)
+        # Large decoupled queue (maxsize 10000) allows producers to continuously process all domains without blocking on consumer
+        summarized_queue = asyncio.Queue(maxsize=10000)
         sweep_task = None
 
         # Stage 1: Dedicated NIM Summarizer Producer
@@ -4372,7 +4373,14 @@ async def Integrated_Extract_domains(
                     domain_queue.task_done()
                     continue
 
-                await SYSTEM_HEALTH.wait_for_resources()
+                # Guard RAM to prevent OOM without blocking pure outbound async network I/O on CPU spikes
+                if hasattr(SYSTEM_HEALTH, "_psutil"):
+                    try:
+                        if SYSTEM_HEALTH._psutil.virtual_memory().percent > 85.0:
+                            trim_memory()
+                            await asyncio.sleep(1.0)
+                    except Exception:
+                        pass
                 domain = row[0]
 
                 try:
@@ -4405,6 +4413,11 @@ async def Integrated_Extract_domains(
                         precomputed_summary=None,
                     )
                     nim_completed_count += 1
+                    # Persist NIM summary or crawler status to sheet immediately without waiting for downstream consumer
+                    if isinstance(stage1_res, dict) and stage1_res.get("write_data") and stage1_res.get("start_col"):
+                        await sheet_write_queue.put((row_number, stage1_res["start_col"], stage1_res["write_data"]))
+                    if nim_completed_count % 25 == 0:
+                        logging.info(f"⚡ [NIM Producer] {nim_completed_count}/{total_domains} summarized (Buffer: {summarized_queue.qsize()})")
                     await summarized_queue.put((idx, row, stage1_res, False))
                 except Exception as ex:
                     logging.error(f"Error in NIM producer for {domain} at row {row_number}: {ex}")
