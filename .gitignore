@@ -46,3 +46,4 @@ venv/
 
 # macOS artifacts
 .DS_Store
+status_dashboard.gs
