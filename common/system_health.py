@@ -36,7 +36,7 @@ class SystemHealthMonitor:
     Defaults to 75% for CPU and Memory as configured for Pentium G4400 / 8GB RAM machines.
     """
 
-    def __init__(self, cpu_threshold: float = 75.0, mem_threshold: float = 75.0, cache_ttl: float = 1.0):
+    def __init__(self, cpu_threshold: float = 95.0, mem_threshold: float = 85.0, cache_ttl: float = 1.0):
         self.cpu_threshold = cpu_threshold
         self.mem_threshold = mem_threshold
         self.cache_ttl = cache_ttl

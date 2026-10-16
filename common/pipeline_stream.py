@@ -43,8 +43,8 @@ class PipelineCoordinator:
 
         self.session = session
         self.health_monitor = health_monitor or SystemHealthMonitor(
-            cpu_threshold=float(os.getenv("SYSTEM_HEALTH_CPU_THRESHOLD", "75.0")),
-            mem_threshold=float(os.getenv("SYSTEM_HEALTH_MEM_THRESHOLD", "75.0"))
+            cpu_threshold=float(os.getenv("SYSTEM_HEALTH_CPU_THRESHOLD", "95.0")),
+            mem_threshold=float(os.getenv("SYSTEM_HEALTH_MEM_THRESHOLD", "88.0"))
         )
 
         # Decoupled streaming queues

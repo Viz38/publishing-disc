@@ -69,8 +69,8 @@ max_threads = os.cpu_count()
 _SHEET_DIR = os.path.dirname(os.path.abspath(__file__))
 LOCAL_CACHE = LocalSheetCache(os.path.join(_SHEET_DIR, "discovery_cache.csv"))
 SYSTEM_HEALTH = SystemHealthMonitor(
-    cpu_threshold=float(os.getenv("SYSTEM_HEALTH_CPU_THRESHOLD_5321", os.getenv("SYSTEM_HEALTH_CPU_THRESHOLD", "82.0"))),
-    mem_threshold=float(os.getenv("SYSTEM_HEALTH_MEM_THRESHOLD_5321", os.getenv("SYSTEM_HEALTH_MEM_THRESHOLD", "80.0"))),
+    cpu_threshold=float(os.getenv("SYSTEM_HEALTH_CPU_THRESHOLD_5321", os.getenv("SYSTEM_HEALTH_CPU_THRESHOLD", "95.0"))),
+    mem_threshold=float(os.getenv("SYSTEM_HEALTH_MEM_THRESHOLD_5321", os.getenv("SYSTEM_HEALTH_MEM_THRESHOLD", "88.0"))),
     cache_ttl=1.0
 )
 
@@ -267,8 +267,8 @@ BACKLOG_MANAGER = BacklogManager()
 Nvidia_Base_Model  = "meta/muse-glimmer-30b"
 Nvidia_Endpoint = "https://integrate.api.nvidia.com/v1/chat/completions"
 
-# Dedicated sharded NIM API keys for Sheet 1 (9 isolated keys, 0 cross-process collisions)
-NIM_HARDCODED_KEYS = get_sharded_nim_keys(1, total_sheets=4, keys=settings.NIM_API_KEYS)
+# Dedicated sharded NIM API keys for Sheet 1 (sharded across 2 sheets per host = 16-17 isolated keys)
+NIM_HARDCODED_KEYS = get_sharded_nim_keys(1, total_sheets=2, keys=settings.NIM_API_KEYS)
 NIM_KEY_MANAGER = NIMKeyManager(list(NIM_HARDCODED_KEYS))
 
 # Error strings to check
@@ -674,7 +674,7 @@ async def Nvidia_API_ASYNC(promptMsg, token_rotator: NIMKeyManager = None, max_a
     original_user_content = str(promptMsg)
 
     ssl_ctx = False if _nim_use_unverified_ssl else get_nim_ssl_context()
-    timeout = aiohttp.ClientTimeout(total=15.0, sock_connect=4.0, sock_read=12.0)
+    timeout = aiohttp.ClientTimeout(total=40.0, sock_connect=5.0, sock_read=35.0)
 
     attempt = 0
     while attempt < max_attempts and (token_rotator is None or token_rotator.keys):
@@ -777,9 +777,9 @@ async def Nvidia_API_ASYNC(promptMsg, token_rotator: NIMKeyManager = None, max_a
                 await asyncio.sleep(backoff)
 
             except asyncio.TimeoutError:
-                logging.warning(f"NIM API timeout on key ...{api_key[-6:]} (>12s, attempt {attempt}/{max_attempts}). Applying 15s cooldown...")
+                logging.warning(f"NIM API timeout on key ...{api_key[-6:]} (>50s, attempt {attempt}/{max_attempts}). Applying brief 2s pause...")
                 if token_rotator and api_key:
-                    token_rotator.mark_rate_limited(api_key, penalty_sec=15.0)
+                    token_rotator.mark_rate_limited(api_key, penalty_sec=2.0)
                 await asyncio.sleep(min(1.0, 0.2 + attempt * 0.2))
 
             except Exception as e:
@@ -970,9 +970,14 @@ async def Gemini_API_WITH_CACHE(user_input_msg, Gemini_Token, cache_name, timeou
     # Define how long to wait for the API to complete
     timeout = aiohttp.ClientTimeout(total=timeout_limit)
     
-    async with aiohttp.ClientSession(timeout=timeout) as session:
+    close_sess = False
+    active_sess = session
+    if active_sess is None:
+        active_sess = aiohttp.ClientSession(timeout=timeout)
+        close_sess = True
+    try:
         # The 'await' here ensures the process holds until completion
-        async with session.post(url, headers=headers, json=formData) as response:
+        async with active_sess.post(url, headers=headers, json=formData, timeout=timeout) as response:
             if response.status == 200:
                 json_res = await response.json()
 
@@ -988,6 +993,9 @@ async def Gemini_API_WITH_CACHE(user_input_msg, Gemini_Token, cache_name, timeou
             else:
                 print(f"? Call Error: {await response.text()}")
                 return resultMap #""
+    finally:
+        if close_sess and active_sess:
+            await active_sess.close()
 
 
 #*************************************** Gemini API - Caching (Sync Version) *************************************
@@ -2844,8 +2852,8 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
     elif raw_data_platform and safe_str(raw_data_platform).strip():
         final_raw_data = safe_str(raw_data_platform).strip()
 
-    if len(final_raw_data) > 48000:
-        final_raw_data = final_raw_data[:48000]
+    if len(final_raw_data) > 15000:
+        final_raw_data = final_raw_data[:15000]
 
     if not base_prompt_for_summery:
         base_prompt_for_summery = summery_base_prompt
@@ -4282,7 +4290,7 @@ async def Integrated_Extract_domains(
                         pass
 
                     now = time.time()
-                    if buffer and (len(buffer) >= 100 or (now - last_flush) >= 60.0):
+                    if buffer and (len(buffer) >= 100 or (now - last_flush) >= 600.0):
                         await _flush_sheet_buffer(buffer)
                         buffer.clear()
                         last_flush = time.time()
@@ -4298,8 +4306,8 @@ async def Integrated_Extract_domains(
         # Decoupled SEDA Two-Stage Architecture
         # Stage 1: Fast Dedicated NIM Summarizer Producer Pool (leases keys at maximum 35-40 RPM rate)
         # Stage 2: Paced Gemini Predictions & Tracxn Movements Consumer Pool (consumes precomputed summaries)
-        sharded_key_count = token_rotator.get_total_keys() if token_rotator else 8
-        default_nim_workers = max(1, sharded_key_count)
+        sharded_key_count = token_rotator.get_total_keys() if token_rotator else 17
+        default_nim_workers = max(20, sharded_key_count)
         num_nim_workers = min(int(os.getenv("MAX_NIM_WORKERS", str(default_nim_workers))), max(1, len(pf_data)))
         num_downstream_workers = min(MAX_WORKERS, max(1, len(pf_data)))
         nim_semaphore = asyncio.Semaphore(num_nim_workers)
