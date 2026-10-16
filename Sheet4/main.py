@@ -2867,12 +2867,12 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
     # Summary status: SUCCESS, NO_RAW_DATA, or FAILED (written to Col AN / 40)
     summary_status = ""
 
-    # Smart auto-resume: check if NIM summary already exists in row (Col 41 / index 41 or index 40)
+    # Smart auto-resume: prioritize Column AO (index 40, output_data_summery) over Col AP (index 41, base_prompt_for_if)
     existing_summary = ""
-    if len(row) > 41 and safe_str(row[41]).strip() and safe_str(row[41]).strip() != safe_str(if_pred_base_prompt).strip():
-        existing_summary = safe_str(row[41]).strip()
-    elif len(row) > 40 and safe_str(row[40]).strip() and safe_str(row[40]).strip() != safe_str(base_prompt_for_summery).strip() and not safe_str(row[40]).strip().startswith("http"):
+    if len(row) > 40 and safe_str(row[40]).strip() and safe_str(row[40]).strip() != safe_str(base_prompt_for_summery).strip() and not safe_str(row[40]).strip().startswith("http"):
         existing_summary = safe_str(row[40]).strip()
+    elif len(row) > 41 and safe_str(row[41]).strip() and safe_str(row[41]).strip() != safe_str(if_pred_base_prompt).strip():
+        existing_summary = safe_str(row[41]).strip()
 
     if precomputed_summary:
         output_data_summery = precomputed_summary
@@ -4364,6 +4364,7 @@ async def Integrated_Extract_domains(
                     break
 
                 idx, row = item
+                row_number = start_row_num + idx
                 if not row or not row[0]:
                     await summarized_queue.put((idx, row, None, True))
                     domain_queue.task_done()
