@@ -617,7 +617,7 @@ async def Nvidia_API_ASYNC(promptMsg, token_rotator: NIMKeyManager = None, max_a
     original_user_content = str(promptMsg)
 
     ssl_ctx = False if _nim_use_unverified_ssl else get_nim_ssl_context()
-    timeout = aiohttp.ClientTimeout(total=130.0)
+    timeout = aiohttp.ClientTimeout(total=25.0, sock_connect=5.0, sock_read=20.0)
 
     attempt = 0
     while attempt < max_attempts and (token_rotator is None or token_rotator.keys):
@@ -713,8 +713,10 @@ async def Nvidia_API_ASYNC(promptMsg, token_rotator: NIMKeyManager = None, max_a
             await asyncio.sleep(backoff)
 
         except asyncio.TimeoutError:
-            logging.warning(f"NIM API Timeout (attempt {attempt}/{max_attempts}) on key ...{api_key[-6:]}")
-            await asyncio.sleep(min(5.0, 1.0 + attempt))
+            if token_rotator:
+                token_rotator.mark_rate_limited(api_key, cooldown_seconds=60.0)
+            logging.warning(f"NIM API Timeout on key ...{api_key[-6:]} (penalized 60s, attempt {attempt}/{max_attempts})")
+            await asyncio.sleep(min(3.0, 0.5 + attempt * 0.5))
 
         except Exception as e:
             err_str = str(e).lower()
