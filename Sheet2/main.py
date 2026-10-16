@@ -613,7 +613,11 @@ async def Nvidia_API_ASYNC(promptMsg, token_rotator: NIMKeyManager = None, max_a
     global _nim_use_unverified_ssl
     if token_rotator is None and 'NIM_KEY_MANAGER' in globals() and NIM_KEY_MANAGER is not None:
         token_rotator = NIM_KEY_MANAGER
-    system_instruction = "You are a professional website information extractor and summarizer."
+    system_instruction = (
+        "You are a professional website information extractor and summarizer. "
+        "Output ONLY the final single continuous summary paragraph directly. "
+        "Do NOT output any thinking process, reasoning steps, analysis, planning notes, or bullet points."
+    )
     if max_attempts is None:
         tt = getattr(token_rotator, "total_tokens", None)
         max_attempts = int(tt) * 2 if isinstance(tt, (int, float)) else 10
@@ -633,63 +637,70 @@ async def Nvidia_API_ASYNC(promptMsg, token_rotator: NIMKeyManager = None, max_a
     original_user_content = str(promptMsg)
 
     ssl_ctx = False if _nim_use_unverified_ssl else get_nim_ssl_context()
-    timeout = aiohttp.ClientTimeout(total=25.0, sock_connect=5.0, sock_read=20.0)
+    timeout = aiohttp.ClientTimeout(total=60.0, sock_connect=5.0, sock_read=55.0)
 
     attempt = 0
     while attempt < max_attempts and (token_rotator is None or token_rotator.keys):
         attempt += 1
+        api_key = None
 
-        # Get key with cooldown awareness
-        if token_rotator:
-            api_key, wait_time = await token_rotator.get_next_key_async()
-            if wait_time > 0:
-                logging.warning(f"All {len(token_rotator.keys)} NIM keys cooling down. Backing off {wait_time:.1f}s...")
-                await asyncio.sleep(min(wait_time, 15.0))
-        else:
-            api_key = NIM_HARDCODED_KEYS[0] if NIM_HARDCODED_KEYS else ""
-
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "Accept": "application/json"
-        }
-
-        close_sess = False
-        active_sess = session
-        if active_sess is None:
-            active_sess = aiohttp.ClientSession()
-            close_sess = True
         try:
-            async with active_sess.post(Nvidia_Endpoint, headers=headers, json=payload, timeout=timeout, ssl=ssl_ctx) as resp:
+            # Get key with in-flight concurrency isolation and cooldown awareness
+            if token_rotator:
+                api_key, wait_time = await token_rotator.get_next_key_async()
+                if wait_time > 0:
+                    logging.info(f"NIM keys cooling down / in-flight. Throttling {wait_time:.1f}s (attempt {attempt})...")
+                    await asyncio.sleep(min(wait_time, 15.0))
+            else:
+                api_key = NIM_HARDCODED_KEYS[0] if NIM_HARDCODED_KEYS else ""
 
-                    # ?? 200 OK ??
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            }
+
+            close_sess = False
+            active_sess = session
+            if active_sess is None:
+                active_sess = aiohttp.ClientSession()
+                close_sess = True
+            try:
+                async with active_sess.post(Nvidia_Endpoint, headers=headers, json=payload, timeout=timeout, ssl=ssl_ctx) as resp:
+
+                    # 200 OK
                     if resp.status == 200:
                         data = await resp.json()
                         choices = data.get("choices", [])
                         if choices:
                             msg = choices[0].get("message", {})
-                            content = msg.get("content") or msg.get("reasoning_content", "")
+                            content = msg.get("content") or msg.get("reasoning_content") or ""
                             cleaned = sanitize_summary_output(content)
                             if cleaned and "below is the website extraction" not in cleaned.lower():
                                 return cleaned
-                        # Empty/refused response ? retry with same temperature (always 0.0)
+                        # Empty/refused response -> retry with same temperature (always 0.0)
                         logging.warning(f"Empty/incomplete NIM response (attempt {attempt}/{max_attempts}), key ...{api_key[-6:]}")
                         await asyncio.sleep(0.5)
 
-                    # ?? 401/403 Unauthorized / Forbidden ??
+                    # 202 Accepted (NVCF queued/in-progress)
+                    elif resp.status == 202:
+                        logging.info(f"NIM 202 Accepted on key ...{api_key[-6:]} (queued on NVCF). Waiting 2.0s...")
+                        await asyncio.sleep(2.0)
+
+                    # 401/403 Unauthorized / Forbidden
                     elif resp.status in (401, 403):
                         if token_rotator:
                             token_rotator.mark_invalid(api_key)
                         await asyncio.sleep(0.1)
 
-                    # ?? 429 Rate Limited ??
+                    # 429 Rate Limited
                     elif resp.status == 429:
                         if token_rotator:
                             token_rotator.mark_rate_limited(api_key, cooldown_seconds=25.0)
                         logging.info(f"NIM 429 rate limit on key ...{api_key[-6:]}. Rotating (attempt {attempt})...")
                         await asyncio.sleep(0.3)
 
-                    # ?? 400 Bad Request (context length overflow) ??
+                    # 400 Bad Request (context length overflow)
                     elif resp.status == 400:
                         resp_text = await resp.text()
                         logging.warning(f"NIM 400 Bad Request: {resp_text[:120]}. Shortening context and retrying...")
@@ -697,7 +708,7 @@ async def Nvidia_API_ASYNC(promptMsg, token_rotator: NIMKeyManager = None, max_a
                         payload["messages"][1]["content"] = shorter
                         await asyncio.sleep(0.5)
 
-                    # ?? 404 Not Found (account deactivated / model endpoint issue) ??
+                    # 404 Not Found (account deactivated / model endpoint issue)
                     elif resp.status == 404:
                         resp_text = await resp.text()
                         logging.warning(f"NIM 404 on key ...{api_key[-6:]}: {resp_text[:120]}. Deactivating key...")
@@ -705,47 +716,52 @@ async def Nvidia_API_ASYNC(promptMsg, token_rotator: NIMKeyManager = None, max_a
                             token_rotator.mark_invalid(api_key)
                         await asyncio.sleep(0.1)
 
-                    # ?? 5xx Server Errors ??
+                    # 5xx Server Errors
                     elif resp.status in (500, 502, 503, 504):
                         backoff = min(15.0, 1.5 ** min(attempt, 4))
                         logging.warning(f"NIM server error {resp.status} on key ...{api_key[-6:]}. Backing off {backoff:.1f}s...")
                         await asyncio.sleep(backoff)
 
-                    # ?? Other status codes ??
+                    # Other status codes
                     else:
                         resp_text = await resp.text()
                         logging.warning(f"NIM API {resp.status} on key ...{api_key[-6:]}: {resp_text[:120]}. Retrying...")
                         await asyncio.sleep(1.0)
 
-        except aiohttp.ClientConnectorCertificateError:
-            if not _nim_use_unverified_ssl:
-                _nim_use_unverified_ssl = True
-                ssl_ctx = False
-                logging.warning("NIM SSL certificate verification failed. Auto-switching to unverified SSL mode.")
-                await asyncio.sleep(0.5)
-                continue
-            backoff = min(10.0, 1.0 + attempt * 0.5)
-            logging.warning(f"NIM SSL error (attempt {attempt}). Backing off {backoff:.1f}s...")
-            await asyncio.sleep(backoff)
+            except aiohttp.ClientConnectorCertificateError:
+                if not _nim_use_unverified_ssl:
+                    _nim_use_unverified_ssl = True
+                    ssl_ctx = False
+                    logging.warning("NIM SSL certificate verification failed. Auto-switching to unverified SSL mode.")
+                    await asyncio.sleep(0.5)
+                    continue
+                backoff = min(10.0, 1.0 + attempt * 0.5)
+                logging.warning(f"NIM SSL error (attempt {attempt}). Backing off {backoff:.1f}s...")
+                await asyncio.sleep(backoff)
 
-        except asyncio.TimeoutError:
-            if token_rotator:
-                token_rotator.mark_rate_limited(api_key, cooldown_seconds=60.0)
-            logging.warning(f"NIM API Timeout on key ...{api_key[-6:]} (penalized 60s, attempt {attempt}/{max_attempts})")
-            await asyncio.sleep(min(3.0, 0.5 + attempt * 0.5))
+            except asyncio.TimeoutError:
+                logging.warning(f"NIM API timeout on key ...{api_key[-6:]} (>55s, attempt {attempt}/{max_attempts})")
+                await asyncio.sleep(min(2.0, 0.5 + attempt * 0.5))
 
-        except Exception as e:
-            err_str = str(e).lower()
-            if "too many open files" in err_str or "errno 24" in err_str:
-                logging.warning("OS file descriptor limit reached in NIM worker. Pausing 1.5s for socket cleanup...")
-                await asyncio.sleep(1.5)
+            except Exception as e:
+                err_str = str(e).lower()
+                if "too many open files" in err_str or "errno 24" in err_str:
+                    logging.warning("OS file descriptor limit reached in NIM worker. Pausing 1.5s for socket cleanup...")
+                    await asyncio.sleep(1.5)
 
-            backoff = min(10.0, 1.0 + attempt * 0.5)
-            err_name = type(e).__name__
-            err_msg = str(e).strip()
-            err_desc = f"{err_name}: {err_msg}" if err_msg else err_name
-            logging.warning(f"NIM network exception (attempt {attempt}): {err_desc}. Backing off {backoff:.1f}s...")
-            await asyncio.sleep(backoff)
+                backoff = min(10.0, 1.0 + attempt * 0.5)
+                err_name = type(e).__name__
+                err_msg = str(e).strip()
+                err_desc = f"{err_name}: {err_msg}" if err_msg else err_name
+                logging.warning(f"NIM network exception (attempt {attempt}): {err_desc}. Backing off {backoff:.1f}s...")
+                await asyncio.sleep(backoff)
+            finally:
+                if close_sess and active_sess:
+                    await active_sess.close()
+
+        finally:
+            if token_rotator and api_key:
+                token_rotator.release_key(api_key)
 
     logging.error(f"All {max_attempts} attempts failed for Nvidia NIM API call.")
     return ""
