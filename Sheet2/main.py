@@ -2890,12 +2890,21 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
     # Summary status: SUCCESS, NO_RAW_DATA, or FAILED (written to Col AN / 40)
     summary_status = ""
 
-    # Smart auto-resume: prioritize Column AO (index 40, output_data_summery) over Col AP (index 41, base_prompt_for_if)
+    # Smart auto-resume: prioritize Column AJ (idx 35) in 57-col schema or Column AO (idx 40) in legacy schema
     existing_summary = ""
-    if len(row) > 40 and safe_str(row[40]).strip() and safe_str(row[40]).strip() != safe_str(base_prompt_for_summery).strip() and not safe_str(row[40]).strip().startswith("http"):
-        existing_summary = safe_str(row[40]).strip()
-    elif len(row) > 41 and safe_str(row[41]).strip() and safe_str(row[41]).strip() != safe_str(if_pred_base_prompt).strip():
-        existing_summary = safe_str(row[41]).strip()
+    is_57col = (len(row) <= 65)
+    if is_57col:
+        # 57-column schema: Col AI (idx 34) is NIM Status, Col AJ (idx 35) is NIM Summary
+        if len(row) > 35 and safe_str(row[35]).strip() and not safe_str(row[35]).strip().startswith("http"):
+            existing_summary = safe_str(row[35]).strip()
+        elif len(row) > 36 and safe_str(row[36]).strip() and not safe_str(row[36]).strip().startswith("http"):
+            existing_summary = safe_str(row[36]).strip()
+    else:
+        # Legacy 70/93-column schema: Col AO (idx 40) is NIM Summary, Col AP (idx 41) is base prompt
+        if len(row) > 40 and safe_str(row[40]).strip() and safe_str(row[40]).strip() != safe_str(base_prompt_for_summery).strip() and not safe_str(row[40]).strip().startswith("http"):
+            existing_summary = safe_str(row[40]).strip()
+        elif len(row) > 41 and safe_str(row[41]).strip() and safe_str(row[41]).strip() != safe_str(if_pred_base_prompt).strip():
+            existing_summary = safe_str(row[41]).strip()
 
     if precomputed_summary:
         output_data_summery = precomputed_summary
@@ -2903,7 +2912,10 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
         logging.info(f"Using precomputed cycle NIM summary for {domain} (length {len(output_data_summery)}).")
     elif existing_summary:
         output_data_summery = existing_summary
-        summary_status = safe_str(row[39]).strip() if (len(row) > 39 and safe_str(row[39]).strip()) else "SUCCESS"
+        if is_57col:
+            summary_status = safe_str(row[34]).strip() if (len(row) > 34 and safe_str(row[34]).strip()) else "SUCCESS"
+        else:
+            summary_status = safe_str(row[39]).strip() if (len(row) > 39 and safe_str(row[39]).strip()) else "SUCCESS"
         logging.info(f"Smart auto-resume: reusing existing summary for {domain} (length {len(output_data_summery)}) with status {summary_status}")
     elif not final_raw_data:
         output_data_summery = ""
@@ -2999,12 +3011,21 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
         output_data_if_name = ""
         output_data_if_id = ""
 
-        if len(row) > 44 and safe_str(row[44]).strip():
-            output_data_if = safe_str(row[44]).strip()
-            if len(row) > 45 and safe_str(row[45]).strip():
-                output_data_if_name = safe_str(row[45]).strip()
-            if len(row) > 46 and safe_str(row[46]).strip():
-                output_data_if_id = safe_str(row[46]).strip()
+        if (is_57col and len(row) > 37 and safe_str(row[37]).strip()) or (not is_57col and len(row) > 44 and safe_str(row[44]).strip()):
+            if is_57col:
+                # 57-column schema: Col AL (idx 37) is IF Status, Col AM (idx 38) is IF Name, Col AN (idx 39) is IF ID
+                output_data_if = safe_str(row[37]).strip()
+                if len(row) > 38 and safe_str(row[38]).strip():
+                    output_data_if_name = safe_str(row[38]).strip()
+                if len(row) > 39 and safe_str(row[39]).strip():
+                    output_data_if_id = safe_str(row[39]).strip()
+            else:
+                # Legacy 70/93-column schema: Col AS (idx 44) is IF Status, Col AT (idx 45) is IF Name, Col AU (idx 46) is IF ID
+                output_data_if = safe_str(row[44]).strip()
+                if len(row) > 45 and safe_str(row[45]).strip():
+                    output_data_if_name = safe_str(row[45]).strip()
+                if len(row) > 46 and safe_str(row[46]).strip():
+                    output_data_if_id = safe_str(row[46]).strip()
             logging.info(f"Smart resume: reusing existing IF prediction for {domain}: {output_data_if}")
         elif output_data_summery:
             if not base_prompt_for_if:
