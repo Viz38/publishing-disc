@@ -648,6 +648,9 @@ _nim_use_unverified_ssl = False
 
 async def Nvidia_API_ASYNC(promptMsg, token_rotator: NIMKeyManager = None, max_attempts: int = None, session: aiohttp.ClientSession = None):
     global _nim_use_unverified_ssl
+    if is_pre_cutoff_window() or is_5am_ist_cutoff():
+        logging.info("⏰ [Pre-Cutoff Wind-Down] Skipping outbound NVIDIA NIM API call during 04:30-05:00 AM window.")
+        return ""
     if token_rotator is None and 'NIM_KEY_MANAGER' in globals() and NIM_KEY_MANAGER is not None:
         token_rotator = NIM_KEY_MANAGER
     system_instruction = (
@@ -3569,11 +3572,14 @@ async def Integrated_Process_domain(
 
                 # 1. Generate Job ID if missing
                 if not tc_job_id and domain:
-                    tc_job_id = await tc_client.generate_job_id(session, domain)
-                    if tc_job_id:
-                        tc_job_gen_time = datetime.datetime.now().strftime("%d/%b/%Y %H:%M:%S")
-                        created_timestamp = time.time()
-                        tc_status = "PROCESSING"
+                    if is_pre_cutoff_window() or is_5am_ist_cutoff():
+                        logging.info(f"⏰ [Pre-Cutoff Wind-Down] Skipping new Tech Crawler job generation for {domain}")
+                    else:
+                        tc_job_id = await tc_client.generate_job_id(session, domain)
+                        if tc_job_id:
+                            tc_job_gen_time = datetime.datetime.now().strftime("%d/%b/%Y %H:%M:%S")
+                            created_timestamp = time.time()
+                            tc_status = "PROCESSING"
 
                 # 2. Track Job once if in progress
                 if tc_job_id and tc_status in ("", "PROCESSING") and not home_body:
@@ -3646,11 +3652,14 @@ async def Integrated_Process_domain(
 
                 # 4. Fallback Rule: Switch to Waterfall Scraper ONLY if Tech Crawler FAILED or unable to scrape
                 if not home_body and tc_status in ("FAILED", ""):
-                    waterfall_scraper = WaterfallScraper()
-                    home_body, scrape_method = await waterfall_scraper.scrape_domain(session, domain)
-                    if home_body:
-                        scrappingBeautySoup = home_body
-                    logging.info(f"Fallback waterfall scraper for {domain} result: {scrape_method} (length: {len(home_body)})")
+                    if is_pre_cutoff_window() or is_5am_ist_cutoff():
+                        logging.info(f"⏰ [Pre-Cutoff Wind-Down] Skipping fallback waterfall scraper for {domain}")
+                    else:
+                        waterfall_scraper = WaterfallScraper()
+                        home_body, scrape_method = await waterfall_scraper.scrape_domain(session, domain)
+                        if home_body:
+                            scrappingBeautySoup = home_body
+                        logging.info(f"Fallback waterfall scraper for {domain} result: {scrape_method} (length: {len(home_body)})")
 
             body_results = home_body if home_body else ["Website is not working."]
 
@@ -3806,6 +3815,7 @@ async def Integrated_Process_domain(
                     "tc_status": tc_status,
                     "domain": domain,
                     "row": row,
+                    "tc_job_id": tc_job_id,
                     "summary_status": summary_status,
                     "summary": output_data_summery,
                     "rowData": rowData,
@@ -4281,7 +4291,11 @@ async def Integrated_Extract_domains(
                         pass
 
                     now = time.time()
-                    if buffer and (len(buffer) >= 100 or (now - last_flush) >= 60.0):
+                    in_pre_cutoff = is_pre_cutoff_window() or is_5am_ist_cutoff()
+                    flush_threshold = 15 if in_pre_cutoff else 50
+                    flush_interval = 5.0 if in_pre_cutoff else 30.0
+
+                    if buffer and (len(buffer) >= flush_threshold or (now - last_flush) >= flush_interval):
                         await _flush_sheet_buffer(buffer)
                         buffer.clear()
                         last_flush = time.time()
@@ -4494,6 +4508,11 @@ async def Integrated_Extract_domains(
                         downstream_row = stage1_res.get("rowData") or row
                         precomputed_sum = stage1_res.get("summary")
 
+                        if is_pre_cutoff_window() and not precomputed_sum:
+                            # Pre-cutoff wind-down: skip un-summarized rows to avoid blocking consumer; only finish predictions on summarized rows
+                            logging.info(f"⏰ [Pre-Cutoff Wind-Down] Skipping prediction for un-summarized domain {domain} to fast-track buffer drain.")
+                            continue
+
                         full_res = await Integrated_Process_domain(
                             session,
                             domain,
@@ -4687,9 +4706,13 @@ async def Integrated_Extract_domains(
                 for item in pending_tech_crawler_jobs:
                     if os.path.exists(STOP_FILE):
                         break
-                    d = item["domain"]
-                    r_num = item["row"]
-                    j_id = item["tc_job_id"]
+                    if not isinstance(item, dict):
+                        continue
+                    d = item.get("domain", "")
+                    r_num = item.get("row", 0)
+                    j_id = item.get("tc_job_id", "")
+                    if not d or not j_id:
+                        continue
                     orig_row = item.get("rowData") or []
 
                     try:
