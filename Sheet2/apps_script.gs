@@ -69,6 +69,7 @@ function onOpen() {
   const ui = SpreadsheetApp.getUi();
   ui.createMenu('\uD83D\uDE80 Discovery Engine (CF-2)')
     .addItem('\u25B6\uFE0F Run Pipeline', 'uiStartRun')
+    .addItem('\uD83D\uDD04 Clear & Fetch Domains', 'uiClearAndFetchDomains')
     .addSeparator()
     .addItem('\uD83D\uDEA6 Check Status', 'uiCheckStatus')
     .addItem('\uD83D\uDCCA Check Health', 'uiCheckHealth')
@@ -679,4 +680,121 @@ function cleanSheet() {
 function forceReset() {
   PropertiesService.getDocumentProperties().deleteAllProperties();
   SpreadsheetApp.getActiveSpreadsheet().toast("\u2705 All cache cleared.");
+}
+
+/**
+ * Core Headless Executor to Clear & Fetch Domains
+ * Safe for BOTH UI triggers and Time-driven background triggers (ZERO UI dependencies).
+ * 
+ * @param {boolean} silent When true, suppresses spreadsheet toasts.
+ * @return {Object} Status containing success, workerUrl, workerName.
+ */
+function executeClearAndFetch(silent = true) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet();
+  const sheetId = sheet.getId();
+
+  if (!silent) {
+    try {
+      sheet.toast('Connecting to worker to clear and ingest domains...', '\uD83D\uDD04 Ingesting', 10);
+    } catch(e) {}
+  }
+
+  let targetWorker = null;
+  try {
+    targetWorker = findIdleWorker_();
+  } catch (e) {
+    const prodWorkers = CONFIG.WORKER_URLS.filter(w => w.isProduction);
+    targetWorker = prodWorkers.length > 0 ? prodWorkers[0] : CONFIG.WORKER_URLS[0];
+  }
+
+  Logger.log('Dispathing clear & fetch to worker: ' + targetWorker.name + ' (' + targetWorker.url + ') for sheetId: ' + sheetId);
+
+  const token = getAuthToken_();
+
+  const res = UrlFetchApp.fetch(targetWorker.url + '/discovery/clear-and-fetch', {
+    method: 'post',
+    contentType: 'application/json',
+    headers: { 'Authorization': 'Bearer ' + token },
+    payload: JSON.stringify({
+      sheet_id: sheetId
+    }),
+    muteHttpExceptions: true
+  });
+
+  const statusCode = res.getResponseCode();
+  const responseText = res.getContentText();
+
+  if (statusCode >= 200 && statusCode < 300) {
+    Logger.log('\u2705 Worker accepted Clear & Fetch (' + statusCode + '): ' + responseText);
+    if (!silent) {
+      try {
+        sheet.toast('Clear & Fetch accepted on ' + targetWorker.name, '\u2705 Dispatched', 6);
+      } catch(e) {}
+    }
+    return {
+      success: true,
+      workerUrl: targetWorker.url,
+      workerName: targetWorker.name,
+      response: responseText
+    };
+  } else {
+    throw new Error('Worker rejected clear & fetch (' + statusCode + '): ' + responseText);
+  }
+}
+
+/**
+ * Dedicated Daily Automated Trigger Function to Clear & Fetch Domains
+ * Automatically selects an idle production worker (5321 / 5080) and
+ * clears Row 3+ to ingest fresh domains based on "CF_IF Engine - Input Payload".
+ * Strictly headless with ZERO UI calls - select this when configuring Time-driven Triggers.
+ */
+function triggerDailyClearAndFetchDomains() {
+  Logger.log('\u23F0 Starting automated daily clear & fetch domains (silent headless)...');
+  try {
+    const result = executeClearAndFetch(true);
+    Logger.log('\u2705 Automated clear & fetch successfully dispatched to ' + result.workerName + ' (' + result.workerUrl + ')');
+    return result;
+  } catch(err) {
+    Logger.log('\u274C Automated daily clear & fetch trigger failed: ' + err.message);
+    throw err;
+  }
+}
+
+/**
+ * Menu action to clear Row 3+ in CF_IF_Engine_Database and fetch fresh domains
+ * directly from Tracxn API based on "CF_IF Engine - Input Payload".
+ * Interactive UI wrapper around executeClearAndFetch().
+ */
+function uiClearAndFetchDomains() {
+  const ui = SpreadsheetApp.getUi();
+  const sheet = SpreadsheetApp.getActiveSpreadsheet();
+
+  const confirm = ui.alert(
+    '\uD83D\uDD04 Clear & Fetch Domains',
+    'Are you sure you want to clear this sheet (Rows 3+) and pull fresh domains from Tracxn?\n\n' +
+    '\u2022 All existing domain data in CF_IF_Engine_Database (Row 3+) will be cleared.\n' +
+    '\u2022 Fresh domains will be fetched via Tracxn API using payload definitions in "CF_IF Engine - Input Payload".\n' +
+    '\u2022 The downstream processing pipeline will NOT be started automatically.\n\n' +
+    'Do you want to proceed?',
+    ui.ButtonSet.YES_NO
+  );
+
+  if (confirm !== ui.Button.YES) {
+    sheet.toast('Clear & Fetch operation cancelled.', '\u2139\uFE0F Cancelled', 5);
+    return;
+  }
+
+  try {
+    const result = executeClearAndFetch(false);
+    ui.alert(
+      '\u2705 Domain Ingestion Dispatched',
+      'Successfully dispatched Clear & Fetch on ' + result.workerName + ' (' + result.workerUrl + ').\n\n' +
+      'The worker is clearing old data and pulling fresh domains from Tracxn in the background.\n' +
+      'Fresh domains will populate CF_IF_Engine_Database starting at Row 3.\n\n' +
+      'Note: Downstream pipeline was NOT triggered as requested.',
+      ui.ButtonSet.OK
+    );
+  } catch (err) {
+    ui.alert('\u274C Clear & Fetch Failed', 'Error: ' + err.message, ui.ButtonSet.OK);
+  }
 }

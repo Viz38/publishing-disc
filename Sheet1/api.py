@@ -612,6 +612,32 @@ async def start_pipeline(req: RunRequest, background_tasks: BackgroundTasks):
     background_tasks.add_task(run_pipeline_task, req)
     return {"status": "accepted", "sheet_id": req.sheet_id or settings.CF_SHEET_ID}
 
+def run_clear_and_fetch_task(sheet_id: str):
+    try:
+        from Temp_Test.tracxn_domain_ingestor import TracxnDomainIngestor
+        ingestor = TracxnDomainIngestor()
+        sheet_cfg = {
+            "name": f"Sheet-{sheet_id[:8]}",
+            "sheet_id": sheet_id
+        }
+        count = ingestor.ingest_domains_for_sheet(sheet_cfg, clear_first=True)
+        logger.info(f"✅ Clear & Fetch completed for sheet {sheet_id}: {count} domains ingested.")
+    except Exception as e:
+        logger.error(f"❌ Clear & Fetch failed for sheet {sheet_id}: {e}", exc_info=True)
+
+@app.post("/discovery/clear-and-fetch", dependencies=[Depends(verify_token)])
+@app.post("/sheet1/clear-and-fetch", dependencies=[Depends(verify_token)])
+@app.post("/discovery/fetch-domains", dependencies=[Depends(verify_token)])
+@app.post("/sheet1/fetch-domains", dependencies=[Depends(verify_token)])
+async def clear_and_fetch_domains_route(background_tasks: BackgroundTasks, req: Optional[RunRequest] = None):
+    target_sheet_id = (req.sheet_id if req else None) or settings.CF_SHEET_ID
+    background_tasks.add_task(run_clear_and_fetch_task, target_sheet_id)
+    return {
+        "status": "accepted",
+        "message": "Clear and fetch domains initiated in background",
+        "sheet_id": target_sheet_id
+    }
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=settings.DISCOVERY_PORT)

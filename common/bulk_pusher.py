@@ -24,7 +24,9 @@ class BulkSheetPusher:
         sheet_name: str = "CF_IF_Engine_Database",
         batch_size: int = 50,
         start_row: int = 3,
-        max_cell_len: int = 5000
+        max_cell_len: int = 49000,
+        schema_cols: int = 57,
+        start_col: Optional[int] = None
     ):
         self.csv_path = csv_path
         self.sheet_id = sheet_id
@@ -32,6 +34,8 @@ class BulkSheetPusher:
         self.batch_size = max(1, batch_size)
         self.start_row = start_row
         self.max_cell_len = max_cell_len
+        self.schema_cols = schema_cols
+        self.start_col = start_col if start_col is not None else (1 if schema_cols == 57 else 4)
 
     def load_records(self) -> List[Dict[str, str]]:
         """Loads non-empty records from the CSV file."""
@@ -48,15 +52,23 @@ class BulkSheetPusher:
         return records
 
     def build_sheet_row(self, record: Dict[str, str], is_cf_sheet: bool = True) -> List[Any]:
-        """Converts a CSV cache record into a full 70-column Google Sheet row."""
-        dummy_row = [""] * 70
-        full_row = LocalSheetCache.build_full_write_row(
-            record.get("domain", ""),
-            dummy_row,
-            is_cf_sheet=is_cf_sheet,
-            record=record
-        )
-        # Cap string lengths to avoid hitting document size limit again
+        """Converts a CSV cache record into an optimized 57-col or 70-col Google Sheet row."""
+        if self.schema_cols == 57:
+            dummy_row = [""] * 57
+            full_row = LocalSheetCache.build_57col_write_row(
+                record.get("domain", ""),
+                dummy_row,
+                record=record
+            )
+        else:
+            dummy_row = [""] * 70
+            full_row = LocalSheetCache.build_full_write_row(
+                record.get("domain", ""),
+                dummy_row,
+                is_cf_sheet=is_cf_sheet,
+                record=record
+            )
+        # Cap string lengths to 49,000 characters to prevent Google Sheets 400 error
         capped_row = [
             (str(c)[:self.max_cell_len] if isinstance(c, str) and len(str(c)) > self.max_cell_len else c)
             for c in full_row
@@ -89,10 +101,10 @@ class BulkSheetPusher:
             chunk_start_row = self.start_row + i
 
             if mock_writer:
-                await mock_writer(client, self.sheet_id, self.sheet_name, chunk_rows, chunk_start_row, 4)
+                await mock_writer(client, self.sheet_id, self.sheet_name, chunk_rows, chunk_start_row, self.start_col)
             else:
                 from Sheet1.main import write_sheet_data
-                await write_sheet_data(client, self.sheet_id, self.sheet_name, chunk_rows, chunk_start_row, 4)
+                await write_sheet_data(client, self.sheet_id, self.sheet_name, chunk_rows, chunk_start_row, self.start_col)
 
             success_count += len(chunk_rows)
             logging.info(f"✅ Bulk push progress: {success_count}/{total} rows pushed to Sheet (start_row: {chunk_start_row})")

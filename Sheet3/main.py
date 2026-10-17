@@ -170,10 +170,16 @@ def is_row_fully_completed(row: list) -> bool:
     A domain is fully completed only when:
     1. It has a non-empty domain name (row[0]).
     2. Tracxn movement has completed via any of the terminal conditions:
-       - Col 62 (idx 61) or Col 63 (idx 62) cf_if_status in terminal statuses
-         (DONE, YES, TRUE, MOVED, MOVED_OUT, SNOOZED, MARKED_IRRELEVANT, MARKED_FOR_LATER, ESCALATED, SKIPPED_UNASSIGNABLE)
-       - Col 63 (idx 62) or Col 64 (idx 63) cf_if_time contains a valid movement timestamp
-       - Col 64 (idx 63) or Col 65 (idx 64) if_pf_status in valid statuses or if_pf_time timestamp
+       - 57-Column Schema:
+         * Col 50 (idx 49, Col AX) cf_if_status in terminal statuses
+         * Col 51 (idx 50, Col AY) cf_if_time contains a valid movement timestamp
+         * Col 52 (idx 51, Col AZ) if_pf_status in terminal statuses
+         * Col 53 (idx 52, Col BA) if_pf_time contains a valid movement timestamp
+       - Legacy 70/93-Column Schema:
+         * Col 62 (idx 61) or Col 63 (idx 62) cf_if_status in terminal statuses
+           (DONE, YES, TRUE, MOVED, MOVED_OUT, SNOOZED, MARKED_IRRELEVANT, MARKED_FOR_LATER, ESCALATED, SKIPPED_UNASSIGNABLE)
+         * Col 63 (idx 62) or Col 64 (idx 63) cf_if_time contains a valid movement timestamp
+         * Col 64 (idx 63) or Col 65 (idx 64) if_pf_status in valid statuses or if_pf_time timestamp
     """
     if not row or not row[0] or not str(row[0]).strip():
         return False
@@ -189,29 +195,17 @@ def is_row_fully_completed(row: list) -> bool:
             return True
         return False
 
-    # Check CF -> IF movement status (Col 62 / idx 61, or Col 63 / idx 62)
-    s_61 = str(row[61]).strip().upper() if len(row) > 61 else ""
-    s_62 = str(row[62]).strip().upper() if len(row) > 62 else ""
-    if s_61 in valid_statuses or s_62 in valid_statuses:
-        return True
+    # Check 57-column schema (Cols AX-BC / indices 49-54)
+    for col_idx in range(49, min(55, len(row))):
+        val = str(row[col_idx]).strip()
+        if val.upper() in valid_statuses or _is_valid_timestamp(val):
+            return True
 
-    # Check CF -> IF movement timestamp (Col 63 / idx 62, or Col 64 / idx 63)
-    t_62 = str(row[62]).strip() if len(row) > 62 else ""
-    t_63 = str(row[63]).strip() if len(row) > 63 else ""
-    if _is_valid_timestamp(t_62) or _is_valid_timestamp(t_63):
-        return True
-
-    # Check IF -> PF movement status (Col 64 / idx 63, or Col 65 / idx 64)
-    s_63 = str(row[63]).strip().upper() if len(row) > 63 else ""
-    s_64 = str(row[64]).strip().upper() if len(row) > 64 else ""
-    if s_63 in valid_statuses or s_64 in valid_statuses:
-        return True
-
-    # Check IF -> PF movement timestamp (Col 65 / idx 64, or Col 66 / idx 65)
-    t_64 = str(row[64]).strip() if len(row) > 64 else ""
-    t_65 = str(row[65]).strip() if len(row) > 65 else ""
-    if _is_valid_timestamp(t_64) or _is_valid_timestamp(t_65):
-        return True
+    # Check Legacy 70/93-column schema (indices 61-66)
+    for col_idx in range(61, min(67, len(row))):
+        val = str(row[col_idx]).strip()
+        if val.upper() in valid_statuses or _is_valid_timestamp(val):
+            return True
 
     return False
 
@@ -481,10 +475,10 @@ async def write_sheet_data(client, SHEET_ID, sheet_name, data, start_row, start_
     if GSHEET_CIRCUIT_BREAKER.should_skip_gsheet():
         return
 
-    # Critical: safely cap all cell values to 49,900 chars to avoid Google Sheets 50,000 char per cell HTTP 400 fatal crash
+    # Critical: safely cap all cell values to 49,000 chars to avoid Google Sheets 50,000 char per cell HTTP 400 fatal crash
     data = [
         [
-            val[:49900] if isinstance(val, str) and len(val) > 49900 else val
+            val[:49000] if isinstance(val, str) and len(val) > 49000 else val
             for val in row
         ]
         for row in data
@@ -3556,17 +3550,23 @@ async def Integrated_Process_domain(
             rowData, can_direct_write = LOCAL_CACHE.hydrate_row_from_cache(domain, rowData)
             if can_direct_write and mode == "full":
                 logging.info(f"✨ [Local CSV Cache Hit] {domain} is fully completed in local cache and missing in sheet. Writing directly to sheet!")
-                write_data = LOCAL_CACHE.build_full_write_row(domain, rowData, is_cf_sheet=(EXTRACTING_SHEET_NAME == CF_EXTRACTING_SHEET_NAME))
+                if len(rowData) <= 65:
+                    full_57 = LOCAL_CACHE.build_57col_write_row(domain, rowData)
+                    write_data = full_57[17:]
+                    write_start_col = 18
+                else:
+                    write_data = LOCAL_CACHE.build_full_write_row(domain, rowData, is_cf_sheet=(EXTRACTING_SHEET_NAME == CF_EXTRACTING_SHEET_NAME))
+                    write_start_col = 20
                 if write_to_sheet:
-                    await write_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, [write_data], row, 20)
+                    await write_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, [write_data], row, write_start_col)
                 return {
                     "tc_status": "SUCCESS",
                     "domain": domain,
                     "row": row,
-                    "tc_job_id": rowData[23],
+                    "tc_job_id": rowData[23] if len(rowData) > 23 else "",
                     "rowData": rowData,
                     "write_data": write_data,
-                    "start_col": 20
+                    "start_col": write_start_col
                 }
 
             tc_job_id = safe_str(rowData[23])
@@ -3801,13 +3801,13 @@ async def Integrated_Process_domain(
                             engineClearedStatus = "DONE"
 
             # Truncate strings safely to prevent API overhead or Google Sheets character limits
-            scrappingBeautySoup = scrappingBeautySoup[:49500]
-            scrappingPlaywright = scrappingPlaywright[:49500]
-            scrappingSelenium = scrappingSelenium[:49500]
-            scrappingGoogleAPI = scrappingGoogleAPI[:49500]
-            scrappingTracxnPF = scrappingTracxnPF[:49500]
-            geminiRawDataInput = geminiRawDataInput[:49500]
-            geminiRevQuerySum = geminiRevQuerySum[:49500]
+            scrappingBeautySoup = scrappingBeautySoup[:49000]
+            scrappingPlaywright = scrappingPlaywright[:49000]
+            scrappingSelenium = scrappingSelenium[:49000]
+            scrappingGoogleAPI = scrappingGoogleAPI[:49000]
+            scrappingTracxnPF = scrappingTracxnPF[:49000]
+            geminiRawDataInput = geminiRawDataInput[:49000]
+            geminiRevQuerySum = geminiRevQuerySum[:49000]
 
             AI_Engine_Output_Result = await Extract_AI_Engine_Output(
                 rowData, scrappingBeautySoup, SHEET_ID, EXTRACTING_SHEET_NAME,
@@ -3920,26 +3920,78 @@ async def Integrated_Process_domain(
                 engineClearedTime = safe_str(rowData[20])
                 engineTimeTaken = rowData[22] if len(rowData) > 22 else ""
 
-            # Prepare sheet write array (Col AN receives summary_status, Col AO receives output_data_summery)
-            if EXTRACTING_SHEET_NAME == CF_EXTRACTING_SHEET_NAME:
-                AI_Engine_Result_Array.append([
+            # Prepare sheet write array
+            is_57col = (len(rowData) <= 65)
+            raw_soup_49k = str(scrappingBeautySoup)[:49000]
+
+            if is_57col:
+                # 57-column optimized layout: Cols 18-57 (40 columns)
+                # Raw data (scrappingBeautySoup) is capped at 49,000 chars per user specification
+                full_write_row = [
+                    safe_str(rowData[17]) or enginePickedTime, # Col 18 (R): Database Added Time
+                    enginePickedTime,                           # Col 19 (S): Engine Pick Time
+                    engineClearedTime,                          # Col 20 (T): Engine Clear Time
+                    engineClearedStatus or "DONE",              # Col 21 (U): Crawling Status
+                    tc_job_id,                                  # Col 22 (V): Job ID
+                    tc_job_gen_time,                            # Col 23 (W): TimeStamp
+                    tc_status,                                  # Col 24 (X): Status
+                    tc_final_url,                               # Col 25 (Y): Final URL
+                    tc_s3_html,                                 # Col 26 (Z): S3 HTML
+                    tc_s3_markdown,                             # Col 27 (AA): S3 Markdown
+                    tc_http_status or "200",                    # Col 28 (AB): HTTP Status
+                    tc_signals or "HTTP_OK",                    # Col 29 (AC): Signals
+                    raw_soup_49k,                               # Col 30 (AD): Raw Data (capped at 49,000 chars)
+                    tc_job_gen_time,                            # Col 31 (AE): TimeStamp
+                    tc_final_url,                               # Col 32 (AF): URL
+                    "",                                         # Col 33 (AG): Error Code
+                    "",                                         # Col 34 (AH): Error Reason
+                    summary_status,                             # Col 35 (AI): NIM Status
+                    output_data_summery,                        # Col 36 (AJ): NIM Summary
+                    output_data_summery,                        # Col 37 (AK): Domain Summary Query
+                    output_data_if,                             # Col 38 (AL): Gemini IF Number
+                    output_data_if_name,                        # Col 39 (AM): IF Name
+                    output_data_if_id,                          # Col 40 (AN): IF ID
+                    output_data_if_name,                        # Col 41 (AO): IF Context
+                    output_data_if_validation,                  # Col 42 (AP): IF Validation Flag
+                    output_data_feed,                           # Col 43 (AQ): Feed Context
+                    output_data_feed,                           # Col 44 (AR): Feed Number
+                    final_feed_name,                            # Col 45 (AS): Feed Name
+                    final_feed_id,                              # Col 46 (AT): Feed ID
+                    final_pub_funnel_name,                      # Col 47 (AU): Publish Funnel Name
+                    final_pub_funnel_id,                        # Col 48 (AV): Publish Funnel ID
+                    "",                                         # Col 49 (AW): Funnel Recheck
+                    cf_if_status,                               # Col 50 (AX): Write API Status CF -> IF
+                    cf_if_time,                                 # Col 51 (AY): Movement Time
+                    if_pf_status,                               # Col 52 (AZ): Write API Status Publish Funnel
+                    if_pf_time,                                 # Col 53 (BA): Movement Time
+                    tag_status_if,                              # Col 54 (BB): Tag Status IF
+                    tag_status_pf,                              # Col 55 (BC): Tag Status PF
+                    "",                                         # Col 56 (BD): Review Tag
+                    discovery_bq                                # Col 57 (BE): Hashtag bu_llm_discovery_processing
+                ]
+                AI_Engine_Result_Array.append(full_write_row)
+                write_start_col = 18
+            elif EXTRACTING_SHEET_NAME == CF_EXTRACTING_SHEET_NAME:
+                full_write_row = [
                     enginePickedTime, engineClearedTime, engineClearedStatus, engineTimeTaken, 
                     tc_job_id, tc_job_gen_time, tc_status, tc_final_url, tc_s3_html, tc_s3_markdown, 
-                    tc_http_status, tc_signals, scrappingBeautySoup, scrappingPlaywright, scrappingSelenium, 
-                    scrappingGoogleAPI, scrappingTracxnPF, rowData[36], "", base_prompt_for_summery, 
+                    tc_http_status, tc_signals, raw_soup_49k, scrappingPlaywright, scrappingSelenium, 
+                    scrappingGoogleAPI, scrappingTracxnPF, rowData[36] if len(rowData) > 36 else "", "", base_prompt_for_summery, 
                     summary_status, output_data_summery, base_prompt_for_if, input_data_for_if, 
                     output_data_if, output_data_if_name, output_data_if_id, input_sumry_for_if_validation, 
                     base_prompt_for_if_validation, input_data_for_if_validation, output_data_if_validation, 
                     input_sumry_for_feed, base_prompt_for_feed, input_data_for_feed, output_data_feed, 
                     final_feed_name, final_feed_id, final_pub_funnel_name, final_pub_funnel_id, "", "", "", 
                     cf_if_status, cf_if_time, if_pf_status, if_pf_time, tag_status_if, tag_status_pf, "", discovery_bq
-                ])
+                ]
+                AI_Engine_Result_Array.append(full_write_row)
+                write_start_col = 20
             else:
-                AI_Engine_Result_Array.append([
+                full_write_row = [
                     enginePickedTime, engineClearedTime, engineClearedStatus, engineTimeTaken, 
                     tc_job_id, tc_job_gen_time, tc_status, tc_final_url, tc_s3_html, tc_s3_markdown, 
-                    tc_http_status, tc_signals, scrappingBeautySoup, scrappingPlaywright, scrappingSelenium, 
-                    scrappingGoogleAPI, scrappingTracxnPF, rowData[36], "", base_prompt_for_summery, 
+                    tc_http_status, tc_signals, raw_soup_49k, scrappingPlaywright, scrappingSelenium, 
+                    scrappingGoogleAPI, scrappingTracxnPF, rowData[36] if len(rowData) > 36 else "", "", base_prompt_for_summery, 
                     summary_status, output_data_summery, base_prompt_for_if_validation, 
                     input_data_for_if_validation, output_data_if_validation, input_sumry_for_if_validation, 
                     base_prompt_for_if, input_data_for_if, output_data_if, output_data_if_name, 
@@ -3947,7 +3999,9 @@ async def Integrated_Process_domain(
                     output_data_feed, final_feed_name, final_feed_id, final_pub_funnel_name, 
                     final_pub_funnel_id, "", "", "", cf_if_status, cf_if_time, if_pf_status, 
                     if_pf_time, tag_status_if, tag_status_pf, "", discovery_bq
-                ])
+                ]
+                AI_Engine_Result_Array.append(full_write_row)
+                write_start_col = 20
 
             # Save completed row to local CSV cache for redundancy & future runs
             LOCAL_CACHE.save_record(domain, {
@@ -3963,7 +4017,7 @@ async def Integrated_Process_domain(
                 "tc_s3_markdown": tc_s3_markdown,
                 "tc_http_status": tc_http_status,
                 "tc_signals": tc_signals,
-                "scrappingBeautySoup": scrappingBeautySoup,
+                "scrappingBeautySoup": raw_soup_49k,
                 "summary_status": summary_status,
                 "output_data_summery": output_data_summery,
                 "output_data_if": output_data_if,
@@ -3985,9 +4039,8 @@ async def Integrated_Process_domain(
                 "updated_at": datetime.datetime.now().strftime("%d/%b/%Y %H:%M:%S")
             })
 
-            full_write_row = AI_Engine_Result_Array[0] if AI_Engine_Result_Array else []
             if write_to_sheet and full_write_row:
-                await write_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, [full_write_row], row, 20)
+                await write_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, [full_write_row], row, write_start_col)
 
             return {
                 "tc_status": tc_status,
@@ -3996,12 +4049,12 @@ async def Integrated_Process_domain(
                 "tc_job_id": tc_job_id,
                 "rowData": [
                     *rowData[:23], tc_job_id, tc_job_gen_time, tc_status, tc_final_url,
-                    tc_s3_html, tc_s3_markdown, tc_http_status, tc_signals, scrappingBeautySoup,
+                    tc_s3_html, tc_s3_markdown, tc_http_status, tc_signals, raw_soup_49k,
                     *rowData[32:]
                 ],
                 "body": body_results,
                 "write_data": full_write_row,
-                "start_col": 20
+                "start_col": write_start_col
             }
 
         except Exception as e:
@@ -4120,7 +4173,7 @@ async def reconcile_existing_tech_crawler_jobs(
                                 sheet_slice = [
                                     row_data[23], row_data[24], "SUCCESS", row_data[26],
                                     row_data[27], row_data[28], row_data[29], row_data[30],
-                                    row_data[31][:49500]
+                                    row_data[31][:49000]
                                 ]
                                 return ("SUCCESS", r_num, sheet_slice, row_data)
 
@@ -4251,7 +4304,7 @@ async def Integrated_Extract_domains(
 
     total_domains = len(pf_data)
     pre_completed = sum(1 for r in pf_data if is_row_fully_completed(r))
-    pre_nim_completed = sum(1 for r in pf_data if is_row_fully_completed(r) or (len(r) > 40 and len(safe_str(r[40]).strip()) > 10))
+    pre_nim_completed = sum(1 for r in pf_data if is_row_fully_completed(r) or (len(r) > 40 and len(safe_str(r[40]).strip()) > 10) or (len(r) > 35 and len(safe_str(r[35]).strip()) > 10))
     processed = 0
     success_count = pre_completed
     fail_count = 0
@@ -4269,8 +4322,9 @@ async def Integrated_Extract_domains(
         target_start_col = 40
         expected_cols = 2
     else:
-        target_start_col = 20
-        expected_cols = 50
+        is_57col_sheet = bool(pf_data and len(pf_data[0]) <= 65)
+        target_start_col = 18 if is_57col_sheet else 20
+        expected_cols = 40 if is_57col_sheet else 50
 
     sheet_write_queue = asyncio.Queue()
 
@@ -4283,8 +4337,8 @@ async def Integrated_Extract_domains(
     async with aiohttp.ClientSession(headers=mainheaders, connector=connector) as session:
         # Background non-blocking Google Sheets writer
         def _sanitize_val(v):
-            if isinstance(v, str) and len(v) > 45000:
-                return v[:45000]
+            if isinstance(v, str) and len(v) > 49000:
+                return v[:49000]
             return v
 
         async def _flush_sheet_buffer(buf):
@@ -4624,10 +4678,11 @@ async def Integrated_Extract_domains(
                         else:
                             success_count += 1
                             final_write_data = full_res.get("write_data") if isinstance(full_res, dict) else None
+                            actual_start_col = full_res.get("start_col", target_start_col) if isinstance(full_res, dict) else target_start_col
 
                             if final_write_data:
                                 try:
-                                    updated_row = list(downstream_row[:19]) + list(final_write_data)
+                                    updated_row = (list(downstream_row[:17]) + list(final_write_data)) if len(final_write_data) == 40 else (list(downstream_row[:19]) + list(final_write_data))
                                     rev_res = await Process_Review_domain(
                                         session, updated_row, row_number, client, downstream_semaphore,
                                         SHEET_ID, EXTRACTING_SHEET_NAME, write_to_sheet=False
@@ -4638,13 +4693,13 @@ async def Integrated_Extract_domains(
                                     logging.warning(f"Domain real-time review warning for {domain}: {rev_err}")
 
                             if final_write_data and len(final_write_data) == expected_cols:
-                                await sheet_write_queue.put((row_number, target_start_col, final_write_data))
+                                await sheet_write_queue.put((row_number, actual_start_col, final_write_data))
                             elif final_write_data:
                                 if len(final_write_data) < expected_cols:
                                     final_write_data = final_write_data + [""] * (expected_cols - len(final_write_data))
                                 else:
                                     final_write_data = final_write_data[:expected_cols]
-                                await sheet_write_queue.put((row_number, target_start_col, final_write_data))
+                                await sheet_write_queue.put((row_number, actual_start_col, final_write_data))
                             else:
                                 slice_start = target_start_col - 1
                                 existing_slice = row[slice_start : slice_start + expected_cols]
@@ -4863,15 +4918,31 @@ async def Process_Review_domain(session, row, row_number, client, semaphore, SHE
             filter_group_id = row[4]
             filter_id = row[6]
             source_funnel_id = row[2]
-            output_data_if = row[43] if len(row) > 43 else ""
-            industry_funnel_id = output_data_if
+            is_57 = (len(row) <= 65)
 
-            tagStatusForIF      = row[65]
-            tagStatusForPF      = row[66]
-            tagStatusForReview  = row[67]
+            if is_57:
+                output_data_if = row[37] if len(row) > 37 else ""
+                industry_funnel_id = row[39] if len(row) > 39 else ""
+                publish_funnel_id = row[47] if len(row) > 47 else ""
+                tagStatusForIF = row[53] if len(row) > 53 else ""
+                tagStatusForPF = row[54] if len(row) > 54 else ""
+                tagStatusForReview = row[55] if len(row) > 55 else ""
+                cf_if_status = row[49] if len(row) > 49 else ""
+                cf_if_time = row[50] if len(row) > 50 else ""
+                if_pf_status = row[51] if len(row) > 51 else ""
+                if_pf_time = row[52] if len(row) > 52 else ""
+            else:
+                output_data_if = row[43] if len(row) > 43 else ""
+                industry_funnel_id = output_data_if
+                publish_funnel_id = row[60] if len(row) > 60 else ""
+                tagStatusForIF = row[65] if len(row) > 65 else ""
+                tagStatusForPF = row[66] if len(row) > 66 else ""
+                tagStatusForReview = row[67] if len(row) > 67 else ""
+                cf_if_status = row[61] if len(row) > 61 else ""
+                cf_if_time = row[62] if len(row) > 62 else ""
+                if_pf_status = row[63] if len(row) > 63 else ""
+                if_pf_time = row[64] if len(row) > 64 else ""
 
-            cf_if_status = row[61]
-            cf_if_time = row[62]
             tag_status_review = tagStatusForReview
 
             if tagStatusForIF == "YES" or tagStatusForPF == "YES" or tagStatusForReview == "YES":
@@ -4904,17 +4975,17 @@ async def Process_Review_domain(session, row, row_number, client, semaphore, SHE
                 s = str(s).strip()
                 return len(s) >= 8 and (":" in s or "/" in s or "-" in s) and s.upper() not in valid_movement_terminals and not s.startswith("http")
 
-            pf_val = str(row[63] if len(row) > 63 else "").strip().upper()
+            pf_val = str(if_pf_status).strip().upper()
             cf_val = str(cf_if_status).strip().upper()
             is_moved_row = (
                 cf_val in valid_movement_terminals or
                 pf_val in valid_movement_terminals or
                 _is_valid_ts_movement(cf_if_time) or
-                _is_valid_ts_movement(row[64] if len(row) > 64 else "")
+                _is_valid_ts_movement(if_pf_time)
             )
 
-            ind_id = row[46] if len(row) > 46 else ""
-            pub_id = row[60] if len(row) > 60 else ""
+            ind_id = industry_funnel_id
+            pub_id = publish_funnel_id
             out_check = str(output_data_if).strip().upper()
 
             is_positive_row = False
@@ -4930,29 +5001,43 @@ async def Process_Review_domain(session, row, row_number, client, semaphore, SHE
             elif is_moved_row:
                 discovery_bq = "no"
             else:
-                discovery_bq = row[68] if len(row) > 68 else ""
+                discovery_bq = (row[56] if is_57 else row[68]) if len(row) > (56 if is_57 else 68) else ""
 
             # Prepare output data
-            picked_time = row[19] if len(row) > 19 and row[19] else get_ist_timestamp()
-            cleared_time = row[20] if len(row) > 20 and row[20] else get_ist_timestamp()
-            output_status = row[21] if len(row) > 21 and row[21] else "To be checked"
-            output_row = [
+            if is_57:
+                output_row = list(row[17:49]) + [
+                    cf_if_status,
+                    cf_if_time,
+                    if_pf_status,
+                    if_pf_time,
+                    tagStatusForIF,
+                    tagStatusForPF,
+                    tag_status_review,
+                    discovery_bq
+                ]
+                write_start = 18
+            else:
+                picked_time = row[19] if len(row) > 19 and row[19] else get_ist_timestamp()
+                cleared_time = row[20] if len(row) > 20 and row[20] else get_ist_timestamp()
+                output_status = row[21] if len(row) > 21 and row[21] else "To be checked"
+                output_row = [
                     picked_time,  # Engine Picked Time
                     cleared_time,  # Engine Cleared Time
                     output_status,  # Engine Cleared Status
                     *row[22:61],          # Data range
                     cf_if_status,
                     cf_if_time,
-                    row[63],  # IF_PF_Status
-                    row[64],  # IF_PF_Time
-                    tagStatusForIF,  # TagStatusIF
-                    tagStatusForPF,  # TagStatusPF
+                    if_pf_status,
+                    if_pf_time,
+                    tagStatusForIF,
+                    tagStatusForPF,
                     tag_status_review,
                     discovery_bq
                 ]
+                write_start = 20
 
             if write_to_sheet:
-                await write_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, [output_row], row_number, 20)
+                await write_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, [output_row], row_number, write_start)
             return output_row
     except Exception as e:
         logging.error(f"Error processing row {row_number}: {e}")
