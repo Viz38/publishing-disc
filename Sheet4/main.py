@@ -19,6 +19,7 @@ from common import (
     ExecutionTracker,
     is_5am_ist_cutoff,
     is_pre_cutoff_window,
+    is_before_4am_ist,
     get_now_ist,
     get_ist_timestamp,
     safe_str,
@@ -5615,12 +5616,90 @@ async def main():
                 logging.error(f"Error in Process_Review_Caller: {e}")
                 raise
 
+        # Pre-4:00 AM IST Retry Loop: Retries all previously failed phases EXCEPT Tech Crawler
+        retry_round = 0
+        while is_before_4am_ist() and not os.path.exists(STOP_FILE) and mode_arg in ("full", "phase2", "phase3", "phase4"):
+            retry_round += 1
+            logging.info(f"Checking for previously failed phase domains to retry before 4:00 AM IST (Round {retry_round})...")
+            try:
+                pf_retry = await read_sheet_data(client, active_sheet_id, CF_EXTRACTING_SHEET_NAME, start_row=start_row_arg)
+            except Exception as e_rf:
+                logging.warning(f"Could not read sheet data for retry loop: {e_rf}")
+                break
+
+            if not pf_retry:
+                break
+
+            is_57_ret = bool(len(pf_retry[0]) <= 65)
+            failed_candidates = 0
+            for r in pf_retry:
+                if not r or not r[0] or is_row_fully_completed(r):
+                    continue
+                tc_st = safe_str(r[23 if is_57_ret else 25]).strip().upper()
+                raw_d = safe_str(r[29 if is_57_ret else 31]).strip()
+                # Strictly skip Tech Crawler failures per explicit requirement ("except TC")
+                if tc_st != "SUCCESS" and not raw_d:
+                    continue
+
+                nim_st = safe_str(r[34 if is_57_ret else 40]).strip().upper()
+                nim_sum = safe_str(r[35 if is_57_ret else 40]).strip()
+                gemini_feed = safe_str(r[43 if is_57_ret else 48]).strip()
+                write_st = safe_str(r[49 if is_57_ret else 61]).strip().upper()
+
+                if nim_st == "FAILED" or len(nim_sum) <= 10 or not gemini_feed or gemini_feed in ("FAILED", "ERROR") or write_st in ("FALSE", "ERROR", ""):
+                    failed_candidates += 1
+
+            if failed_candidates == 0:
+                logging.info(f"No previously failed phase rows remaining to retry before 4:00 AM IST.")
+                break
+
+            logging.info(f"🔄 [Pre-4AM Retry Round {retry_round}] Found {failed_candidates} eligible previously failed rows. Executing retry pass...")
+            try:
+                if mode_arg != "phase4":
+                    await Integrated_Extract_domains(
+                        client, active_sheet_id, CF_EXTRACTING_SHEET_NAME,
+                        cache_id_IF_Prediction, token_IF_Prediction, date_IF_Prediction,
+                        status_IF_Prediction, exp_date_IF_Prediction, config_funnel_prompt,
+                        config_funnel_id_prompt, config_funnel_name_prompt,
+                        config_funnel_name_Feed_Cached_prompt, config_funnel_name_Feed_Cached_API_Token,
+                        config_funnel_name_Feed_Cached_Model, config_funnel_name_Feed_Cached_Gen_Date,
+                        config_funnel_name_Feed_Cached_Final_Status, token_rotator=token_rotator,
+                        start_row_num=start_row_arg, mode=mode_arg
+                    )
+                if not os.path.exists(STOP_FILE) and not is_5am_ist_cutoff():
+                    await Process_Review_Caller(client, mainheaders, active_sheet_id, CF_EXTRACTING_SHEET_NAME, start_row_num=start_row_arg, mode=mode_arg)
+            except Exception as e_ret:
+                logging.error(f"Error during pre-4AM retry pass: {e_ret}")
+                break
+
+            await asyncio.sleep(5)
+
+        # Dynamic Completion Metric Calculation — Zero Hardcoded Values
+        try:
+            pf_final = await read_sheet_data(client, active_sheet_id, CF_EXTRACTING_SHEET_NAME, start_row=start_row_arg)
+            is_57_fin = bool(pf_final and len(pf_final[0]) <= 65)
+            fin_tc = sum(1 for r in pf_final if len(r) > (23 if is_57_fin else 25) and safe_str(r[23 if is_57_fin else 25]).strip().upper() == "SUCCESS")
+            fin_nim = sum(1 for r in pf_final if len(r) > (34 if is_57_fin else 40) and safe_str(r[34 if is_57_fin else 40]).strip().upper() == "SUCCESS")
+            fin_gem = sum(1 for r in pf_final if len(r) > (43 if is_57_fin else 48) and safe_str(r[43 if is_57_fin else 48]).strip())
+            fin_tracxn = sum(1 for r in pf_final if len(r) > (49 if is_57_fin else 61) and safe_str(r[49 if is_57_fin else 61]).strip())
+            fin_total = len(pf_final)
+        except Exception:
+            fin_tc = tc_completed_count if 'tc_completed_count' in locals() else 0
+            fin_nim = nim_completed_count if 'nim_completed_count' in locals() else 0
+            fin_gem = gemini_completed_count if 'gemini_completed_count' in locals() else 0
+            fin_tracxn = tracxn_completed_count if 'tracxn_completed_count' in locals() else 0
+            fin_total = total_domains if 'total_domains' in locals() else 0
+
         update_progress_file(
-            100, 100, 100, 0,
+            fin_tracxn, fin_total, fin_tc, 0,
             phase="Completed",
-            stage_details="All pipeline phases completed successfully.",
+            stage_details=f"All pipeline phases completed ({fin_tracxn}/{fin_total} domains moved).",
             pending_tc=0,
-            mode=mode_arg
+            mode=mode_arg,
+            scraped_count=fin_tc,
+            nim_count=fin_nim,
+            gemini_count=fin_gem,
+            tracxn_count=fin_tracxn
         )
         try:
             EXEC_TRACKER.record_completion()
