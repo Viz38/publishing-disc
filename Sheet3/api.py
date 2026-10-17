@@ -505,18 +505,15 @@ def _get_status_response():
         else:
             scraped_count = success_val
 
-    completed_count = tracxn_count
+    completed_count = tracxn_count if tracxn_count is not None else current_val
 
-    if curr_phase == "Completed" or current_status == "succeeded":
-        completed_count = max(completed_count, total_val, current_val)
-        tracxn_count = completed_count
-
-    if total_val > 0:
+    # Only clamp to total_val if it reflects a genuine full-sheet total (>= 1000)
+    if total_val >= 1000:
         completed_count = min(completed_count, total_val)
-        tracxn_count = min(tracxn_count, total_val)
-        gemini_count = min(gemini_count, total_val)
-        nim_count = min(nim_count, total_val)
-        scraped_count = min(scraped_count, total_val)
+        tracxn_count = min(tracxn_count if tracxn_count is not None else 0, total_val)
+        gemini_count = min(gemini_count if gemini_count is not None else 0, total_val)
+        nim_count = min(nim_count if nim_count is not None else 0, total_val)
+        scraped_count = min(scraped_count if scraped_count is not None else 0, total_val)
 
     return {
         "status": current_status,

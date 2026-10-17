@@ -207,11 +207,26 @@ $$\text{Hashtag Flag} = \begin{cases}
 ### E. Col U Retry Policy
 * Column U (`Crawling Status`) records `DONE` vs `To be checked`. Per explicit user constraint, **Col U retry logic in `main.py` is maintained as-is without modification**.
 
+### F. Pre-4:00 AM IST Failed Phase Retry Policy
+* When processing time remains and it is before **04:00 AM IST** (`is_before_4am_ist()`):
+  * All previously failed phases **EXCEPT Tech Crawler** are continuously retried to complete maximum domains before the daily 5:00 AM cutoff.
+  * **NIM Retries**: Domains with `Col X == "SUCCESS"` (or raw scraped data) where NIM summary failed (`Col AI == "FAILED"` or empty).
+  * **Gemini Retries**: Domains with valid NIM summaries where Gemini IF status (`Col AL`) or Feed number (`Col AR`) failed or is blank.
+  * **Write API Retries**: Domains with completed predictions where Tracxn Write APIs (`Col AX` / `Col AZ`) returned `"FALSE"` or error.
+  * **Strict TC Exclusion**: Tech Crawler failures are strictly not retried (`tc_status != "SUCCESS" and not raw_data` are skipped).
+  * Between **04:00 AM and 05:05 AM IST**, retry cycles halt in preparation for the daily Apps Script domain refresh window.
+
 ---
 
 ## 6. Telemetry & Live Operations Dashboard
 
 The operations dashboard in spreadsheet [`1eVKXWnGNsHp8WmoqXo8Pz-mB6f7V7xGleMfd7CcahSA`](https://docs.google.com/spreadsheets/d/1eVKXWnGNsHp8WmoqXo8Pz-mB6f7V7xGleMfd7CcahSA/edit?gid=1570465616#gid=1570465616) computes metrics via [`status_dashboard.gs`](file:///Users/vishnu/Desktop/Discovery-Engine/status_dashboard.gs):
+
+### Dynamic Ground-Truth Audit Rule (Zero Hardcoding)
+* Whenever an engine is idle, completed, offline, or returns corrupted/clamped metrics (`scraped_count <= 100` on a 9k+ sheet), `status_dashboard.gs` dynamically executes `auditSheetDynamically()` directly against the sheet database (`CF_IF_Engine_Database`):
+  * Single fast range read `X3:AX[lastRow]`.
+  * Computes exact cell-by-cell ground-truth counts with zero hardcoded values.
+  * Completed counts reflect genuine Tracxn movements (`Col AX`), never artificially forcing 100%.
 
 ### Success Metric Definitions
 1. **Total Rows Available**: Count of non-empty rows in **Col A** from Row 3 downwards.

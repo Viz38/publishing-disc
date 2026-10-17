@@ -42,6 +42,25 @@ def is_pre_cutoff_window(current_dt: Optional[datetime.datetime] = None, now_dt:
         dt = dt.astimezone(IST_TZ)
     return dt.hour == 4 and dt.minute >= 30
 
+def is_before_4am_ist(current_dt: Optional[datetime.datetime] = None, now_dt: Optional[datetime.datetime] = None) -> bool:
+    """
+    Returns True if current time in IST (UTC+5:30) has not reached the 04:00 AM IST cutoff.
+    Between 04:00:00 and 05:05:00 IST, pipeline retries of previously failed phases are halted
+    in preparation for the 05:00 AM daily Apps Script refresh window.
+    """
+    dt = current_dt or now_dt
+    if dt is None:
+        dt = get_now_ist()
+    elif dt.tzinfo is None:
+        dt = dt.replace(tzinfo=IST_TZ)
+    else:
+        dt = dt.astimezone(IST_TZ)
+    if dt.hour == 4:
+        return False
+    if dt.hour == 5 and dt.minute < 5:
+        return False
+    return True
+
 def get_ist_timestamp() -> str:
     """Returns formatted IST timestamp for logging and sheet cells."""
     return get_now_ist().strftime("%d/%b/%Y %H:%M:%S")
