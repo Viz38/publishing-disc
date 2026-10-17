@@ -117,7 +117,7 @@ function uiStartRun(resumeOnly = false) {
   htmlContent += '<div id="selected-worker-label" style="background:#f0f9ff;color:#0369a1;padding:10px 12px;border-radius:8px;font-weight:600;margin-bottom:14px;font-size:13px;">\u2705 <span id="selected-name"></span></div>';
 
   htmlContent += '<label style="display:block;font-weight:600;font-size:13px;color:#475569;margin-bottom:6px;">\uD83D\uDD22 Start Row</label>';
-  htmlContent += '<input type="number" id="startRow" value="4" min="2" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px;margin-bottom:14px;">';
+  htmlContent += '<input type="number" id="startRow" value="3" min="3" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px;margin-bottom:14px;">';
 
   htmlContent += '<label style="display:block;font-weight:600;font-size:13px;color:#475569;margin-bottom:6px;">\u2699\uFE0F Execution Phase / Mode</label>';
   htmlContent += '<select id="runMode" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13.5px;background:white;color:#1e293b;font-weight:500;">';
@@ -247,7 +247,7 @@ function uiStartRun(resumeOnly = false) {
   htmlContent += '}';
 
   htmlContent += 'function runPipeline(){';
-  htmlContent += '  const startRow = parseInt(document.getElementById("startRow").value) || 4;';
+  htmlContent += '  const startRow = parseInt(document.getElementById("startRow").value) || 3;';
   htmlContent += '  const selected = document.querySelector("input[name=workerChoice]:checked");';
   htmlContent += '  const workerUrl = selected ? selected.value : "auto";';
   htmlContent += '  const runMode = document.getElementById("runMode") ? document.getElementById("runMode").value : "full";';

@@ -61,6 +61,34 @@ def is_before_4am_ist(current_dt: Optional[datetime.datetime] = None, now_dt: Op
         return False
     return True
 
+def is_nim_dead_domain(raw_data: str) -> bool:
+    """
+    Returns True if scraped raw data represents a dead/unreachable domain or 404/DNS error.
+    Such domains cannot produce a valid company summary and are marked non-retryable ('NO_CONTENT').
+    """
+    if not raw_data or not str(raw_data).strip():
+        return True
+    s = str(raw_data).strip().lower()
+    dead_signals = [
+        "website is not working",
+        "dns_probe_finished_nxdomain",
+        "404 not found",
+        "err_name_not_resolved",
+        "domain has expired",
+        "domain expired",
+        "domain is parked",
+        "this domain is parked",
+        "buy this domain",
+        "buy it now",
+        "this site can't be reached",
+        "page not found",
+        "server ip address could not be found"
+    ]
+    for d in dead_signals:
+        if d in s and len(s) < 500:
+            return True
+    return False
+
 def get_ist_timestamp() -> str:
     """Returns formatted IST timestamp for logging and sheet cells."""
     return get_now_ist().strftime("%d/%b/%Y %H:%M:%S")

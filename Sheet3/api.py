@@ -211,7 +211,7 @@ async def _daily_5am_ist_watchdog():
                         f"Autonomous Smart Resume triggered by supervisor in 15s (attempt {cnt}/{EXEC_TRACKER.MAX_AUTO_RETRIES})..."
                     )
                     req = RunRequest(
-                        start_row=saved_state.get("start_row", 3),
+                        start_row=3,
                         mode=saved_state.get("mode", "full"),
                         sheet_id=saved_state.get("sheet_id", settings.CF_SHEET_ID)
                     )
@@ -249,7 +249,7 @@ async def startup_event():
             f"Autonomous Smart Resume initiating in 10 seconds (attempt {cnt}/{EXEC_TRACKER.MAX_AUTO_RETRIES})..."
         )
         req = RunRequest(
-            start_row=saved_state.get("start_row", 3),
+            start_row=3,
             mode=saved_state.get("mode", "full"),
             sheet_id=saved_state.get("sheet_id", settings.CF_SHEET_ID)
         )
@@ -342,12 +342,13 @@ async def run_pipeline_task(request: RunRequest):
             try: os.remove(PROGRESS_FILE)
             except Exception: pass
 
-        cmd = [sys.executable, "main.py", str(request.start_row), request.mode]
+        effective_start_row = 3
+        cmd = [sys.executable, "main.py", str(effective_start_row), request.mode]
         target_sheet = request.sheet_id or settings.CF_SHEET_ID
         if target_sheet:
             cmd.extend(["--sheet_id", target_sheet])
 
-        logger.info(f"Starting CF-1 pipeline: {' '.join(cmd)}")
+        logger.info(f"Starting CF-3 pipeline (always from row {effective_start_row}): {' '.join(cmd)}")
 
         stdout_path = os.path.join(LOGS_DIR, "stdout.log")
         stderr_path = os.path.join(LOGS_DIR, "stderr.log")
@@ -359,12 +360,12 @@ async def run_pipeline_task(request: RunRequest):
                 cwd=BASE_DIR
             )
             state["active_pid"] = process.pid
-            logger.info(f"CF-1 pipeline running with PID {process.pid}")
+            logger.info(f"CF-3 pipeline running with PID {process.pid}")
 
             EXEC_TRACKER.record_start(
                 sheet=settings.SERVICE_NAME,
                 sheet_id=target_sheet,
-                start_row=request.start_row,
+                start_row=effective_start_row,
                 mode=request.mode,
                 pid=process.pid
             )
@@ -507,13 +508,13 @@ def _get_status_response():
 
     completed_count = tracxn_count if tracxn_count is not None else current_val
 
-    # Only clamp to total_val if it reflects a genuine full-sheet total (>= 1000)
+    # Waterfall cascading bounding: tracxn <= gemini <= nim <= tc <= total_val
     if total_val >= 1000:
-        completed_count = min(completed_count, total_val)
-        tracxn_count = min(tracxn_count if tracxn_count is not None else 0, total_val)
-        gemini_count = min(gemini_count if gemini_count is not None else 0, total_val)
-        nim_count = min(nim_count if nim_count is not None else 0, total_val)
         scraped_count = min(scraped_count if scraped_count is not None else 0, total_val)
+        nim_count = min(nim_count if nim_count is not None else 0, scraped_count)
+        gemini_count = min(gemini_count if gemini_count is not None else 0, nim_count)
+        tracxn_count = min(tracxn_count if tracxn_count is not None else 0, gemini_count)
+        completed_count = tracxn_count
 
     return {
         "status": current_status,
