@@ -499,19 +499,28 @@ def _get_status_response():
     if gemini_count is None:
         gemini_count = 0
 
+    tc_success = prog.get("tc_success")
+    if tc_success is None:
+        m_tc_succ = re.search(r"(\d+)\s+success", stage_details, re.IGNORECASE)
+        if m_tc_succ:
+            tc_success = int(m_tc_succ.group(1))
+        else:
+            tc_success = success_val if (success_val is not None and success_val != scraped_count) else scraped_count
+
     if scraped_count is None:
-        m_tc = re.search(r"(\d+)\s+SUCCESS", stage_details)
+        m_tc = re.search(r"(\d+)\s+resolved", stage_details, re.IGNORECASE)
         if m_tc:
             scraped_count = int(m_tc.group(1))
         else:
-            scraped_count = success_val
+            scraped_count = tc_success if tc_success is not None else (success_val if success_val is not None else 0)
 
     completed_count = tracxn_count if tracxn_count is not None else current_val
 
-    # Waterfall cascading bounding: tracxn <= gemini <= nim <= tc <= total_val
+    # Waterfall cascading bounding: tracxn <= gemini <= nim <= tc_success <= scraped_count <= total_val
     if total_val >= 1000:
         scraped_count = min(scraped_count if scraped_count is not None else 0, total_val)
-        nim_count = min(nim_count if nim_count is not None else 0, scraped_count)
+        tc_success = min(tc_success if tc_success is not None else 0, scraped_count)
+        nim_count = min(nim_count if nim_count is not None else 0, tc_success)
         gemini_count = min(gemini_count if gemini_count is not None else 0, nim_count)
         tracxn_count = min(tracxn_count if tracxn_count is not None else 0, gemini_count)
         completed_count = tracxn_count
@@ -522,9 +531,10 @@ def _get_status_response():
         "is_stopping": is_stopping,
         "progress_current": completed_count,
         "progress_total": total_val,
-        "progress_success": scraped_count,
+        "progress_success": tc_success,
         "progress_fail": fail_val,
         "scraped_count": scraped_count,
+        "tc_success": tc_success,
         "nim_count": nim_count,
         "gemini_count": gemini_count,
         "tracxn_count": completed_count,

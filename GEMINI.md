@@ -235,9 +235,9 @@ $$\text{Phase Progress} = \frac{\text{Resolved Domains (Successes + Non-Retryabl
    *When all domains in the sheet have been crawled or failed, TC displays `total / total` (e.g. `100/100`).*
 
 2. **NIM 70B Summarizer (Phase 2)**:
-   $$\text{Denominator} = \text{Successful TC Scrapes (Input passed forward)}$$
+   $$\text{Denominator} = \text{Successful TC Scrapes (Usable Raw Data in Col AD or Col X == 'SUCCESS', ~39,597 across fleet)}$$
    $$\text{Numerator} = \text{Successful Summaries (Col AI == 'SUCCESS')} + \text{Dead/Empty Domains (Col AI == 'NO_CONTENT')}$$
-   *When all scraped domains have summaries or are identified as dead domains, NIM displays `tcSuccess / tcSuccess` (e.g. `90/90`).*
+   *Important Distinction:* In Phase 1, TC displays resolved rows (`tc_success + tc_failed`, e.g. 40,617 / 40,645). However, terminal crawler failures with zero raw data (1,048 across fleet) cannot be processed by NIM. NIM's input denominator is strictly the count of domains with usable scraped raw data (`tc_success` = 39,597). When all scraped domains have summaries or are identified as dead domains, NIM displays `tcSuccess / tcSuccess` (e.g. `39,597 / 39,597`).
 
 3. **Gemini Predictions (Phase 3)**:
    $$\text{Denominator} = \text{Successful NIM Summaries (Input passed forward)}$$
