@@ -695,7 +695,7 @@ async def start_pipeline(req: RunRequest, background_tasks: BackgroundTasks):
     background_tasks.add_task(run_pipeline_task, req)
     return {"status": "accepted", "sheet_id": req.sheet_id or settings.CF_SHEET_ID}
 
-def run_clear_and_fetch_task(sheet_id: str):
+async def run_clear_and_fetch_task(sheet_id: str):
     try:
         from Temp_Test.tracxn_domain_ingestor import TracxnDomainIngestor
         ingestor = TracxnDomainIngestor()
@@ -703,8 +703,22 @@ def run_clear_and_fetch_task(sheet_id: str):
             "name": f"Sheet-{sheet_id[:8]}",
             "sheet_id": sheet_id
         }
-        count = ingestor.ingest_domains_for_sheet(sheet_cfg, clear_first=True)
+        count = await asyncio.to_thread(ingestor.ingest_domains_for_sheet, sheet_cfg, clear_first=True)
         logger.info(f"✅ Clear & Fetch completed for sheet {sheet_id}: {count} domains ingested.")
+
+        if count and count > 0:
+            if is_5am_ist_cutoff():
+                dt = get_now_ist()
+                wait_secs = max(5, (5 - dt.minute) * 60 - dt.second + 2)
+                logger.info(f"⏳ Clear & Fetch completed ({count} domains). Waiting {wait_secs}s for 05:05 AM IST cutoff window to pass before starting pipeline...")
+                await asyncio.sleep(wait_secs)
+
+            logger.info(f"🚀 Auto-starting discovery engine pipeline for sheet {sheet_id} (start_row=3, mode=full)...")
+            EXEC_TRACKER.reset_retry_count()
+            pipeline_req = RunRequest(start_row=3, mode="full", sheet_id=sheet_id)
+            await run_pipeline_task(pipeline_req)
+        else:
+            logger.warning(f"⚠️ Clear & Fetch returned {count} domains for sheet {sheet_id}. Downstream pipeline auto-start skipped to prevent running on an empty sheet.")
     except Exception as e:
         logger.error(f"❌ Clear & Fetch failed for sheet {sheet_id}: {e}", exc_info=True)
 

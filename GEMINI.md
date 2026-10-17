@@ -263,6 +263,13 @@ Every potential error across all four phases is strictly categorized to prevent 
 | **Phase 4: Tracxn** | HTTP 422: Domain assigned to another user | **Non-Retryable** | `Col AX == "SKIPPED_UNASSIGNABLE"` | Permanent terminal exit. Counted as resolved; never retried. |
 | **Phase 4: Tracxn** | Network drop, HTTP 500/502/504, `FALSE` | **Retryable** | `Col AX == "FALSE"` or empty | Retried with token rotation and session refresh before 04:00 AM IST. |
 
+### J. Automated Clear-and-Fetch Pipeline Start Chain
+* When domain ingestion via `/discovery/clear-and-fetch` finishes populating domains into the target Google Sheet (`count > 0`):
+  * The backend API supervisor (`api.py`) runs `ingest_domains_for_sheet()` off the event loop via `await asyncio.to_thread` to ensure HTTP endpoints (`/health`, `/status`, `/logs`) remain completely responsive.
+  * If ingestion finishes during the 05:00–05:05 AM IST daily cutoff window, the supervisor pauses until 05:05:02 AM IST before launching the engine, ensuring `main.py` does not abort on the cutoff window.
+  * As soon as domains are present, the supervisor resets the execution retry tracker (`EXEC_TRACKER.reset_retry_count()`) and automatically triggers the downstream discovery pipeline (`await run_pipeline_task(RunRequest(start_row=3, mode="full", sheet_id=sheet_id))`), initiating crawling, NIM summaries, Gemini predictions, and Tracxn movements without manual intervention.
+  * If ingestion yields `0` domains, pipeline auto-start is safely skipped to protect against running on an empty sheet.
+
 ---
 
 ## 6. Telemetry & Live Operations Dashboard
