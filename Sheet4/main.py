@@ -3439,9 +3439,18 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
             if if_pf_status == "TRUE":
                 if_pf_status = "DONE"
 
-        # Add discovery processing hashtag only when Write API Status (Publish Funnel) is completed and marked "Done"
+        # Add discovery processing hashtag ONLY for genuine movements (Industry Funnel or Publish Funnel)
+        # Exclude SNOOZED, MARKED_IRRELEVANT, ESCALATED per business rule
         tag_status_discovery = ""
-        if if_pf_status == "DONE":
+        is_positive_movement = False
+        if str(if_pf_status).strip().upper() in ("DONE", "YES", "TRUE", "MOVED", "MOVED_OUT") and publish_funnel_id:
+            is_positive_movement = True
+        elif str(cf_if_status).strip().upper() in ("DONE", "YES", "TRUE", "MOVED", "MOVED_OUT") and industry_funnel_id:
+            out_check = str(output_data_if).strip().upper()
+            if not ("ESCALATED" in out_check or out_check == "23" or "MARKED_IRRELEVANT" in out_check or out_check == "22" or "SNOOZED" in out_check):
+                is_positive_movement = True
+
+        if is_positive_movement:
             tag_status_discovery = await Domain_HashTag_async(domain, Discovery_Processing_TAG_NAME, token, session=session)
 
     # inbetween_sheet.update_acell("B7", dstart + i) #Save point for next execution.
@@ -3851,7 +3860,36 @@ async def Integrated_Process_domain(
             tag_status_if = AI_Engine_Output_Result[25]
             tag_status_pf = AI_Engine_Output_Result[26]
             tag_status_discovery = AI_Engine_Output_Result[27] if len(AI_Engine_Output_Result) > 27 else ""
-            discovery_bq = "yes" if str(tag_status_discovery).upper() in ("YES", "TRUE") else ""
+            industry_funnel_id = AI_Engine_Output_Result[8] if len(AI_Engine_Output_Result) > 8 else ""
+            publish_funnel_id = AI_Engine_Output_Result[20] if len(AI_Engine_Output_Result) > 20 else ""
+            out_if_check = str(AI_Engine_Output_Result[6] if len(AI_Engine_Output_Result) > 6 else "").strip().upper()
+
+            valid_movement_terminals = {"DONE", "YES", "TRUE", "MOVED", "MOVED_OUT", "SNOOZED", "MARKED_IRRELEVANT", "MARKED_FOR_LATER", "ESCALATED", "SKIPPED_UNASSIGNABLE"}
+            def _is_valid_ts_movement(s: str) -> bool:
+                s = str(s).strip()
+                return len(s) >= 8 and (":" in s or "/" in s or "-" in s) and s.upper() not in valid_movement_terminals and not s.startswith("http")
+
+            is_moved = (
+                str(cf_if_status).strip().upper() in valid_movement_terminals or
+                str(if_pf_status).strip().upper() in valid_movement_terminals or
+                _is_valid_ts_movement(cf_if_time) or
+                _is_valid_ts_movement(if_pf_time)
+            )
+
+            is_positive_movement = False
+            if str(if_pf_status).strip().upper() in ("DONE", "YES", "TRUE", "MOVED", "MOVED_OUT") and publish_funnel_id:
+                is_positive_movement = True
+            elif str(cf_if_status).strip().upper() in ("DONE", "YES", "TRUE", "MOVED", "MOVED_OUT") and industry_funnel_id:
+                if not ("ESCALATED" in out_if_check or out_if_check == "23" or "MARKED_IRRELEVANT" in out_if_check or out_if_check == "22" or "SNOOZED" in out_if_check):
+                    is_positive_movement = True
+
+            if is_positive_movement:
+                discovery_bq = "yes" if str(tag_status_discovery).upper() in ("YES", "TRUE") else "no"
+            elif is_moved:
+                # SNOOZED, MARKED_IRRELEVANT, ESCALATED -> mark 'no'
+                discovery_bq = "no"
+            else:
+                discovery_bq = ""
 
             # Once write API (last step) is completed, update Col U with current date and time (format: 12/Oct/2026 15:00:14)
             if mode == "full":
@@ -4826,10 +4864,38 @@ async def Process_Review_domain(session, row, row_number, client, semaphore, SHE
                         cf_if_status = "DONE"
 
             tag_status_discovery = ""
-            if str(row[63]).strip().upper() == "DONE":
-                tag_status_discovery = await Domain_HashTag_async(domain, Discovery_Processing_TAG_NAME, TOKEN)
+            valid_movement_terminals = {"DONE", "YES", "TRUE", "MOVED", "MOVED_OUT", "SNOOZED", "MARKED_IRRELEVANT", "MARKED_FOR_LATER", "ESCALATED", "SKIPPED_UNASSIGNABLE"}
+            def _is_valid_ts_movement(s: str) -> bool:
+                s = str(s).strip()
+                return len(s) >= 8 and (":" in s or "/" in s or "-" in s) and s.upper() not in valid_movement_terminals and not s.startswith("http")
 
-            discovery_bq = "yes" if str(tag_status_discovery).upper() in ("YES", "TRUE") else (row[68] if len(row) > 68 else "")
+            cf_val = str(cf_if_status).strip().upper()
+            pf_val = str(row[63] if len(row) > 63 else "").strip().upper()
+            is_moved_row = (
+                cf_val in valid_movement_terminals or
+                pf_val in valid_movement_terminals or
+                _is_valid_ts_movement(cf_if_time) or
+                _is_valid_ts_movement(row[64] if len(row) > 64 else "")
+            )
+
+            ind_id = row[46] if len(row) > 46 else ""
+            pub_id = row[60] if len(row) > 60 else ""
+            out_check = str(output_data_if).strip().upper()
+
+            is_positive_row = False
+            if pf_val in ("DONE", "YES", "TRUE", "MOVED", "MOVED_OUT") and pub_id:
+                is_positive_row = True
+            elif cf_val in ("DONE", "YES", "TRUE", "MOVED", "MOVED_OUT") and ind_id:
+                if not ("ESCALATED" in out_check or out_check == "23" or "MARKED_IRRELEVANT" in out_check or out_check == "22" or "SNOOZED" in out_check):
+                    is_positive_row = True
+
+            if is_positive_row:
+                tag_status_discovery = await Domain_HashTag_async(domain, Discovery_Processing_TAG_NAME, TOKEN)
+                discovery_bq = "yes" if str(tag_status_discovery).upper() in ("YES", "TRUE") else "no"
+            elif is_moved_row:
+                discovery_bq = "no"
+            else:
+                discovery_bq = row[68] if len(row) > 68 else ""
 
             # Prepare output data
             picked_time = row[19] if len(row) > 19 and row[19] else get_ist_timestamp()
@@ -5048,10 +5114,36 @@ async def Execute_Phase4_Ingestion_Write_APIs(client, mainheaders, SHEET_ID, EXT
                         if if_pf_status == "TRUE":
                             if_pf_status = "DONE"
 
-                    if if_pf_status == "DONE":
-                        tag_status_discovery = await Domain_HashTag_async(domain, Discovery_Processing_TAG_NAME, token, session=session)
+                    valid_movement_terminals = {"DONE", "YES", "TRUE", "MOVED", "MOVED_OUT", "SNOOZED", "MARKED_IRRELEVANT", "MARKED_FOR_LATER", "ESCALATED", "SKIPPED_UNASSIGNABLE"}
+                    def _is_valid_ts_movement(s: str) -> bool:
+                        s = str(s).strip()
+                        return len(s) >= 8 and (":" in s or "/" in s or "-" in s) and s.upper() not in valid_movement_terminals and not s.startswith("http")
 
-                    discovery_bq = "yes" if str(tag_status_discovery).upper() in ("YES", "TRUE") else ""
+                    cf_val = str(cf_if_status).strip().upper()
+                    pf_val = str(if_pf_status).strip().upper()
+                    is_moved_ingest = (
+                        cf_val in valid_movement_terminals or
+                        pf_val in valid_movement_terminals or
+                        _is_valid_ts_movement(cf_if_time) or
+                        _is_valid_ts_movement(if_pf_time)
+                    )
+
+                    out_check = str(output_data_if).strip().upper()
+                    is_positive_ingest = False
+                    if pf_val in ("DONE", "YES", "TRUE", "MOVED", "MOVED_OUT") and publish_funnel_id:
+                        is_positive_ingest = True
+                    elif cf_val in ("DONE", "YES", "TRUE", "MOVED", "MOVED_OUT") and industry_funnel_id:
+                        if not ("ESCALATED" in out_check or out_check == "23" or "MARKED_IRRELEVANT" in out_check or out_check == "22" or "SNOOZED" in out_check):
+                            is_positive_ingest = True
+
+                    if is_positive_ingest:
+                        tag_status_discovery = await Domain_HashTag_async(domain, Discovery_Processing_TAG_NAME, token, session=session)
+                        discovery_bq = "yes" if str(tag_status_discovery).upper() in ("YES", "TRUE") else "no"
+                    elif is_moved_ingest:
+                        # Excluded from hashtag: SNOOZED, MARKED_IRRELEVANT, ESCALATED
+                        discovery_bq = "no"
+                    else:
+                        discovery_bq = ""
                     res_write = [cf_if_status, cf_if_time, if_pf_status, if_pf_time, tag_status_if, tag_status_pf, "", discovery_bq]
                     LOCAL_CACHE.save_record(domain, {
                         "cf_if_status": cf_if_status,
