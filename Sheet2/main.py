@@ -120,7 +120,15 @@ file_handler = logging.FileHandler(discovery_log_path, mode='a')
 file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
 root_logger.addHandler(file_handler)
 
-def update_progress_file(current: int, total: int, success: int, fail: int, phase: str = "", stage_details: str = "", pending_tc: int = 0, mode: str = ""):
+def update_progress_file(current: int, total: int, success: int, fail: int, phase: str = "", stage_details: str = "", pending_tc: int = 0, mode: str = "", scraped_count: int = None, nim_count: int = None, gemini_count: int = None, tracxn_count: int = None):
+    prev_prog = {}
+    if os.path.exists(PROGRESS_FILE):
+        try:
+            with open(PROGRESS_FILE, 'r') as f:
+                prev_prog = json.load(f)
+        except Exception:
+            pass
+
     prog_data = {
         'current': current,
         'total': total,
@@ -129,7 +137,11 @@ def update_progress_file(current: int, total: int, success: int, fail: int, phas
         'phase': phase,
         'stage_details': stage_details,
         'pending_tc': pending_tc,
-        'mode': mode
+        'mode': mode,
+        'scraped_count': scraped_count if scraped_count is not None else prev_prog.get('scraped_count', success),
+        'nim_count': nim_count if nim_count is not None else prev_prog.get('nim_count', 0),
+        'gemini_count': gemini_count if gemini_count is not None else prev_prog.get('gemini_count', 0),
+        'tracxn_count': tracxn_count if tracxn_count is not None else prev_prog.get('tracxn_count', current)
     }
     tmp_path = f"{PROGRESS_FILE}.tmp.{os.getpid()}"
     try:
@@ -4387,15 +4399,36 @@ async def Integrated_Extract_domains(
 
     pf_data = await read_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, start_row=start_row_num)
 
-    total_domains = len(pf_data)
-    pre_completed = sum(1 for r in pf_data if is_row_fully_completed(r))
-    pre_nim_completed = sum(1 for r in pf_data if is_row_fully_completed(r) or (len(r) > 40 and len(safe_str(r[40]).strip()) > 10) or (len(r) > 35 and len(safe_str(r[35]).strip()) > 10))
+    total_domains = sum(1 for r in pf_data if r and safe_str(r[0]).strip())
+    is_57 = bool(pf_data and len(pf_data[0]) <= 65)
+    tc_col_idx = 23 if is_57 else 25
+    nim_col_idx = 34 if is_57 else 40
+    gemini_col_idx = 43 if is_57 else 48
+    tracxn_col_idx = 49 if is_57 else 61
+
+    pre_tc_completed = sum(1 for r in pf_data if len(r) > tc_col_idx and safe_str(r[tc_col_idx]).strip().upper() == "SUCCESS")
+    pre_nim_completed = sum(1 for r in pf_data if len(r) > nim_col_idx and safe_str(r[nim_col_idx]).strip().upper() == "SUCCESS")
+    pre_gemini_completed = sum(1 for r in pf_data if len(r) > gemini_col_idx and safe_str(r[gemini_col_idx]).strip())
+    pre_completed = sum(1 for r in pf_data if (len(r) > tracxn_col_idx and safe_str(r[tracxn_col_idx]).strip()) or is_row_fully_completed(r))
+
     processed = 0
-    success_count = pre_completed
+    success_count = pre_tc_completed
     fail_count = 0
+    tc_completed_count = pre_tc_completed
     nim_completed_count = pre_nim_completed
+    gemini_completed_count = pre_gemini_completed
+    tracxn_completed_count = pre_completed
     phase_title = f"Phase 1: Initial Crawl & Predictions ({mode})" if mode == "full" else f"Mode: {mode.upper()}"
-    update_progress_file(processed, total_domains, success_count, fail_count, phase=phase_title, stage_details=f"Starting batch processing of {total_domains} rows ({pre_completed} already completed)...", pending_tc=0, mode=mode)
+    update_progress_file(
+        tracxn_completed_count, total_domains, success_count, fail_count,
+        phase=phase_title,
+        stage_details=f"Starting batch processing of {total_domains} rows ({pre_completed} already completed)...",
+        pending_tc=0, mode=mode,
+        scraped_count=tc_completed_count,
+        nim_count=nim_completed_count,
+        gemini_count=gemini_completed_count,
+        tracxn_count=tracxn_completed_count
+    )
 
     semaphore = asyncio.Semaphore(MAX_WORKERS)
     pending_tech_crawler_jobs = []
@@ -4805,11 +4838,15 @@ async def Integrated_Extract_domains(
                     processed += 1
                     if processed % 15 == 0 or processed == total_domains:
                         update_progress_file(
-                            processed, total_domains, success_count, fail_count,
+                            tracxn_completed_count + processed, total_domains, tc_completed_count, fail_count,
                             phase=phase_title,
-                            stage_details=f"Pipelined: {nim_completed_count}/{total_domains} summarized | {processed}/{total_domains} fully completed ({success_count} success, {fail_count} fail)",
+                            stage_details=f"Pipelined: {nim_completed_count}/{total_domains} summarized | {tracxn_completed_count + processed}/{total_domains} fully completed ({tc_completed_count} success, {fail_count} fail)",
                             pending_tc=len(pending_tech_crawler_jobs),
-                            mode=mode
+                            mode=mode,
+                            scraped_count=tc_completed_count,
+                            nim_count=nim_completed_count,
+                            gemini_count=gemini_completed_count,
+                            tracxn_count=tracxn_completed_count + processed
                         )
                         trim_memory()
                     summarized_queue.task_done()

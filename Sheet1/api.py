@@ -468,29 +468,55 @@ def _get_status_response():
     success_val = prog.get("success", 0)
     fail_val = prog.get("fail", 0)
 
-    # Derive real stage metrics from live telemetry
-    nim_count = 0
-    m_nim = re.search(r"(\d+)/\d+\s+summarized", stage_details)
-    if m_nim:
-        nim_count = int(m_nim.group(1))
+    # 1. First priority: Exact phase metrics recorded in progress
+    scraped_count = prog.get("scraped_count")
+    nim_count = prog.get("nim_count")
+    gemini_count = prog.get("gemini_count")
+    tracxn_count = prog.get("tracxn_count")
 
-    completed_count = 0
-    m_comp = re.search(r"(\d+)/\d+\s+fully completed", stage_details)
-    if m_comp:
-        completed_count = int(m_comp.group(1))
-    else:
-        completed_count = current_val
+    # 2. Telemetry heuristics fallback if not in progress
+    if tracxn_count is None:
+        m_already = re.search(r"(\d+)\s+already completed", stage_details)
+        m_comp = re.search(r"(\d+)/\d+\s+fully completed", stage_details)
+        if m_comp:
+            tracxn_count = int(m_comp.group(1))
+        elif m_already:
+            tracxn_count = int(m_already.group(1))
+        else:
+            tracxn_count = current_val
 
-    scraped_count = 0
-    m_tc = re.search(r"(\d+)\s+SUCCESS", stage_details)
-    if m_tc:
-        scraped_count = int(m_tc.group(1))
-    else:
-        scraped_count = success_val
+    if nim_count is None:
+        m_nim = re.search(r"(\d+)/\d+\s+summarized", stage_details)
+        m_already_sum = re.search(r"(\d+)\s+already summarized", stage_details)
+        if m_nim:
+            nim_count = int(m_nim.group(1))
+        elif m_already_sum:
+            nim_count = int(m_already_sum.group(1))
+        else:
+            nim_count = 0
 
-    nim_count = max(nim_count, completed_count)
-    scraped_count = max(scraped_count, nim_count)
-    gemini_count = completed_count
+    if gemini_count is None:
+        gemini_count = 0
+
+    if scraped_count is None:
+        m_tc = re.search(r"(\d+)\s+SUCCESS", stage_details)
+        if m_tc:
+            scraped_count = int(m_tc.group(1))
+        else:
+            scraped_count = success_val
+
+    completed_count = tracxn_count
+
+    if curr_phase == "Completed" or current_status == "succeeded":
+        completed_count = max(completed_count, total_val, current_val)
+        tracxn_count = completed_count
+
+    if total_val > 0:
+        completed_count = min(completed_count, total_val)
+        tracxn_count = min(tracxn_count, total_val)
+        gemini_count = min(gemini_count, total_val)
+        nim_count = min(nim_count, total_val)
+        scraped_count = min(scraped_count, total_val)
 
     return {
         "status": current_status,
