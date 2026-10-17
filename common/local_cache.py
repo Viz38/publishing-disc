@@ -85,7 +85,7 @@ class LocalSheetCache:
         "output_data_if_validation", "output_data_feed",
         "final_feed_name", "final_feed_id", "final_pub_funnel_name", "final_pub_funnel_id",
         "cf_if_status", "cf_if_time", "if_pf_status", "if_pf_time",
-        "tag_status_if", "tag_status_pf", "discovery_bq", "updated_at"
+        "tag_status_if", "tag_status_pf", "discovery_bq", "gsheet_synced", "updated_at"
     ]
 
     def __init__(self, csv_path: Optional[str] = None, cache_dir: Optional[str] = None, filename: str = ".local_cache.csv"):
@@ -324,12 +324,13 @@ class LocalSheetCache:
         can_direct_write = self.is_fully_completed(domain) and (not str(row[20]).strip() or not str(row[40]).strip())
         return hydrated, can_direct_write
 
-    def build_full_write_row(self, domain: str, hydrated_row: List[Any], is_cf_sheet: bool = True) -> List[Any]:
+    @staticmethod
+    def build_full_write_row(domain: str, hydrated_row: List[Any], is_cf_sheet: bool = True, record: Optional[Dict[str, Any]] = None, cache_instance: Optional[Any] = None) -> List[Any]:
         """
         Builds the exact 50-element array (starting at Col T / Col 20)
         from hydrated data for writing directly to Google Sheets.
         """
-        rec = self.get(domain) or {}
+        rec = record or (cache_instance.get(domain) if cache_instance else {}) or {}
         engine_picked = hydrated_row[19] or rec.get("enginePickedTime", "")
         engine_cleared = hydrated_row[20] or rec.get("engineClearedTime", "")
         engine_status = hydrated_row[21] or rec.get("engineClearedStatus", "DONE")

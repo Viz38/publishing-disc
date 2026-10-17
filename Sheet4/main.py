@@ -27,6 +27,8 @@ from common import (
     PipelineCoordinator,
     trim_memory,
     SystemHealthMonitor,
+    GSheetCircuitBreaker,
+    is_doc_too_large_error,
 )
 
 import asyncio
@@ -68,6 +70,8 @@ max_threads = os.cpu_count()
 
 _SHEET_DIR = os.path.dirname(os.path.abspath(__file__))
 LOCAL_CACHE = LocalSheetCache(os.path.join(_SHEET_DIR, "discovery_cache.csv"))
+GSHEET_CIRCUIT_BREAKER = GSheetCircuitBreaker(name="Sheet4")
+PENDING_SYNC_FILE = os.path.join(_SHEET_DIR, "pending_gsheet_sync.csv")
 SYSTEM_HEALTH = SystemHealthMonitor(
     cpu_threshold=float(os.getenv("SYSTEM_HEALTH_CPU_THRESHOLD_5080", os.getenv("SYSTEM_HEALTH_CPU_THRESHOLD", "95.0"))),
     mem_threshold=float(os.getenv("SYSTEM_HEALTH_MEM_THRESHOLD_5080", os.getenv("SYSTEM_HEALTH_MEM_THRESHOLD", "88.0"))),
@@ -474,6 +478,9 @@ async def write_sheet_data(client, SHEET_ID, sheet_name, data, start_row, start_
     if not data or not data[0]:
         return
 
+    if GSHEET_CIRCUIT_BREAKER.should_skip_gsheet():
+        return
+
     # Critical: safely cap all cell values to 49,900 chars to avoid Google Sheets 50,000 char per cell HTTP 400 fatal crash
     data = [
         [
@@ -522,6 +529,10 @@ async def write_sheet_data(client, SHEET_ID, sheet_name, data, start_row, start_
         except TypeError:
             await worksheet.update(cell_range, data, value_input_option='USER_ENTERED')
     except Exception as update_err:
+        if is_doc_too_large_error(update_err):
+            GSHEET_CIRCUIT_BREAKER.trip(str(update_err))
+            return
+
         logging.warning(f"Worksheet update failed ({update_err}). Invalidating cache and retrying...")
         _WORKSHEET_CACHE.pop(cache_key, None)
         sheet = None
@@ -530,9 +541,15 @@ async def write_sheet_data(client, SHEET_ID, sheet_name, data, start_row, start_
         worksheet = await sheet.worksheet(sheet_name)
         _WORKSHEET_CACHE[cache_key] = worksheet
         try:
-            await worksheet.update(values=data, range_name=cell_range, value_input_option='USER_ENTERED')
-        except TypeError:
-            await worksheet.update(cell_range, data, value_input_option='USER_ENTERED')
+            try:
+                await worksheet.update(values=data, range_name=cell_range, value_input_option='USER_ENTERED')
+            except TypeError:
+                await worksheet.update(cell_range, data, value_input_option='USER_ENTERED')
+        except Exception as retry_err:
+            if is_doc_too_large_error(retry_err):
+                GSHEET_CIRCUIT_BREAKER.trip(str(retry_err))
+                return
+            raise
 
 
 # ****************************** Data Cleaning ************************************************************************
@@ -4273,6 +4290,13 @@ async def Integrated_Extract_domains(
         async def _flush_sheet_buffer(buf):
             if not buf:
                 return
+
+            # If Google Sheets is in document-too-large circuit breaker state, skip GSheet writes and record to pending sync
+            if GSHEET_CIRCUIT_BREAKER.should_skip_gsheet():
+                for r_num, c_num, val in buf:
+                    GSHEET_CIRCUIT_BREAKER.record_pending_sync(PENDING_SYNC_FILE, "unknown", r_num, c_num, val)
+                return
+
             # Deduplicate buffer keeping latest update per (row_number, col_number)
             deduped = {}
             for r_num, c_num, val in buf:
@@ -4302,6 +4326,12 @@ async def Integrated_Extract_domains(
                         await write_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, chunk_rows, start_r, c_num)
                         await asyncio.sleep(0.5)
                     except Exception as ex:
+                        if is_doc_too_large_error(ex):
+                            GSHEET_CIRCUIT_BREAKER.trip(str(ex))
+                            for r_num, val in grp:
+                                GSHEET_CIRCUIT_BREAKER.record_pending_sync(PENDING_SYNC_FILE, "unknown", r_num, c_num, val)
+                            return
+
                         logging.warning(f"Batch write failed for rows {start_r}-{start_r + len(chunk_rows)-1} col {c_num}: {ex}. Trying chunked fallback (5 rows)...")
                         # Chunked fallback in batches of 5 to isolate rogue rows (inspired by publishing-sr)
                         chunk_size = 5
@@ -4312,6 +4342,11 @@ async def Integrated_Extract_domains(
                                 await write_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, sub_rows, sub_start, c_num)
                                 await asyncio.sleep(0.2)
                             except Exception as sub_ex:
+                                if is_doc_too_large_error(sub_ex):
+                                    GSHEET_CIRCUIT_BREAKER.trip(str(sub_ex))
+                                    for r_num, val in grp:
+                                        GSHEET_CIRCUIT_BREAKER.record_pending_sync(PENDING_SYNC_FILE, "unknown", r_num, c_num, val)
+                                    break
                                 logging.error(f"Chunked fallback failed for rows {sub_start}-{sub_start + len(sub_rows)-1} col {c_num}: {sub_ex}")
 
         async def sheet_writer_worker():

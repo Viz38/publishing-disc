@@ -98,6 +98,7 @@ async def _daily_5am_ist_watchdog():
        and initializes a fresh discovery_cache.csv for the new daily domain set (once per day).
     """
     last_rotated_date = None
+    last_cleared_date = None
     FLUSH_FILE = os.path.join(BASE_DIR, ".flush_requested")
     logger.info("🕒 Daily 5:00 AM IST Watchdog initialized (04:30 AM Pre-Cutoff Flush enabled).")
     while True:
@@ -159,7 +160,32 @@ async def _daily_5am_ist_watchdog():
                         try: os.remove(ACTIVE_FILE)
                         except Exception: pass
 
-                # 2. Rotate daily cache once per day during the 5:00 AM window
+                # 2. When not in CSV-only mode, clear sheet keeping only row 1 and 2
+                if last_cleared_date != current_date_str:
+                    try:
+                        from main import get_gspread_client
+                        from common.bulk_pusher import handle_5am_sheet_cleanup
+                        target_sheet_id = settings.CF_SHEET_ID
+                        target_sheet_name = getattr(settings, "CF_EXTRACTING_SHEET_NAME", "CF_IF_Engine_Database")
+                        primary_mgr = await get_gspread_client()
+                        if primary_mgr and target_sheet_id:
+                            gc = await primary_mgr.authorize()
+                            cleared, reason = await handle_5am_sheet_cleanup(
+                                sheet_dir=BASE_DIR,
+                                client=gc,
+                                sheet_id=target_sheet_id,
+                                sheet_name=target_sheet_name,
+                                keep_rows=2
+                            )
+                            if cleared:
+                                logger.info(f"🧹 [5:00 AM Cutoff] Sheet {target_sheet_id} cleared (kept rows 1 & 2).")
+                            else:
+                                logger.info(f"ℹ️ [5:00 AM Cutoff] Sheet cleanup skipped: {reason}")
+                        last_cleared_date = current_date_str
+                    except Exception as ce:
+                        logger.error(f"Error during 5:00 AM sheet cleanup: {ce}")
+
+                # 3. Rotate daily cache once per day during the 5:00 AM window
                 if last_rotated_date != current_date_str and LOCAL_CACHE:
                     try:
                         archived = LOCAL_CACHE.rotate_daily_cache(ARCHIVE_CACHE_DIR, current_dt=now_ist)
