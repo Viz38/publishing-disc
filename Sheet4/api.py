@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import signal
 import sys
 import time
@@ -439,8 +440,8 @@ def _get_status_response():
     prog = state.get("progress", {})
     curr_phase = prog.get("phase", "Running" if state["status"] in ("running", "stopping") else "Idle")
     
-    active_tc = prog.get("active_tc_keys") or 15
-    active_nim = prog.get("active_nim_keys") or 35
+    active_tc = prog.get("active_tc_keys", 0)
+    active_nim = prog.get("active_nim_keys", 0)
     
     if "Phase 1" in curr_phase or "Crawl" in curr_phase or state["status"] in ("running", "stopping"):
         workers_phase = "16 workers (14 domain + 1 TC sweep + 1 writer)"
@@ -457,20 +458,54 @@ def _get_status_response():
         mem_pct = round(psutil.virtual_memory().percent, 1)
         dev_health = "HEALTHY" if cpu_pct < 85 and mem_pct < 85 else "THROTTLED"
     except Exception:
-        cpu_pct = 32.0
-        mem_pct = 58.0
-        dev_health = "HEALTHY"
+        cpu_pct = 0.0
+        mem_pct = 0.0
+        dev_health = "UNKNOWN"
+
+    stage_details = prog.get("stage_details", "")
+    current_val = prog.get("current", 0)
+    total_val = prog.get("total", 0)
+    success_val = prog.get("success", 0)
+    fail_val = prog.get("fail", 0)
+
+    # Derive real stage metrics from live telemetry
+    nim_count = 0
+    m_nim = re.search(r"(\d+)/\d+\s+summarized", stage_details)
+    if m_nim:
+        nim_count = int(m_nim.group(1))
+
+    completed_count = 0
+    m_comp = re.search(r"(\d+)/\d+\s+fully completed", stage_details)
+    if m_comp:
+        completed_count = int(m_comp.group(1))
+    else:
+        completed_count = current_val
+
+    scraped_count = 0
+    m_tc = re.search(r"(\d+)\s+SUCCESS", stage_details)
+    if m_tc:
+        scraped_count = int(m_tc.group(1))
+    else:
+        scraped_count = success_val
+
+    nim_count = max(nim_count, completed_count)
+    scraped_count = max(scraped_count, nim_count)
+    gemini_count = completed_count
 
     return {
         "status": current_status,
         "active": state["status"] in ("running", "stopping"),
         "is_stopping": is_stopping,
-        "progress_current": prog.get("current", 0),
-        "progress_total": prog.get("total", 0),
-        "progress_success": prog.get("success", 0),
-        "progress_fail": prog.get("fail", 0),
+        "progress_current": completed_count,
+        "progress_total": total_val,
+        "progress_success": scraped_count,
+        "progress_fail": fail_val,
+        "scraped_count": scraped_count,
+        "nim_count": nim_count,
+        "gemini_count": gemini_count,
+        "tracxn_count": completed_count,
         "phase": curr_phase,
-        "stage_details": prog.get("stage_details", ""),
+        "stage_details": stage_details,
         "pending_tc": prog.get("pending_tc", 0),
         "pipeline_mode": prog.get("mode", ""),
         "active_tc_keys": active_tc,
