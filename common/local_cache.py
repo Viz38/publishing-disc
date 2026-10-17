@@ -426,63 +426,128 @@ class LocalSheetCache:
 
         row_out = [""] * 57
 
+        is_legacy = (len(in_row) > 65)
+
         # 1. INPUT (Cols 1-17 / A-Q / idx 0-16)
         for i in range(17):
             row_out[i] = in_row[i] if i < len(in_row) else ""
 
-        # 2. ENGINE STATS (Cols 18-20 / R-T / idx 17-19)
-        row_out[17] = in_row[17] or rec.get("databaseAddedTime", "")
-        row_out[18] = in_row[18] or rec.get("enginePickedTime", "")
-        row_out[19] = in_row[19] or rec.get("engineClearedTime", "")
+        if is_legacy:
+            # 2. ENGINE STATS (Cols 18-20 / R-T / idx 17-19)
+            row_out[17] = rec.get("databaseAddedTime") or (in_row[18] if len(in_row) > 18 else "") or (in_row[17] if len(in_row) > 17 else "")
+            row_out[18] = rec.get("enginePickedTime") or (in_row[19] if len(in_row) > 19 else "")
+            row_out[19] = rec.get("engineClearedTime") or (in_row[20] if len(in_row) > 20 else "")
 
-        # 3. TECH CRAWLER STATUS (Cols 21-34 / U-AH / idx 20-33)
-        tc_status = rec.get("tc_status") or (in_row[23] if len(in_row) > 23 else "") or "SUCCESS"
-        row_out[20] = in_row[20] or rec.get("engineClearedStatus", "DONE")
-        row_out[21] = in_row[21] or rec.get("tc_job_id", "")
-        row_out[22] = in_row[22] or rec.get("tc_job_gen_time", "")
-        row_out[23] = in_row[23] or tc_status
-        row_out[24] = in_row[24] or rec.get("tc_final_url", "")
-        row_out[25] = in_row[25] or rec.get("tc_s3_html", "")
-        row_out[26] = in_row[26] or rec.get("tc_s3_markdown", "")
-        row_out[27] = in_row[27] or rec.get("tc_http_status", "200")
-        row_out[28] = in_row[28] or rec.get("tc_signals", "HTTP_OK")
+            # 3. TECH CRAWLER STATUS (Cols 21-34 / U-AH / idx 20-33)
+            tc_status = rec.get("tc_status") or (in_row[25] if len(in_row) > 25 else "") or ""
+            row_out[20] = rec.get("engineClearedStatus") or (in_row[21] if len(in_row) > 21 else "") or ""
+            row_out[21] = rec.get("tc_job_id") or (in_row[23] if len(in_row) > 23 else "")
+            row_out[22] = rec.get("tc_job_gen_time") or (in_row[24] if len(in_row) > 24 else "")
+            row_out[23] = tc_status
+            row_out[24] = rec.get("tc_final_url") or (in_row[26] if len(in_row) > 26 else "")
+            row_out[25] = rec.get("tc_s3_html") or (in_row[27] if len(in_row) > 27 else "")
+            row_out[26] = rec.get("tc_s3_markdown") or (in_row[28] if len(in_row) > 28 else "")
+            row_out[27] = rec.get("tc_http_status") or (in_row[29] if len(in_row) > 29 else "") or ""
+            row_out[28] = rec.get("tc_signals") or (in_row[30] if len(in_row) > 30 else "") or ""
 
-        # Raw Data at Col 30 (idx 29 / Col AD) - CAP AT 49,000 CHARS
-        raw_content = rec.get("scrappingBeautySoup") or (in_row[29] if len(in_row) > 29 else "") or ""
-        row_out[29] = str(raw_content)[:49000]
+            # Raw Data at Col 30 (idx 29 / Col AD) - CAP AT 49,000 CHARS
+            raw_content = rec.get("scrappingBeautySoup") or (in_row[31] if len(in_row) > 31 and in_row[31] else "") or (in_row[37] if len(in_row) > 37 else "") or ""
+            row_out[29] = str(raw_content)[:49000]
 
-        row_out[30] = in_row[30] if len(in_row) > 30 else rec.get("tc_job_gen_time", "")
-        row_out[31] = in_row[31] if len(in_row) > 31 else rec.get("tc_final_url", "")
-        row_out[32] = ""  # Error - Code
-        row_out[33] = ""  # Error - Reason
+            row_out[30] = row_out[22]  # TimeStamp
+            row_out[31] = row_out[24]  # URL
+            row_out[32] = ""  # Error - Code
+            row_out[33] = ""  # Error - Reason
 
-        # 4. LLM PREDICTIONS (Cols 35-49 / AI-AW / idx 34-48)
-        summary_val = rec.get("output_data_summery") or (in_row[35] if len(in_row) > 35 else "") or ""
-        row_out[34] = rec.get("summary_status", "SUCCESS")
-        row_out[35] = summary_val
-        row_out[36] = summary_val  # Domain Summery context
-        row_out[37] = rec.get("output_data_if") or (in_row[37] if len(in_row) > 37 else "") or ""
-        row_out[38] = rec.get("output_data_if_name") or (in_row[38] if len(in_row) > 38 else "") or ""
-        row_out[39] = rec.get("output_data_if_id") or (in_row[39] if len(in_row) > 39 else "") or ""
-        row_out[40] = row_out[38]  # Context
-        row_out[41] = rec.get("output_data_if_validation") or (in_row[41] if len(in_row) > 41 else "") or ""
-        row_out[42] = rec.get("output_data_feed") or ""
-        row_out[43] = rec.get("output_data_feed") or (in_row[43] if len(in_row) > 43 else "") or ""
-        row_out[44] = rec.get("final_feed_name") or (in_row[44] if len(in_row) > 44 else "") or ""
-        row_out[45] = rec.get("final_feed_id") or (in_row[45] if len(in_row) > 45 else "") or ""
-        row_out[46] = rec.get("final_pub_funnel_name") or (in_row[46] if len(in_row) > 46 else "") or ""
-        row_out[47] = rec.get("final_pub_funnel_id") or (in_row[47] if len(in_row) > 47 else "") or ""
-        row_out[48] = ""  # Funnel Recheck
+            # 4. LLM PREDICTIONS (Cols 35-49 / AI-AW / idx 34-48)
+            summary_val = rec.get("output_data_summery") or (in_row[40] if len(in_row) > 40 else "") or ""
+            row_out[34] = rec.get("summary_status") or (in_row[39] if len(in_row) > 39 else "") or ""
+            row_out[35] = summary_val
+            row_out[36] = summary_val  # Domain Summery context
+            row_out[37] = rec.get("output_data_if") or (in_row[43] if len(in_row) > 43 else "") or ""
+            row_out[38] = rec.get("output_data_if_name") or (in_row[44] if len(in_row) > 44 else "") or ""
+            row_out[39] = rec.get("output_data_if_id") or (in_row[45] if len(in_row) > 45 else "") or ""
+            row_out[40] = row_out[38]  # Context
+            row_out[41] = rec.get("output_data_if_validation") or (in_row[49] if len(in_row) > 49 and in_row[49] else (in_row[50] if len(in_row) > 50 else "")) or ""
+            row_out[42] = rec.get("output_data_feed") or (in_row[53] if len(in_row) > 53 and in_row[53] else (in_row[54] if len(in_row) > 54 else "")) or ""
+            row_out[43] = row_out[42]
+            row_out[44] = rec.get("final_feed_name") or (in_row[54] if len(in_row) > 54 and in_row[54] else (in_row[55] if len(in_row) > 55 else "")) or ""
+            row_out[45] = rec.get("final_feed_id") or (in_row[55] if len(in_row) > 55 and in_row[55] else (in_row[56] if len(in_row) > 56 else "")) or ""
+            row_out[46] = rec.get("final_pub_funnel_name") or (in_row[56] if len(in_row) > 56 and in_row[56] else (in_row[57] if len(in_row) > 57 else "")) or ""
+            row_out[47] = rec.get("final_pub_funnel_id") or (in_row[57] if len(in_row) > 57 and in_row[57] else (in_row[58] if len(in_row) > 58 else "")) or ""
+            row_out[48] = ""  # Funnel Recheck
 
-        # 5. TRACXN APIs (Cols 50-57 / AX-BE / idx 49-56)
-        row_out[49] = rec.get("cf_if_status") or (in_row[49] if len(in_row) > 49 else "") or ""
-        row_out[50] = rec.get("cf_if_time") or (in_row[50] if len(in_row) > 50 else "") or ""
-        row_out[51] = rec.get("if_pf_status") or (in_row[51] if len(in_row) > 51 else "") or ""
-        row_out[52] = rec.get("if_pf_time") or (in_row[52] if len(in_row) > 52 else "") or ""
-        row_out[53] = rec.get("tag_status_if") or (in_row[53] if len(in_row) > 53 else "") or ""
-        row_out[54] = rec.get("tag_status_pf") or (in_row[54] if len(in_row) > 54 else "") or ""
-        row_out[55] = rec.get("tag_status_review") or (in_row[55] if len(in_row) > 55 else "") or ""
-        row_out[56] = rec.get("discovery_bq") or (in_row[56] if len(in_row) > 56 else "") or ""
+            # 5. TRACXN APIs (Cols 50-57 / AX-BE / idx 49-56)
+            row_out[49] = rec.get("cf_if_status") or (in_row[61] if len(in_row) > 61 else "") or ""
+            row_out[50] = rec.get("cf_if_time") or (in_row[62] if len(in_row) > 62 else "") or ""
+            row_out[51] = rec.get("if_pf_status") or (in_row[63] if len(in_row) > 63 else "") or ""
+            row_out[52] = rec.get("if_pf_time") or (in_row[64] if len(in_row) > 64 else "") or ""
+            row_out[53] = rec.get("tag_status_if") or (in_row[65] if len(in_row) > 65 else "") or ""
+            row_out[54] = rec.get("tag_status_pf") or (in_row[66] if len(in_row) > 66 else "") or ""
+            row_out[55] = rec.get("tag_status_review") or (in_row[67] if len(in_row) > 67 else "") or ""
+            pf_tag = str(row_out[54]).strip().upper()
+            if pf_tag in ("YES", "TRUE"):
+                row_out[56] = rec.get("discovery_bq") or (in_row[68] if len(in_row) > 68 else "") or "yes"
+            else:
+                row_out[56] = "no" if (row_out[49] or row_out[51]) else ""
+        else:
+            # 2. ENGINE STATS (Cols 18-20 / R-T / idx 17-19)
+            row_out[17] = in_row[17] or rec.get("databaseAddedTime", "")
+            row_out[18] = in_row[18] or rec.get("enginePickedTime", "")
+            row_out[19] = in_row[19] or rec.get("engineClearedTime", "")
+
+            # 3. TECH CRAWLER STATUS (Cols 21-34 / U-AH / idx 20-33)
+            tc_status = rec.get("tc_status") or (in_row[23] if len(in_row) > 23 else "") or ""
+            row_out[20] = in_row[20] or rec.get("engineClearedStatus", "") or ""
+            row_out[21] = in_row[21] or rec.get("tc_job_id", "")
+            row_out[22] = in_row[22] or rec.get("tc_job_gen_time", "")
+            row_out[23] = in_row[23] or tc_status
+            row_out[24] = in_row[24] or rec.get("tc_final_url", "")
+            row_out[25] = in_row[25] or rec.get("tc_s3_html", "")
+            row_out[26] = in_row[26] or rec.get("tc_s3_markdown", "")
+            row_out[27] = in_row[27] or rec.get("tc_http_status", "") or ""
+            row_out[28] = in_row[28] or rec.get("tc_signals", "") or ""
+
+            # Raw Data at Col 30 (idx 29 / Col AD) - CAP AT 49,000 CHARS
+            raw_content = rec.get("scrappingBeautySoup") or (in_row[29] if len(in_row) > 29 else "") or ""
+            row_out[29] = str(raw_content)[:49000]
+
+            row_out[30] = in_row[30] if len(in_row) > 30 else rec.get("tc_job_gen_time", "")
+            row_out[31] = in_row[31] if len(in_row) > 31 else rec.get("tc_final_url", "")
+            row_out[32] = ""  # Error - Code
+            row_out[33] = ""  # Error - Reason
+
+            # 4. LLM PREDICTIONS (Cols 35-49 / AI-AW / idx 34-48)
+            summary_val = rec.get("output_data_summery") or (in_row[35] if len(in_row) > 35 else "") or ""
+            row_out[34] = in_row[34] or rec.get("summary_status", "") or ""
+            row_out[35] = summary_val
+            row_out[36] = summary_val  # Domain Summery context
+            row_out[37] = rec.get("output_data_if") or (in_row[37] if len(in_row) > 37 else "") or ""
+            row_out[38] = rec.get("output_data_if_name") or (in_row[38] if len(in_row) > 38 else "") or ""
+            row_out[39] = rec.get("output_data_if_id") or (in_row[39] if len(in_row) > 39 else "") or ""
+            row_out[40] = row_out[38]  # Context
+            row_out[41] = rec.get("output_data_if_validation") or (in_row[41] if len(in_row) > 41 else "") or ""
+            row_out[42] = rec.get("output_data_feed") or ""
+            row_out[43] = rec.get("output_data_feed") or (in_row[43] if len(in_row) > 43 else "") or ""
+            row_out[44] = rec.get("final_feed_name") or (in_row[44] if len(in_row) > 44 else "") or ""
+            row_out[45] = rec.get("final_feed_id") or (in_row[45] if len(in_row) > 45 else "") or ""
+            row_out[46] = rec.get("final_pub_funnel_name") or (in_row[46] if len(in_row) > 46 else "") or ""
+            row_out[47] = rec.get("final_pub_funnel_id") or (in_row[47] if len(in_row) > 47 else "") or ""
+            row_out[48] = ""  # Funnel Recheck
+
+            # 5. TRACXN APIs (Cols 50-57 / AX-BE / idx 49-56)
+            row_out[49] = rec.get("cf_if_status") or (in_row[49] if len(in_row) > 49 else "") or ""
+            row_out[50] = rec.get("cf_if_time") or (in_row[50] if len(in_row) > 50 else "") or ""
+            row_out[51] = rec.get("if_pf_status") or (in_row[51] if len(in_row) > 51 else "") or ""
+            row_out[52] = rec.get("if_pf_time") or (in_row[52] if len(in_row) > 52 else "") or ""
+            row_out[53] = rec.get("tag_status_if") or (in_row[53] if len(in_row) > 53 else "") or ""
+            row_out[54] = rec.get("tag_status_pf") or (in_row[54] if len(in_row) > 54 else "") or ""
+            row_out[55] = rec.get("tag_status_review") or (in_row[55] if len(in_row) > 55 else "") or ""
+            pf_tag = str(row_out[54]).strip().upper()
+            if pf_tag in ("YES", "TRUE"):
+                row_out[56] = rec.get("discovery_bq") or (in_row[56] if len(in_row) > 56 else "") or "yes"
+            else:
+                row_out[56] = "no" if (row_out[49] or row_out[51]) else ""
 
         return row_out
 
