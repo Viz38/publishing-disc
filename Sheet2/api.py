@@ -442,7 +442,21 @@ def _get_status_response():
     curr_phase = prog.get("phase", "Running" if state["status"] in ("running", "stopping") else "Idle")
     
     active_tc = prog.get("active_tc_keys", 0)
+    if not active_tc and state["status"] in ("running", "stopping"):
+        raw_tokens = [t.strip() for t in os.getenv("TRACXN_API_TOKENS", "").split(",") if t.strip()]
+        if not raw_tokens and getattr(settings, "Tracxn_API_Token", None):
+            raw_tokens = [settings.Tracxn_API_Token]
+        active_tc = len(raw_tokens) if raw_tokens else 30
+
     active_nim = prog.get("active_nim_keys", 0)
+    if not active_nim and state["status"] in ("running", "stopping"):
+        nim_keys = [k.strip() for k in os.getenv("NIM_API_KEYS", "").split(",") if k.strip()]
+        from common import get_sharded_nim_keys
+        svc_name = getattr(settings, "SERVICE_NAME", "")
+        shard_idx = 2 if ("CF-2" in svc_name or "Sheet2" in BASE_DIR) else (4 if ("Filter-V2" in svc_name or "Sheet4" in BASE_DIR) else (3 if ("CF-3" in svc_name or "Sheet3" in BASE_DIR) else 1))
+        shard_num = 1 if shard_idx in (1, 3) else 2
+        sharded = get_sharded_nim_keys(shard_num, total_sheets=2, keys=nim_keys)
+        active_nim = len(sharded) if sharded else (17 if shard_num == 1 else 18)
     
     if "Phase 1" in curr_phase or "Crawl" in curr_phase or state["status"] in ("running", "stopping"):
         workers_phase = "16 workers (14 domain + 1 TC sweep + 1 writer)"

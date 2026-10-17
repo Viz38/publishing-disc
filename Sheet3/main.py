@@ -144,7 +144,11 @@ def update_progress_file(current: int, total: int, success: int, fail: int, phas
         'tc_success': tc_success if tc_success is not None else (success if success is not None else prev_prog.get('tc_success', success)),
         'nim_count': nim_count if nim_count is not None else prev_prog.get('nim_count', 0),
         'gemini_count': gemini_count if gemini_count is not None else prev_prog.get('gemini_count', 0),
-        'tracxn_count': tracxn_count if tracxn_count is not None else prev_prog.get('tracxn_count', current)
+        'tracxn_count': tracxn_count if tracxn_count is not None else prev_prog.get('tracxn_count', current),
+        'active_tc_keys': TRACXN_KEY_MANAGER.get_active_tokens_count() if 'TRACXN_KEY_MANAGER' in globals() else prev_prog.get('active_tc_keys', 30),
+        'total_tc_keys': len(getattr(TRACXN_KEY_MANAGER, 'tokens', [])) if 'TRACXN_KEY_MANAGER' in globals() else prev_prog.get('total_tc_keys', 30),
+        'active_nim_keys': NIM_KEY_MANAGER.get_active_keys_count() if ('NIM_KEY_MANAGER' in globals() and hasattr(NIM_KEY_MANAGER, 'get_active_keys_count')) else (len(getattr(NIM_KEY_MANAGER, 'keys', [])) if 'NIM_KEY_MANAGER' in globals() else prev_prog.get('active_nim_keys', 17)),
+        'total_nim_keys': 35
     }
     tmp_path = f"{PROGRESS_FILE}.tmp.{os.getpid()}"
     try:

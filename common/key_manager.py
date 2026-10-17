@@ -376,6 +376,11 @@ class NIMKeyManager:
         with self._lock:
             return len(self.keys)
 
+    def get_active_keys_count(self) -> int:
+        now = time.time()
+        with self._lock:
+            return sum(1 for k in self.keys if self._penalties.get(k, 0) <= now)
+
     @property
     def total_tokens(self) -> int:
         return self.get_total_keys()
