@@ -30,6 +30,7 @@ from common import (
     SystemHealthMonitor,
     GSheetCircuitBreaker,
     is_doc_too_large_error,
+    is_nim_dead_domain,
 )
 
 import asyncio
@@ -202,20 +203,32 @@ def is_row_fully_completed(row: list) -> bool:
         "SNOOZED", "MARKED_IRRELEVANT", "MARKED_FOR_LATER", "ESCALATED", "SKIPPED_UNASSIGNABLE"
     }
 
+    is_57 = (len(row) <= 65)
+    tc_idx = 23 if is_57 else 25
+    nim_idx = 34 if is_57 else 40
+
+    # Non-retryable terminal exit: Tech Crawler permanently failed
+    if len(row) > tc_idx and str(row[tc_idx]).strip().upper() == "FAILED":
+        return True
+
+    # Non-retryable terminal exit: Dead domain / no content for NIM
+    if len(row) > nim_idx and str(row[nim_idx]).strip().upper() in ("NO_CONTENT", "FAILED_NO_CONTENT"):
+        return True
+
     def _is_valid_timestamp(s: str) -> bool:
         s = s.strip()
         if len(s) >= 8 and (":" in s or "/" in s or "-" in s) and s.upper() not in valid_statuses and not s.startswith("http"):
             return True
         return False
 
-    # Check 57-column schema (Cols AX-BC / indices 49-54)
-    for col_idx in range(49, min(55, len(row))):
+    # Check 57-column schema Write API movement columns (Cols AX-BA / indices 49-52)
+    for col_idx in range(49, min(53, len(row))):
         val = str(row[col_idx]).strip()
         if val.upper() in valid_statuses or _is_valid_timestamp(val):
             return True
 
-    # Check Legacy 70/93-column schema (indices 61-66)
-    for col_idx in range(61, min(67, len(row))):
+    # Check Legacy 70/93-column schema (indices 61-65)
+    for col_idx in range(61, min(65, len(row))):
         val = str(row[col_idx]).strip()
         if val.upper() in valid_statuses or _is_valid_timestamp(val):
             return True
@@ -2143,7 +2156,7 @@ async def WriteAPI_Domain_Funnel_async(domainProfileId, source_funnelID, filterG
                 active_sess, domainProfileId, source_funnelID, filterGroupId, filterId, comments, token=tok
             )
             if assign_res == "UNASSIGNABLE":
-                return 'FALSE'
+                return 'SKIPPED_UNASSIGNABLE'
             ret = "NO"
             if status == 'MOVED_OUT':
                 ret = await TRACXN_CLIENT.move_domain_funnel(
@@ -2932,8 +2945,12 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
         logging.info(f"Smart auto-resume: reusing existing summary for {domain} (length {len(output_data_summery)}) with status {summary_status}")
     elif not final_raw_data:
         output_data_summery = ""
-        summary_status = "NO_RAW_DATA"
-        logging.info(f"No raw data found in Col AF or Col AL for {domain}. Marking summary status NO_RAW_DATA.")
+        summary_status = "NO_CONTENT"
+        logging.info(f"No raw data found in Col AF or Col AL for {domain}. Marking summary status NO_CONTENT.")
+    elif is_nim_dead_domain(final_raw_data):
+        output_data_summery = ""
+        summary_status = "NO_CONTENT"
+        logging.info(f"Dead domain content detected for {domain}. Marking summary status NO_CONTENT.")
     elif input_data_summery:
         input_data_summery = Utility_Replace_Response(input_data_summery, base_prompt_for_summery, replacable_char)
         input_data_summery = Utility_Replace_Response(domain, input_data_summery, replacable_char_Domain)
@@ -4432,13 +4449,22 @@ async def Integrated_Extract_domains(
     gemini_col_idx = 43 if is_57 else 48
     tracxn_col_idx = 49 if is_57 else 61
 
-    pre_tc_completed = sum(1 for r in pf_data if len(r) > tc_col_idx and safe_str(r[tc_col_idx]).strip().upper() == "SUCCESS")
-    pre_nim_completed = sum(1 for r in pf_data if len(r) > nim_col_idx and safe_str(r[nim_col_idx]).strip().upper() == "SUCCESS")
-    pre_gemini_completed = sum(1 for r in pf_data if len(r) > gemini_col_idx and safe_str(r[gemini_col_idx]).strip())
-    pre_completed = sum(1 for r in pf_data if (len(r) > tracxn_col_idx and safe_str(r[tracxn_col_idx]).strip()) or is_row_fully_completed(r))
+    pre_tc_scraped = sum(1 for r in pf_data if (len(r) > tc_col_idx and safe_str(r[tc_col_idx]).strip().upper() == "SUCCESS") or (len(r) > (29 if is_57 else 31) and safe_str(r[29 if is_57 else 31]).strip()))
+    pre_tc_failed = sum(1 for r in pf_data if len(r) > tc_col_idx and safe_str(r[tc_col_idx]).strip().upper() == "FAILED")
+    pre_tc_completed = min(total_domains, pre_tc_scraped + pre_tc_failed)
+
+    pre_nim_success = sum(1 for r in pf_data if len(r) > nim_col_idx and safe_str(r[nim_col_idx]).strip().upper() == "SUCCESS")
+    pre_nim_no_content = sum(1 for r in pf_data if len(r) > nim_col_idx and safe_str(r[nim_col_idx]).strip().upper() in ("NO_CONTENT", "FAILED_NO_CONTENT"))
+    pre_nim_completed = min(pre_tc_scraped, pre_nim_success + pre_nim_no_content)
+
+    pre_gemini_feed = sum(1 for r in pf_data if len(r) > gemini_col_idx and safe_str(r[gemini_col_idx]).strip())
+    pre_gemini_terminal_if = sum(1 for r in pf_data if len(r) > (37 if is_57 else 44) and any(x in safe_str(r[37 if is_57 else 44]).strip().upper() for x in ("ESCALATED", "MARKED_IRRELEVANT", "SNOOZED")))
+    pre_gemini_completed = min(pre_nim_success, pre_gemini_feed + pre_gemini_terminal_if)
+
+    pre_completed = min(pre_gemini_completed, sum(1 for r in pf_data if is_row_fully_completed(r)))
 
     processed = 0
-    success_count = pre_tc_completed
+    success_count = pre_tc_scraped
     fail_count = 0
     tc_completed_count = pre_tc_completed
     nim_completed_count = pre_nim_completed
@@ -5099,7 +5125,9 @@ async def Process_Review_domain(session, row, row_number, client, semaphore, SHE
 
             tag_status_review = tagStatusForReview
 
-            if tagStatusForIF == "YES" or tagStatusForPF == "YES" or tagStatusForReview == "YES":
+            if is_row_fully_completed(row):
+                pass
+            elif tagStatusForIF == "YES" or tagStatusForPF == "YES" or tagStatusForReview == "YES":
                 pass
             else :
                 # print("Domain Picked for review - ",domain)
@@ -5678,10 +5706,19 @@ async def main():
         try:
             pf_final = await read_sheet_data(client, active_sheet_id, CF_EXTRACTING_SHEET_NAME, start_row=start_row_arg)
             is_57_fin = bool(pf_final and len(pf_final[0]) <= 65)
-            fin_tc = sum(1 for r in pf_final if len(r) > (23 if is_57_fin else 25) and safe_str(r[23 if is_57_fin else 25]).strip().upper() == "SUCCESS")
-            fin_nim = sum(1 for r in pf_final if len(r) > (34 if is_57_fin else 40) and safe_str(r[34 if is_57_fin else 40]).strip().upper() == "SUCCESS")
-            fin_gem = sum(1 for r in pf_final if len(r) > (43 if is_57_fin else 48) and safe_str(r[43 if is_57_fin else 48]).strip())
-            fin_tracxn = sum(1 for r in pf_final if len(r) > (49 if is_57_fin else 61) and safe_str(r[49 if is_57_fin else 61]).strip())
+            fin_tc_scraped = sum(1 for r in pf_final if (len(r) > (23 if is_57_fin else 25) and safe_str(r[23 if is_57_fin else 25]).strip().upper() == "SUCCESS") or (len(r) > (29 if is_57_fin else 31) and safe_str(r[29 if is_57_fin else 31]).strip()))
+            fin_tc_failed = sum(1 for r in pf_final if len(r) > (23 if is_57_fin else 25) and safe_str(r[23 if is_57_fin else 25]).strip().upper() == "FAILED")
+            fin_tc = min(len(pf_final), fin_tc_scraped + fin_tc_failed)
+
+            fin_nim_succ = sum(1 for r in pf_final if len(r) > (34 if is_57_fin else 40) and safe_str(r[34 if is_57_fin else 40]).strip().upper() == "SUCCESS")
+            fin_nim_nocontent = sum(1 for r in pf_final if len(r) > (34 if is_57_fin else 40) and safe_str(r[34 if is_57_fin else 40]).strip().upper() in ("NO_CONTENT", "FAILED_NO_CONTENT"))
+            fin_nim = min(fin_tc_scraped, fin_nim_succ + fin_nim_nocontent)
+
+            fin_gem_feed = sum(1 for r in pf_final if len(r) > (43 if is_57_fin else 48) and safe_str(r[43 if is_57_fin else 48]).strip())
+            fin_gem_terminal_if = sum(1 for r in pf_final if len(r) > (37 if is_57_fin else 44) and any(x in safe_str(r[37 if is_57_fin else 44]).strip().upper() for x in ("ESCALATED", "MARKED_IRRELEVANT", "SNOOZED")))
+            fin_gem = min(fin_nim_succ, fin_gem_feed + fin_gem_terminal_if)
+
+            fin_tracxn = min(fin_gem, sum(1 for r in pf_final if is_row_fully_completed(r)))
             fin_total = len(pf_final)
         except Exception:
             fin_tc = tc_completed_count if 'tc_completed_count' in locals() else 0
