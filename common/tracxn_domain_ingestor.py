@@ -86,19 +86,20 @@ class TracxnDomainIngestor:
         self.key_manager = key_manager or TracxnKeyManager()
         self.gc = get_gspread_client()
 
-    def fetch_tracxn_domains(self, payload: Dict[str, Any], max_results: int) -> Dict[str, Any]:
+    def fetch_tracxn_domains(self, payload: Dict[str, Any], max_results: int, start_offset: int = 0) -> Dict[str, Any]:
         """
         Calls Tracxn API using token rotation from TracxnKeyManager.
         Fetches up to max_results companies in pages of 100.
         """
         results = []
         total_coverage = 0
-        from_offset = 0
+        from_offset = start_offset
 
         while len(results) < max_results:
             page_payload = dict(payload)
+            page_size = min(100, max_results - len(results))
             page_payload["from"] = from_offset
-            page_payload["size"] = min(100, max_results - len(results))
+            page_payload["size"] = page_size
 
             token = self.key_manager.get_next_token()
             if not token:
@@ -120,8 +121,8 @@ class TracxnDomainIngestor:
                     if not page_items:
                         break
                     results.extend(page_items)
-                    from_offset += len(page_items)
-                    if from_offset >= total_coverage or len(page_items) < page_payload["size"]:
+                    from_offset += page_size
+                    if from_offset >= total_coverage:
                         break
                 elif resp.status_code in (401, 403):
                     self.key_manager.handle_http_error(token, resp.status_code)
@@ -310,33 +311,92 @@ class TracxnDomainIngestor:
                     "dataset": "funnelassignment"
                 }
 
-                res = self.fetch_tracxn_domains(query_payload, max_results=budget)
-                cov = res.get("total_coverage", 0)
-                items = res.get("items", [])
+                # If assigned budget is already satisfied from previous funnels,
+                # do a lightweight coverage query (size=1) solely to update metadata
+                if domain_added_count >= budget:
+                    cov_res = self.fetch_tracxn_domains(query_payload, max_results=1)
+                    cov = cov_res.get("total_coverage", 0)
+                    if f_id == "5dc559138787070a80be21ba":
+                        cf_coverage = cov
+                    else:
+                        backlog_coverage = cov
+                    continue
+
+                from_offset = 0
+                funnel_coverage = 0
+                payload_str = json.dumps(query_payload)
+
+                while domain_added_count < budget:
+                    page_size = 100
+                    page_payload = dict(query_payload)
+                    page_payload["from"] = from_offset
+                    page_payload["size"] = page_size
+
+                    token = self.key_manager.get_next_token()
+                    if not token:
+                        logger.error("No active Tracxn token available!")
+                        break
+
+                    headers = {
+                        "Content-Type": "application/json",
+                        "accessToken": token,
+                        "X-Request-Source": "Discovery Team"
+                    }
+
+                    try:
+                        resp = requests.post(TRACXN_API_URL, json=page_payload, headers=headers, timeout=30)
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            funnel_coverage = data.get("total_count", funnel_coverage)
+                            page_items = data.get("result", [])
+                            if not page_items:
+                                break
+
+                            for item in page_items:
+                                dom = item.get("domain", "").strip().lower()
+                                if dom and dom not in domain_seen:
+                                    domain_seen.add(dom)
+                                    row_57 = self.parse_company_to_57col(
+                                        company=item,
+                                        funnel_name=f_name,
+                                        funnel_id=f_id,
+                                        filter_group_name=filter_group_name,
+                                        filter_group_id=filter_group_id,
+                                        filter_name=filter_name,
+                                        filter_id=filter_id,
+                                        payload_str=payload_str,
+                                        added_time_str=added_time_str
+                                    )
+                                    new_rows_57.append(row_57)
+                                    domain_added_count += 1
+                                    if domain_added_count >= budget:
+                                        break
+
+                            from_offset += page_size
+                            if from_offset >= funnel_coverage:
+                                break
+                        elif resp.status_code in (401, 403):
+                            self.key_manager.handle_http_error(token, resp.status_code)
+                            logger.warning(f"Tracxn token invalid/expired (status {resp.status_code}). Rotating token...")
+                            continue
+                        elif resp.status_code == 429:
+                            self.key_manager.handle_http_error(token, resp.status_code)
+                            logger.warning("Tracxn rate limit 429 hit. Rotating token...")
+                            time.sleep(2)
+                            continue
+                        else:
+                            self.key_manager.handle_http_error(token, resp.status_code)
+                            logger.warning(f"Tracxn error status {resp.status_code}: {resp.text[:200]}")
+                            break
+                    except Exception as e:
+                        logger.error(f"Tracxn request exception: {e}")
+                        time.sleep(2)
+                        continue
 
                 if f_id == "5dc559138787070a80be21ba":
-                    cf_coverage = cov
+                    cf_coverage = funnel_coverage
                 else:
-                    backlog_coverage = cov
-
-                payload_str = json.dumps(query_payload)
-                for item in items:
-                    dom = item.get("domain", "").strip().lower()
-                    if dom and dom not in domain_seen:
-                        domain_seen.add(dom)
-                        row_57 = self.parse_company_to_57col(
-                            company=item,
-                            funnel_name=f_name,
-                            funnel_id=f_id,
-                            filter_group_name=filter_group_name,
-                            filter_group_id=filter_group_id,
-                            filter_name=filter_name,
-                            filter_id=filter_id,
-                            payload_str=payload_str,
-                            added_time_str=added_time_str
-                        )
-                        new_rows_57.append(row_57)
-                        domain_added_count += 1
+                    backlog_coverage = funnel_coverage
 
             # Update coverage in payload tab: Col 15 (O), Col 16 (P), Col 17 (Q)
             # 1-indexed row: idx + 1
