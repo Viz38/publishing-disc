@@ -21,6 +21,7 @@ from .local_cache import (
     get_now_ist,
     get_ist_timestamp,
     safe_str,
+    is_57_col_schema,
 )
 from .backlog_manager import BacklogManager
 from .tracxn_client import TracxnClient
@@ -47,6 +48,7 @@ __all__ = [
     "get_now_ist",
     "get_ist_timestamp",
     "safe_str",
+    "is_57_col_schema",
     "BacklogManager",
     "TracxnClient",
     "PipelineCoordinator",

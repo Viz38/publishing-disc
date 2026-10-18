@@ -117,6 +117,28 @@ def safe_str(val: Any) -> str:
         return ""
     return str(val).strip()
 
+LEGACY_SHEET_IDS = {
+    "1Sil5fw0l0rc0aMoydtnn7ZHdDbY5hwl7D9rda7bETkc",
+    "1xphjNDv0hHEr8ZXv4PEVDmnEeVrsw_XAUMGaDf8ySUY",
+    "10pacDW-6EqAdWslv9DTJBrRZDsybMczwMSpmKJebWFc",
+    "14kC-RUMrpJB1Ur4CGpXMh1Te-yv7qBjsINJgM7NqySY"
+}
+
+def is_57_col_schema(row: Optional[list] = None, sheet_id: Optional[str] = None) -> bool:
+    """
+    Returns True if the sheet or row belongs to the target 57-column master schema.
+    All active production sheets (CF-1, CF-2, CF-3, Filter-V2) strictly follow
+    the 57-column layout (A through BE, col_count 57 to 69).
+    Legacy 70/93-column schema is only active if explicitly running against a legacy sheet ID
+    or a row with >= 75 columns.
+    """
+    target_id = str(sheet_id or "").strip()
+    if target_id in LEGACY_SHEET_IDS:
+        return False
+    if row is not None and len(row) >= 75:
+        return False
+    return True
+
 class LocalSheetCache:
     """
     Local CSV cache for Discovery Engine pipelines.

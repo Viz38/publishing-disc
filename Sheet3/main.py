@@ -31,6 +31,7 @@ from common import (
     GSheetCircuitBreaker,
     is_doc_too_large_error,
     is_nim_dead_domain,
+    is_57_col_schema,
 )
 
 import asyncio
@@ -208,7 +209,7 @@ def is_row_fully_completed(row: list) -> bool:
         "SNOOZED", "MARKED_IRRELEVANT", "MARKED_FOR_LATER", "ESCALATED", "SKIPPED_UNASSIGNABLE"
     }
 
-    is_57 = (len(row) <= 65)
+    is_57 = is_57_col_schema(row)
     tc_idx = 23 if is_57 else 25
     nim_idx = 34 if is_57 else 40
 
@@ -2914,7 +2915,7 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
 
     # Smart auto-resume: prioritize Column AJ (idx 35) in 57-col schema or Column AO (idx 40) in legacy schema
     existing_summary = ""
-    is_57col = (len(row) <= 65)
+    is_57col = is_57_col_schema(row)
     if is_57col:
         # 57-column schema: Col AI (idx 34) is NIM Status, Col AJ (idx 35) is NIM Summary
         if len(row) > 35 and safe_str(row[35]).strip() and not safe_str(row[35]).strip().startswith("http"):
@@ -3395,7 +3396,7 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
     cf_if_action = "MOVED_OUT"
     publish_funnel_id = final_pub_funnel_id
     if_pf_action = "MOVED_OUT"
-    is_57 = (len(row) <= 65)
+    is_57 = is_57_col_schema(row)
     if is_57:
         cf_if_status = safe_str(row[49]).strip() if len(row) > 49 else ""
         cf_if_time = safe_str(row[50]).strip() if len(row) > 50 else ""
@@ -3595,7 +3596,7 @@ async def Integrated_Process_domain(
     async with semaphore:
         try:
             # Safe index check to prevent IndexError if rowData is shorter than expected
-            is_57col = (len(rowData) <= 65)
+            is_57col = is_57_col_schema(rowData)
             min_len = 57 if is_57col else 70
             if len(rowData) < min_len:
                 rowData = rowData + [""] * (min_len - len(rowData))
@@ -4020,7 +4021,7 @@ async def Integrated_Process_domain(
                 engineTimeTaken = rowData[22] if len(rowData) > 22 else ""
 
             # Prepare sheet write array
-            is_57col = (len(rowData) <= 65)
+            is_57col = is_57_col_schema(rowData)
             raw_soup_49k = str(scrappingBeautySoup)[:49000]
 
             if is_57col:
@@ -4189,14 +4190,15 @@ async def reconcile_existing_tech_crawler_jobs(
             continue
         if is_row_fully_completed(r):
             continue
-        min_len = 38
+        is_57_row = is_57_col_schema(r)
+        min_len = 57 if is_57_row else 70
         if len(r) < min_len:
-            r.extend([""] * (min_len - len(r)))
-        tc_job_id = safe_str(r[23]).strip()
-        tc_status = safe_str(r[25]).strip()
-        scraped = safe_str(r[31]).strip()
-        summary = safe_str(r[40]).strip() if len(r) > 40 else ""
-        if tc_job_id and tc_status != "SUCCESS" and not scraped and not summary:
+            r = r + [""] * (min_len - len(r))
+        tc_job_id = safe_str(r[21] if is_57_row else r[23]).strip()
+        tc_status = safe_str(r[23] if is_57_row else r[25]).strip().upper()
+        scraped = safe_str(r[29] if is_57_row else r[31]).strip()
+        summary = safe_str(r[35] if is_57_row else r[40]).strip() if len(r) > (35 if is_57_row else 40) else ""
+        if not scraped and tc_status != "SUCCESS" and not summary:
             candidates.append((start_row_num + idx, r))
 
     if not candidates:
@@ -4225,7 +4227,7 @@ async def reconcile_existing_tech_crawler_jobs(
             async with reconcile_sem:
                 domain = row_data[0]
                 rec = LOCAL_CACHE.get_record(domain)
-                is_57_row = (len(row_data) <= 65)
+                is_57_row = is_57_col_schema(row_data)
 
                 # If already scraped or completed by a concurrent foreground worker, skip
                 already_raw = safe_str(row_data[29]).strip() if is_57_row else safe_str(row_data[31]).strip()
@@ -4235,6 +4237,97 @@ async def reconcile_existing_tech_crawler_jobs(
                 job_id = row_data[21] if is_57_row else row_data[23]
                 c_ts = None
                 tc_job_gen_time = safe_str(row_data[22] if is_57_row else row_data[24]).strip()
+
+                # If Tech Crawler job is not yet created, generate it now
+                if not job_id and domain:
+                    if is_pre_cutoff_window() or is_5am_ist_cutoff():
+                        logging.info(f"⏰ [Pre-Cutoff Wind-Down] Skipping new Tech Crawler job generation for {domain}")
+                        return ("SKIP", r_num, None, None)
+                    job_id = await tc_client.generate_job_id(session, domain)
+                    if not job_id:
+                        logging.warning(f"Failed to generate Tech Crawler job for {domain}")
+                        return ("SKIP", r_num, None, None)
+                    tc_job_gen_time = datetime.datetime.now().strftime("%d/%b/%Y %H:%M:%S")
+                    c_ts = time.time()
+                    if is_57_row:
+                        row_data[20] = "DONE"
+                        row_data[21] = job_id
+                        row_data[22] = tc_job_gen_time
+                        row_data[23] = "PROCESSING"
+                        initial_slice = [
+                            "DONE", job_id, tc_job_gen_time, "PROCESSING", "", "", "", "", "", "", tc_job_gen_time, "", "", ""
+                        ]
+                    else:
+                        row_data[21] = "DONE"
+                        row_data[23] = job_id
+                        row_data[24] = tc_job_gen_time
+                        row_data[25] = "PROCESSING"
+                        initial_slice = [
+                            job_id, tc_job_gen_time, "PROCESSING", "", "", "", "", "", ""
+                        ]
+                    LOCAL_CACHE.save_record(domain, {
+                        "tc_job_id": job_id,
+                        "tc_job_gen_time": tc_job_gen_time,
+                        "tc_status": "PROCESSING",
+                        "updated_at": datetime.datetime.now().strftime("%d/%b/%Y %H:%M:%S")
+                    })
+                    # Track once in case it resolved instantaneously
+                    try:
+                        track_res = await tc_client.track_job_id(session, job_id)
+                        if track_res.get("status") == "SUCCESS" and track_res.get("s3_markdown"):
+                            signed_url = await tc_client.get_signed_s3_url(session, track_res["s3_markdown"])
+                            if signed_url:
+                                md = await tc_client.fetch_raw_markdown(session, signed_url)
+                                if md:
+                                    if is_57_row:
+                                        row_data[23] = "SUCCESS"
+                                        if track_res.get("final_url"): row_data[24] = track_res["final_url"]
+                                        if track_res.get("s3_html"): row_data[25] = track_res["s3_html"]
+                                        row_data[26] = track_res["s3_markdown"]
+                                        if track_res.get("http_status"): row_data[27] = str(track_res["http_status"])
+                                        if track_res.get("signals"): row_data[28] = str(track_res["signals"])
+                                        row_data[29] = md
+                                        sheet_slice = [
+                                            "DONE", job_id, tc_job_gen_time, "SUCCESS", row_data[24],
+                                            row_data[25], row_data[26], row_data[27], row_data[28],
+                                            md[:49000], tc_job_gen_time, row_data[24], "", ""
+                                        ]
+                                    else:
+                                        row_data[25] = "SUCCESS"
+                                        if track_res.get("final_url"): row_data[26] = track_res["final_url"]
+                                        if track_res.get("s3_html"): row_data[27] = track_res["s3_html"]
+                                        row_data[28] = track_res["s3_markdown"]
+                                        if track_res.get("http_status"): row_data[29] = str(track_res["http_status"])
+                                        if track_res.get("signals"): row_data[30] = str(track_res["signals"])
+                                        row_data[31] = md
+                                        sheet_slice = [
+                                            row_data[23], row_data[24], "SUCCESS", row_data[26],
+                                            row_data[27], row_data[28], row_data[29], row_data[30],
+                                            row_data[31][:49000]
+                                        ]
+                                    LOCAL_CACHE.save_record(domain, {
+                                        "tc_job_id": job_id,
+                                        "tc_status": "SUCCESS",
+                                        "tc_final_url": row_data[24 if is_57_row else 26],
+                                        "tc_s3_html": row_data[25 if is_57_row else 27],
+                                        "tc_s3_markdown": row_data[26 if is_57_row else 28],
+                                        "tc_http_status": row_data[27 if is_57_row else 29],
+                                        "tc_signals": row_data[28 if is_57_row else 30],
+                                        "scrappingBeautySoup": md,
+                                        "updated_at": datetime.datetime.now().strftime("%d/%b/%Y %H:%M:%S")
+                                    })
+                                    return ("SUCCESS", r_num, sheet_slice, row_data)
+                    except Exception:
+                        pass
+                    return ("NEW_JOB", r_num, initial_slice, {
+                        "domain": domain,
+                        "row": r_num,
+                        "tc_job_id": job_id,
+                        "tc_job_gen_time": tc_job_gen_time,
+                        "created_timestamp": c_ts,
+                        "rowData": row_data
+                    })
+
                 if tc_job_gen_time:
                     try:
                         c_ts = datetime.datetime.strptime(tc_job_gen_time, "%d/%b/%Y %H:%M:%S").timestamp()
@@ -4390,7 +4483,13 @@ async def reconcile_existing_tech_crawler_jobs(
                     elif client:
                         try: await write_sheet_data(client, SHEET_ID, sheet_name, [sheet_slice], r_num, target_col_cand)
                         except Exception: pass
-                elif outcome == "RETAIN" and item:
+                elif outcome in ("RETAIN", "NEW_JOB") and item:
+                    if outcome == "NEW_JOB" and sheet_slice:
+                        if sheet_write_queue:
+                            await sheet_write_queue.put((r_num, target_col_cand, sheet_slice))
+                        elif client:
+                            try: await write_sheet_data(client, SHEET_ID, sheet_name, [sheet_slice], r_num, target_col_cand)
+                            except Exception: pass
                     pending_retained.append(item)
 
         processed_so_far = min((b_idx + 1) * batch_size, total_candidates)
@@ -4447,7 +4546,7 @@ async def Integrated_Extract_domains(
     pf_data = await read_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, start_row=start_row_num)
 
     total_domains = sum(1 for r in pf_data if r and safe_str(r[0]).strip())
-    is_57 = bool(pf_data and len(pf_data[0]) <= 65)
+    is_57 = is_57_col_schema(pf_data[0] if pf_data else None)
     tc_col_idx = 23 if is_57 else 25
     nim_col_idx = 34 if is_57 else 40
     gemini_col_idx = 43 if is_57 else 48
@@ -4490,7 +4589,7 @@ async def Integrated_Extract_domains(
     semaphore = asyncio.Semaphore(MAX_WORKERS)
     pending_tech_crawler_jobs = []
 
-    is_57col_sheet = bool(pf_data and len(pf_data[0]) <= 65)
+    is_57col_sheet = is_57_col_schema(pf_data[0] if pf_data else None)
     if mode == "phase1":
         target_start_col = 21 if is_57col_sheet else 24
         expected_cols = 14 if is_57col_sheet else 9
@@ -4634,7 +4733,7 @@ async def Integrated_Extract_domains(
                 completed_items.append((idx, r))
                 continue
 
-            is_57 = (len(r) <= 65)
+            is_57 = is_57_col_schema(r)
             if is_57:
                 tc_status = safe_str(r[23]).strip().upper() if len(r) > 23 else ""
                 raw_scraped = safe_str(r[29]).strip() if len(r) > 29 else ""
@@ -5036,14 +5135,29 @@ async def Integrated_Extract_domains(
 
                         if curr_status in ("SUCCESS", "FAILED"):
                             logging.info(f"Tech Crawler job {j_id} for {d} resolved with status: {curr_status}")
-                            if len(orig_row) > 30:
+                            is_57_orig = is_57_col_schema(orig_row)
+                            if is_57_orig:
+                                if len(orig_row) < 57:
+                                    orig_row.extend([""] * (57 - len(orig_row)))
+                                orig_row[20] = "DONE"
+                                orig_row[21] = j_id
+                                orig_row[23] = curr_status
+                                orig_row[24] = track_res.get("final_url", "")
+                                orig_row[25] = track_res.get("s3_html", "")
+                                orig_row[26] = track_res.get("s3_markdown", "")
+                                orig_row[27] = str(track_res.get("http_status", ""))
+                                orig_row[28] = str(track_res.get("signals", ""))
+                            else:
+                                if len(orig_row) < 70:
+                                    orig_row.extend([""] * (70 - len(orig_row)))
+                                orig_row[21] = "DONE"
                                 orig_row[23] = j_id
                                 orig_row[25] = curr_status
                                 orig_row[26] = track_res.get("final_url", "")
                                 orig_row[27] = track_res.get("s3_html", "")
                                 orig_row[28] = track_res.get("s3_markdown", "")
-                                orig_row[29] = track_res.get("http_status", "")
-                                orig_row[30] = track_res.get("signals", "")
+                                orig_row[29] = str(track_res.get("http_status", ""))
+                                orig_row[30] = str(track_res.get("signals", ""))
                             await Integrated_Process_domain(
                                 session, d, r_num, client, semaphore, orig_row,
                                 SHEET_ID, EXTRACTING_SHEET_NAME,
@@ -5104,7 +5218,7 @@ async def Process_Review_domain(session, row, row_number, client, semaphore, SHE
             filter_group_id = row[4]
             filter_id = row[6]
             source_funnel_id = row[2]
-            is_57 = (len(row) <= 65)
+            is_57 = is_57_col_schema(row)
 
             if is_57:
                 output_data_if = row[37] if len(row) > 37 else ""
@@ -5285,7 +5399,7 @@ async def Process_Review_Caller(client, mainheaders, SHEET_ID, EXTRACTING_SHEET_
                 orig_row = batch[idx] if idx < len(batch) else []
                 if isinstance(res, Exception) or res is None:
                     review_fail += 1
-                    is_57_b = bool(orig_row and len(orig_row) <= 65)
+                    is_57_b = is_57_col_schema(orig_row)
                     if is_57_b:
                         existing_slice = orig_row[49:57] if len(orig_row) >= 57 else (orig_row[49:] + [""] * max(0, 8 - len(orig_row[49:])))
                     else:
@@ -5297,7 +5411,7 @@ async def Process_Review_Caller(client, mainheaders, SHEET_ID, EXTRACTING_SHEET_
                 review_processed += 1
 
             if batch_output_rows:
-                is_57_rev = bool(pf_data and len(pf_data[0]) <= 65)
+                is_57_rev = is_57_col_schema(pf_data[0] if pf_data else None)
                 write_col_rev = 50 if is_57_rev else 20
                 await write_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, batch_output_rows, start_row, write_col_rev)
 
@@ -5359,7 +5473,7 @@ async def Execute_Phase4_Ingestion_Write_APIs(client, mainheaders, SHEET_ID, EXT
                     source_funnel_id = row[2] if len(row) > 2 else ""
 
                     # Predictions in row
-                    is_57 = (len(row) <= 65)
+                    is_57 = is_57_col_schema(row)
                     if is_57:
                         output_data_if = row[37] if len(row) > 37 else ""
                         industry_funnel_id = row[39] if len(row) > 39 else ""
@@ -5486,7 +5600,7 @@ async def Execute_Phase4_Ingestion_Write_APIs(client, mainheaders, SHEET_ID, EXT
                     batch_write.append(r)
 
             if batch_write:
-                is_57_ing = bool(pf_data and len(pf_data[0]) <= 65)
+                is_57_ing = is_57_col_schema(pf_data[0] if pf_data else None)
                 write_col_ing = 50 if is_57_ing else 62
                 await write_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, batch_write, start_row, write_col_ing)
 
@@ -5664,7 +5778,7 @@ async def main():
             if not pf_retry:
                 break
 
-            is_57_ret = bool(len(pf_retry[0]) <= 65)
+            is_57_ret = is_57_col_schema(pf_retry[0] if pf_retry else None)
             failed_candidates = 0
             for r in pf_retry:
                 if not r or not r[0] or is_row_fully_completed(r):
@@ -5711,7 +5825,7 @@ async def main():
         # Dynamic Completion Metric Calculation — Zero Hardcoded Values
         try:
             pf_final = await read_sheet_data(client, active_sheet_id, CF_EXTRACTING_SHEET_NAME, start_row=start_row_arg)
-            is_57_fin = bool(pf_final and len(pf_final[0]) <= 65)
+            is_57_fin = is_57_col_schema(pf_final[0] if pf_final else None)
             fin_tc_scraped = sum(1 for r in pf_final if (len(r) > (23 if is_57_fin else 25) and safe_str(r[23 if is_57_fin else 25]).strip().upper() == "SUCCESS") or (len(r) > (29 if is_57_fin else 31) and safe_str(r[29 if is_57_fin else 31]).strip()))
             fin_tc_failed = sum(1 for r in pf_final if len(r) > (23 if is_57_fin else 25) and safe_str(r[23 if is_57_fin else 25]).strip().upper() == "FAILED")
             fin_tc = min(len(pf_final), fin_tc_scraped + fin_tc_failed)
