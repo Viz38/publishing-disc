@@ -107,7 +107,8 @@ class TracxnDomainIngestor:
 
             headers = {
                 "Content-Type": "application/json",
-                "accessToken": token
+                "accessToken": token,
+                "X-Request-Source": "Discovery Team"
             }
 
             try:
