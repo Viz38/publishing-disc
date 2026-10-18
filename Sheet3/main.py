@@ -4793,7 +4793,7 @@ async def Integrated_Extract_domains(
 
         # Stage 1: Dedicated NIM Summarizer Producer
         async def nim_producer_worker():
-            nonlocal nim_completed_count
+            nonlocal nim_completed_count, tc_completed_count
             while True:
                 if is_5am_ist_cutoff() or os.path.exists(STOP_FILE) or is_pre_cutoff_window() or os.path.exists(FLUSH_FILE):
                     break
