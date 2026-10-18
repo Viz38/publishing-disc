@@ -697,7 +697,7 @@ async def start_pipeline(req: RunRequest, background_tasks: BackgroundTasks):
 
 async def run_clear_and_fetch_task(sheet_id: str):
     try:
-        from Temp_Test.tracxn_domain_ingestor import TracxnDomainIngestor
+        from common.tracxn_domain_ingestor import TracxnDomainIngestor
         ingestor = TracxnDomainIngestor()
         sheet_cfg = {
             "name": f"Sheet-{sheet_id[:8]}",

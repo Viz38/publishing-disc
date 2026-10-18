@@ -28,6 +28,7 @@ from .pipeline_stream import PipelineCoordinator
 from .system_health import trim_memory, SystemHealthMonitor
 from .gsheet_circuit_breaker import GSheetCircuitBreaker, is_doc_too_large_error, is_csv_only_mode, set_csv_only_mode
 from .bulk_pusher import BulkSheetPusher, clear_sheet_data_rows, handle_5am_sheet_cleanup
+from .tracxn_domain_ingestor import TracxnDomainIngestor
 
 __all__ = [
     "TracxnKeyManager",
@@ -58,4 +59,6 @@ __all__ = [
     "BulkSheetPusher",
     "clear_sheet_data_rows",
     "handle_5am_sheet_cleanup",
+    "TracxnDomainIngestor",
 ]
+
