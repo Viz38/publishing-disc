@@ -973,10 +973,10 @@ async def Gemini_API_ASYNC(promptMsg, Gemini_Token=GEMINI_TOKEN, timeout_limit=6
 
     except asyncio.TimeoutError:
         print(f"The process was held for {timeout_limit}s but the API timed out.")
-        return "TIMEOUT_ERROR"
+        return resultMap
     except Exception as e:
         print(f"Unexpected error: {e}")
-        return ""
+        return resultMap
     finally:
         if close_sess:
             try:
@@ -1015,25 +1015,36 @@ async def Gemini_API_WITH_CACHE(user_input_msg, Gemini_Token, cache_name, timeou
 
     # Define how long to wait for the API to complete
     timeout = aiohttp.ClientTimeout(total=timeout_limit)
-    
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        # The 'await' here ensures the process holds until completion
-        async with session.post(url, headers=headers, json=formData) as response:
-            if response.status == 200:
-                json_res = await response.json()
+    active_sess = session
+    close_sess = False
+    if active_sess is None or active_sess.closed:
+        active_sess = aiohttp.ClientSession(timeout=timeout)
+        close_sess = True
+    try:
+        try:
+            # The 'await' here ensures the process holds until completion
+            async with active_sess.post(url, headers=headers, json=formData, timeout=timeout) as response:
+                if response.status == 200:
+                    json_res = await response.json()
 
-                resultMap["output"]    = json_res.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
-                resultMap["input_Token"]    = json_res.get("usageMetadata", {}).get("promptTokenCount", "")
-                resultMap["thinking_Token"]    = json_res.get("usageMetadata", {}).get("thoughtsTokenCount", "")
-                resultMap["cached_Token"]    = json_res.get("usageMetadata", {}).get("cachedContentTokenCount", "")
-                resultMap["output_Token"]    = json_res.get("usageMetadata", {}).get("candidatesTokenCount", "")
-                resultMap["total_Token"]    = json_res.get("usageMetadata", {}).get("totalTokenCount", "")
-                resultMap["model"]    = json_res.get("modelVersion", "")
+                    resultMap["output"]    = json_res.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+                    resultMap["input_Token"]    = json_res.get("usageMetadata", {}).get("promptTokenCount", "")
+                    resultMap["thinking_Token"]    = json_res.get("usageMetadata", {}).get("thoughtsTokenCount", "")
+                    resultMap["cached_Token"]    = json_res.get("usageMetadata", {}).get("cachedContentTokenCount", "")
+                    resultMap["output_Token"]    = json_res.get("usageMetadata", {}).get("candidatesTokenCount", "")
+                    resultMap["total_Token"]    = json_res.get("usageMetadata", {}).get("totalTokenCount", "")
+                    resultMap["model"]    = json_res.get("modelVersion", "")
 
-                return resultMap #json_res.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
-            else:
-                print(f"? Call Error: {await response.text()}")
-                return resultMap #""
+                    return resultMap
+                else:
+                    print(f"? Call Error: {await response.text()}")
+                    return resultMap
+        except Exception as e:
+            print(f"Gemini_API_WITH_CACHE error: {e}")
+            return resultMap
+    finally:
+        if close_sess and active_sess:
+            await active_sess.close()
 
 
 #*************************************** Gemini API - Caching (Sync Version) *************************************
@@ -2872,30 +2883,32 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
     raw_data_google_api = row[34]
     raw_data_platform = row[35]
 
+    is_57col = is_57_col_schema(row)
     final_raw_data = ""
-    base_prompt_for_summery = row[38]
-
-    # Check Col AF (raw_data_beat_soup) first; fallback to Col AL (row[37]) if empty
-    if raw_data_beat_soup and safe_str(raw_data_beat_soup).strip():
-        final_raw_data = safe_str(raw_data_beat_soup).strip()
-    elif len(row) > 37 and safe_str(row[37]).strip():
-        final_raw_data = safe_str(row[37]).strip()
-    elif raw_data_play_wright and safe_str(raw_data_play_wright).strip():
-        final_raw_data = safe_str(raw_data_play_wright).strip()
-    elif raw_data_selenium and safe_str(raw_data_selenium).strip():
-        final_raw_data = safe_str(raw_data_selenium).strip()
-    elif raw_data_google_api and safe_str(raw_data_google_api).strip():
-        final_raw_data = safe_str(raw_data_google_api).strip()
-    elif raw_data_platform and safe_str(raw_data_platform).strip():
-        final_raw_data = safe_str(raw_data_platform).strip()
+    if is_57col:
+        base_prompt_for_summery = summery_base_prompt
+        if raw_data_beat_soup and safe_str(raw_data_beat_soup).strip():
+            final_raw_data = safe_str(raw_data_beat_soup).strip()
+        elif len(row) > 29 and safe_str(row[29]).strip():
+            final_raw_data = safe_str(row[29]).strip()
+    else:
+        base_prompt_for_summery = row[38] if len(row) > 38 else summery_base_prompt
+        # Check Col AF (raw_data_beat_soup) first; fallback to Col AL (row[37]) if empty
+        if raw_data_beat_soup and safe_str(raw_data_beat_soup).strip():
+            final_raw_data = safe_str(raw_data_beat_soup).strip()
+        elif len(row) > 37 and safe_str(row[37]).strip():
+            final_raw_data = safe_str(row[37]).strip()
+        elif raw_data_play_wright and safe_str(raw_data_play_wright).strip():
+            final_raw_data = safe_str(raw_data_play_wright).strip()
+        elif raw_data_selenium and safe_str(raw_data_selenium).strip():
+            final_raw_data = safe_str(raw_data_selenium).strip()
+        elif raw_data_google_api and safe_str(raw_data_google_api).strip():
+            final_raw_data = safe_str(raw_data_google_api).strip()
+        elif raw_data_platform and safe_str(raw_data_platform).strip():
+            final_raw_data = safe_str(raw_data_platform).strip()
 
     if len(final_raw_data) > 15000:
         final_raw_data = final_raw_data[:15000]
-
-    if not base_prompt_for_summery:
-        base_prompt_for_summery = summery_base_prompt
-    else:
-        base_prompt_for_summery = summery_base_prompt
 
     input_data_summery = final_raw_data  # sheet.getRange(i+1,1).getValue();
     output_data_summery = ""
@@ -2915,7 +2928,6 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
 
     # Smart auto-resume: prioritize Column AJ (idx 35) in 57-col schema or Column AO (idx 40) in legacy schema
     existing_summary = ""
-    is_57col = is_57_col_schema(row)
     if is_57col:
         # 57-column schema: Col AI (idx 34) is NIM Status, Col AJ (idx 35) is NIM Summary
         if len(row) > 35 and safe_str(row[35]).strip() and not safe_str(row[35]).strip().startswith("http"):
@@ -2964,13 +2976,16 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
                     gemini_res = await Gemini_API_ASYNC(input_data_summery, session=session)
                     
                     # Extract Gemini metadata and output
-                    summary_input_Token = gemini_res.get("input_Token", "")
-                    summary_thought_Token = gemini_res.get("thinking_Token", "")
-                    summary_cache_Token = gemini_res.get("cached_Token", "")
-                    summary_output_Token = gemini_res.get("output_Token", "")
-                    summary_total_Token = gemini_res.get("total_Token", "")
-                    summary_llm_model = gemini_res.get("model", "")
-                    output_data_summery = gemini_res.get("output", "")
+                    if isinstance(gemini_res, dict):
+                        summary_input_Token = gemini_res.get("input_Token", "")
+                        summary_thought_Token = gemini_res.get("thinking_Token", "")
+                        summary_cache_Token = gemini_res.get("cached_Token", "")
+                        summary_output_Token = gemini_res.get("output_Token", "")
+                        summary_total_Token = gemini_res.get("total_Token", "")
+                        summary_llm_model = gemini_res.get("model", "")
+                        output_data_summery = gemini_res.get("output", "")
+                    else:
+                        output_data_summery = ""
 
                 except Exception as e:
                     logging.error(f"Gemini API (Summary Fallback) failed: {e}")
@@ -3080,13 +3095,16 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
 
                     # output_data_if = await Gemini_API_WITH_CACHE(output_data_summery,GEMINI_TOKEN,cache_id_IF_Prediction)
                     
-                    output_data_if_input_Token = output_data_if.get("input_Token","")
-                    output_data_if_thought_Token = output_data_if.get("thinking_Token","")
-                    output_data_if_cache_Token = output_data_if.get("cached_Token","")
-                    output_data_if_output_Token = output_data_if.get("output_Token","")
-                    output_data_if_total_Token = output_data_if.get("total_Token","")
-                    output_data_if_llm_model = output_data_if.get("model","")
-                    output_data_if = output_data_if.get("output","")
+                    if isinstance(output_data_if, dict):
+                        output_data_if_input_Token = output_data_if.get("input_Token","")
+                        output_data_if_thought_Token = output_data_if.get("thinking_Token","")
+                        output_data_if_cache_Token = output_data_if.get("cached_Token","")
+                        output_data_if_output_Token = output_data_if.get("output_Token","")
+                        output_data_if_total_Token = output_data_if.get("total_Token","")
+                        output_data_if_llm_model = output_data_if.get("model","")
+                        output_data_if = output_data_if.get("output","")
+                    else:
+                        output_data_if = ""
 
                 except Exception as e:
                     logging.error(f"Gemini API (IF) failed: {e}")
@@ -3290,7 +3308,10 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
     date_prompt_for_feed_cache_id = ""
     output_data_feed = ""
 
-    if len(row) > 54 and safe_str(row[54]).strip():
+    if is_57col and len(row) > 43 and safe_str(row[43]).strip():
+        output_data_feed = safe_str(row[43]).strip()
+        logging.info(f"Smart resume: reusing existing Feed prediction for {domain}: {output_data_feed}")
+    elif not is_57col and len(row) > 54 and safe_str(row[54]).strip():
         output_data_feed = safe_str(row[54]).strip()
         logging.info(f"Smart resume: reusing existing Feed prediction for {domain}: {output_data_feed}")
     elif output_data_if_validation and ((EXTRACTING_SHEET_NAME == CF_EXTRACTING_SHEET_NAME and "Yes" in output_data_if_validation) or (EXTRACTING_SHEET_NAME == IF_EXTRACTING_SHEET_NAME and "Yes" in output_data_if_validation)): # and "Different IF Found" in output_data_if_validation  #outputData_IF_Validation.indexOf("Yes") >= 0
@@ -3335,13 +3356,16 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
                     print("**** LLM Feed entered in Normal Call, As some mismatch ****")
                     output_data_feed = await Gemini_API_ASYNC(input_data_for_feed,GEMINI_TOKEN)
 
-                output_data_feed_input_Token = output_data_feed.get("input_Token","")
-                output_data_feed_thought_Token = output_data_feed.get("thinking_Token","")
-                output_data_feed_cache_Token = output_data_feed.get("cached_Token","")
-                output_data_feed_output_Token = output_data_feed.get("output_Token","")
-                output_data_feed_total_Token = output_data_feed.get("total_Token","")
-                output_data_feed_llm_model = output_data_feed.get("model","")
-                output_data_feed = output_data_feed.get("output","")
+                if isinstance(output_data_feed, dict):
+                    output_data_feed_input_Token = output_data_feed.get("input_Token","")
+                    output_data_feed_thought_Token = output_data_feed.get("thinking_Token","")
+                    output_data_feed_cache_Token = output_data_feed.get("cached_Token","")
+                    output_data_feed_output_Token = output_data_feed.get("output_Token","")
+                    output_data_feed_total_Token = output_data_feed.get("total_Token","")
+                    output_data_feed_llm_model = output_data_feed.get("model","")
+                    output_data_feed = output_data_feed.get("output","")
+                else:
+                    output_data_feed = ""
 
                 print("output_data_feed - ")
                 print(output_data_feed)
@@ -3820,37 +3844,40 @@ async def Integrated_Process_domain(
             AI_Engine_Result_Array = []
             Domain = rowData[0]
             skip_done = False
-            Final_Scrapped_Raw_data = rowData[37]
-
-            domain_profile_id = rowData[10]
-            filter_group_id = rowData[4]
-            filter_id = rowData[6]
+            domain_profile_id = rowData[10] if len(rowData) > 10 else ""
+            filter_group_id = rowData[4] if len(rowData) > 4 else ""
+            filter_id = rowData[6] if len(rowData) > 6 else ""
             if is_57col:
-                crawl_status = safe_str(rowData[20])
-                enginePickedTime = safe_str(rowData[18])
-                engineClearedTime = safe_str(rowData[19])
-                engineClearedStatus = safe_str(rowData[20])
+                crawl_status = safe_str(rowData[20]) if len(rowData) > 20 else ""
+                enginePickedTime = safe_str(rowData[18]) if len(rowData) > 18 else ""
+                engineClearedTime = safe_str(rowData[19]) if len(rowData) > 19 else ""
+                engineClearedStatus = safe_str(rowData[20]) if len(rowData) > 20 else ""
                 engineTimeTaken = ""
+                # 57-column master schema: Col AD (index 29) is Raw Scraped Data
+                Final_Scrapped_Raw_data = rowData[29] if len(rowData) > 29 else ""
+                scrappingBeautySoup = safe_str(rowData[29]) if len(rowData) > 29 else ""
             else:
-                crawl_status = safe_str(rowData[21])
-                enginePickedTime = safe_str(rowData[19])
-                engineClearedTime = safe_str(rowData[20])
-                engineClearedStatus = safe_str(rowData[21])
-                engineTimeTaken = rowData[22]
-            currentFunnelName = rowData[24]
-            currentFunnelID = rowData[25]
-            currentFunnelStatus = rowData[26]
-            movementBy = rowData[27]
-            movementTime = rowData[28]
-            movementStatus = rowData[29]
-            scrappingBeautySoup = safe_str(rowData[31])
-            scrappingPlaywright = safe_str(rowData[32])
-            scrappingSelenium = safe_str(rowData[33])
-            scrappingGoogleAPI = safe_str(rowData[34])
-            scrappingTracxnPF = safe_str(rowData[35])
-            geminiRawDataInput = safe_str(rowData[37])
-            geminiBasePromptSum = safe_str(rowData[38])
-            geminiRevQuerySum = safe_str(rowData[39])
+                crawl_status = safe_str(rowData[21]) if len(rowData) > 21 else ""
+                enginePickedTime = safe_str(rowData[19]) if len(rowData) > 19 else ""
+                engineClearedTime = safe_str(rowData[20]) if len(rowData) > 20 else ""
+                engineClearedStatus = safe_str(rowData[21]) if len(rowData) > 21 else ""
+                engineTimeTaken = rowData[22] if len(rowData) > 22 else ""
+                Final_Scrapped_Raw_data = rowData[37] if len(rowData) > 37 else ""
+                scrappingBeautySoup = safe_str(rowData[31]) if len(rowData) > 31 else ""
+
+            currentFunnelName = rowData[24] if len(rowData) > 24 else ""
+            currentFunnelID = rowData[25] if len(rowData) > 25 else ""
+            currentFunnelStatus = rowData[26] if len(rowData) > 26 else ""
+            movementBy = rowData[27] if len(rowData) > 27 else ""
+            movementTime = rowData[28] if len(rowData) > 28 else ""
+            movementStatus = rowData[29] if len(rowData) > 29 else ""
+            scrappingPlaywright = safe_str(rowData[32]) if len(rowData) > 32 else ""
+            scrappingSelenium = safe_str(rowData[33]) if len(rowData) > 33 else ""
+            scrappingGoogleAPI = safe_str(rowData[34]) if len(rowData) > 34 else ""
+            scrappingTracxnPF = safe_str(rowData[35]) if len(rowData) > 35 else ""
+            geminiRawDataInput = safe_str(rowData[37]) if len(rowData) > 37 else ""
+            geminiBasePromptSum = safe_str(rowData[38]) if len(rowData) > 38 else ""
+            geminiRevQuerySum = safe_str(rowData[39]) if len(rowData) > 39 else ""
 
             # Initialize times safely
             if not enginePickedTime:
@@ -4209,7 +4236,7 @@ async def reconcile_existing_tech_crawler_jobs(
     logging.info(f"🔄 Startup Sweep: Reconciling {total_candidates} pending Tech Crawler jobs in batches of {batch_size}...")
 
     tc_client = TechCrawlerClient(token_rotator=TRACXN_KEY_MANAGER) if 'TRACXN_KEY_MANAGER' in globals() else TechCrawlerClient(token=Tracxn_API_Token)
-    reconcile_sem = asyncio.Semaphore(25)
+    reconcile_sem = asyncio.Semaphore(10)
     pending_retained = []
     resolved_success = 0
     resolved_failed = 0
@@ -4226,6 +4253,7 @@ async def reconcile_existing_tech_crawler_jobs(
 
         async def _check_one_candidate(r_num, row_data):
             async with reconcile_sem:
+                await asyncio.sleep(0.05)
                 domain = row_data[0]
                 rec = LOCAL_CACHE.get_record(domain)
                 is_57_row = is_57_col_schema(row_data)
@@ -4838,6 +4866,8 @@ async def Integrated_Extract_domains(
                         precomputed_summary=None,
                     )
                     nim_completed_count += 1
+                    if isinstance(stage1_res, dict) and stage1_res.get("tc_status") in ("SUCCESS", "FAILED"):
+                        tc_completed_count += 1
                     # Persist NIM summary or crawler status to sheet immediately without waiting for downstream consumer
                     if isinstance(stage1_res, dict) and stage1_res.get("write_data") and stage1_res.get("start_col"):
                         await sheet_write_queue.put((row_number, stage1_res["start_col"], stage1_res["write_data"]))
@@ -4852,7 +4882,7 @@ async def Integrated_Extract_domains(
 
         # Stage 2: Paced Gemini Predictions & Tracxn Movements Consumer
         async def downstream_consumer_worker():
-            nonlocal processed, success_count, fail_count
+            nonlocal processed, success_count, fail_count, gemini_completed_count, tracxn_completed_count
             while True:
                 if is_5am_ist_cutoff() or os.path.exists(STOP_FILE) or (is_pre_cutoff_window() and summarized_queue.empty()):
                     break
@@ -4988,6 +5018,17 @@ async def Integrated_Extract_domains(
                                     existing_slice = existing_slice + [""] * (expected_cols - len(existing_slice))
                                 await sheet_write_queue.put((row_number, target_start_col, existing_slice))
 
+                            # Live telemetry counter update for resolved domains
+                            if final_write_data:
+                                if is_57col_sheet:
+                                    feed_val = final_write_data[26] if len(final_write_data) > 26 else ""
+                                    if_val = final_write_data[20] if len(final_write_data) > 20 else ""
+                                    if feed_val or any(x in str(if_val).upper() for x in ("ESCALATED", "MARKED_IRRELEVANT", "SNOOZED")):
+                                        gemini_completed_count += 1
+                                else:
+                                    gemini_completed_count += 1
+                                tracxn_completed_count += 1
+
                 except Exception as d_err:
                     logging.error(f"Error in downstream consumer for {row[0] if row else 'unknown'} at row {row_number}: {d_err}")
                     fail_count += 1
@@ -4995,16 +5036,16 @@ async def Integrated_Extract_domains(
                     processed += 1
                     if processed % 15 == 0 or processed == total_domains:
                         update_progress_file(
-                            tracxn_completed_count + processed, total_domains, success_count, fail_count,
+                            tracxn_completed_count, total_domains, success_count, fail_count,
                             phase=phase_title,
-                            stage_details=f"Pipelined: {nim_completed_count}/{total_domains} summarized | {tracxn_completed_count + processed}/{total_domains} fully completed ({tc_completed_count} resolved, {success_count} success)",
+                            stage_details=f"Pipelined: {nim_completed_count}/{total_domains} summarized | {tracxn_completed_count}/{total_domains} fully completed ({tc_completed_count} resolved, {success_count} success)",
                             pending_tc=len(pending_tech_crawler_jobs),
                             mode=mode,
                             scraped_count=tc_completed_count,
                             tc_success=success_count,
                             nim_count=nim_completed_count,
                             gemini_count=gemini_completed_count,
-                            tracxn_count=tracxn_completed_count + processed
+                            tracxn_count=tracxn_completed_count
                         )
                         trim_memory()
                     summarized_queue.task_done()
@@ -5302,7 +5343,7 @@ async def Process_Review_domain(session, row, row_number, client, semaphore, SHE
 
             # Prepare output data
             if is_57:
-                output_row = [
+                output_row = list(row[17:49]) + [
                     cf_if_status,
                     cf_if_time,
                     if_pf_status,
@@ -5312,7 +5353,7 @@ async def Process_Review_domain(session, row, row_number, client, semaphore, SHE
                     tag_status_review,
                     discovery_bq
                 ]
-                write_start = 50
+                write_start = 18
             else:
                 picked_time = row[19] if len(row) > 19 and row[19] else get_ist_timestamp()
                 cleared_time = row[20] if len(row) > 20 and row[20] else get_ist_timestamp()
