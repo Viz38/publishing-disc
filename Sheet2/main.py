@@ -4746,9 +4746,11 @@ async def Integrated_Extract_domains(
 
         domain_queue = asyncio.Queue()
         # Fast-Track Prioritization:
+        # Tier 0: Uncompleted domains with existing NIM summary ready for immediate Gemini & Tracxn movement
         # Tier 1: Uncompleted domains with existing scraped markdown ready for immediate NIM summarization
         # Tier 2: Uncompleted domains needing initial Tech Crawler job generation or crawling
         # Tier 3: Completed or empty domains (handled quickly by skip)
+        presummarized_items = []
         priority_items = []
         regular_items = []
         completed_items = []
@@ -4768,15 +4770,20 @@ async def Integrated_Extract_domains(
                 raw_scraped = (safe_str(r[31]).strip() or safe_str(r[37]).strip()) if len(r) > 31 else ""
                 nim_txt = safe_str(r[40]).strip() if len(r) > 40 else ""
 
-            if (raw_scraped or tc_status in ("SUCCESS", "FAILED")) and len(nim_txt) <= 10:
+            if len(nim_txt) > 10:
+                presummarized_items.append((idx, r))
+            elif (raw_scraped or tc_status in ("SUCCESS", "FAILED")):
                 priority_items.append((idx, r))
             else:
                 regular_items.append((idx, r))
 
         logging.info(
-            f"🚀 [Queue Partitioning] {len(priority_items)} pre-scraped domains fast-tracked for immediate NIM processing | "
+            f"🚀 [Queue Partitioning] {len(presummarized_items)} pre-summarized domains ready for instant Gemini/Tracxn | "
+            f"{len(priority_items)} pre-scraped domains fast-tracked for NIM | "
             f"{len(regular_items)} domains queued for Tech Crawler | {len(completed_items)} completed/empty"
         )
+        for item in presummarized_items:
+            await domain_queue.put(item)
         for item in priority_items:
             await domain_queue.put(item)
         for item in regular_items:
@@ -4861,11 +4868,15 @@ async def Integrated_Extract_domains(
                         write_to_sheet=False,
                         precomputed_summary=None,
                     )
-                    nim_completed_count += 1
+                    had_nim_at_start = (len(row) > nim_col_idx and safe_str(row[nim_col_idx]).strip().upper() in ("SUCCESS", "NO_CONTENT", "FAILED_NO_CONTENT"))
+                    if not had_nim_at_start:
+                        nim_completed_count = min(pre_tc_scraped, nim_completed_count + 1)
                     if isinstance(stage1_res, dict) and stage1_res.get("tc_status") in ("SUCCESS", "FAILED"):
-                        tc_completed_count += 1
-                    # Persist NIM summary or crawler status to sheet immediately without waiting for downstream consumer
-                    if isinstance(stage1_res, dict) and stage1_res.get("write_data") and stage1_res.get("start_col"):
+                        had_tc_at_start = (len(row) > tc_col_idx and safe_str(row[tc_col_idx]).strip().upper() in ("SUCCESS", "FAILED")) or (len(row) > (29 if is_57 else 31) and bool(safe_str(row[29 if is_57 else 31]).strip()))
+                        if not had_tc_at_start:
+                            tc_completed_count = min(total_domains, tc_completed_count + 1)
+                    # Persist NIM summary or crawler status to sheet immediately if newly generated
+                    if not had_nim_at_start and isinstance(stage1_res, dict) and stage1_res.get("write_data") and stage1_res.get("start_col"):
                         await sheet_write_queue.put((row_number, stage1_res["start_col"], stage1_res["write_data"]))
                     if nim_completed_count % 25 == 0:
                         logging.info(f"⚡ [NIM Producer] {nim_completed_count}/{total_domains} summarized (Buffer: {summarized_queue.qsize()})")
@@ -5022,10 +5033,12 @@ async def Integrated_Extract_domains(
                                     feed_val = final_write_data[26] if len(final_write_data) > 26 else ""
                                     if_val = final_write_data[20] if len(final_write_data) > 20 else ""
                                     if str(feed_val).strip() or str(if_val).strip():
-                                        gemini_completed_count += 1
+                                        had_gem_at_start = bool(safe_str(row[37 if is_57 else 44]).strip() or safe_str(row[gemini_col_idx]).strip())
+                                        if not had_gem_at_start:
+                                            gemini_completed_count = min(nim_completed_count, gemini_completed_count + 1)
                                 else:
-                                    gemini_completed_count += 1
-                                tracxn_completed_count += 1
+                                    gemini_completed_count = min(nim_completed_count, gemini_completed_count + 1)
+                                tracxn_completed_count = min(total_domains, tracxn_completed_count + 1)
 
                 except Exception as d_err:
                     logging.error(f"Error in downstream consumer for {row[0] if row else 'unknown'} at row {row_number}: {d_err}")
@@ -5423,7 +5436,7 @@ async def Process_Review_Caller(client, mainheaders, SHEET_ID, EXTRACTING_SHEET_
 
             await SYSTEM_HEALTH.wait_for_resources()
 
-            tasks = []
+            tasks_with_index = []
             start_row = start_row_num + batch_index * batch_size  # Adjust for writing
 
             for row_index, row in enumerate(batch):
@@ -5432,34 +5445,56 @@ async def Process_Review_Caller(client, mainheaders, SHEET_ID, EXTRACTING_SHEET_
                     tc_chk = safe_str(row[23 if is_57_chk else 25]).strip().upper() if len(row) > (23 if is_57_chk else 25) else ""
                     raw_chk = safe_str(row[29 if is_57_chk else 31]).strip() if len(row) > (29 if is_57_chk else 31) else ""
                     if not raw_chk and tc_chk != "SUCCESS":
+                        tasks_with_index.append((row_index, None))
                         continue
                     task = asyncio.create_task(
                         Process_Review_domain(
                             session, row, start_row + row_index, client, semaphore, SHEET_ID, EXTRACTING_SHEET_NAME, write_to_sheet=False
                         )
                     )
-                    tasks.append(task)
+                    tasks_with_index.append((row_index, task))
+                else:
+                    tasks_with_index.append((row_index, None))
 
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+            active_tasks = [t for _, t in tasks_with_index if t is not None]
+            if active_tasks:
+                await asyncio.gather(*active_tasks, return_exceptions=True)
 
             batch_output_rows = []
-            for idx, res in enumerate(results):
-                orig_row = batch[idx] if idx < len(batch) else []
-                if isinstance(res, Exception) or res is None:
-                    review_fail += 1
-                    is_57_b = is_57_col_schema(orig_row)
-                    if is_57_b:
-                        existing_slice = orig_row[49:57] if len(orig_row) >= 57 else (orig_row[49:] + [""] * max(0, 8 - len(orig_row[49:])))
-                    else:
-                        existing_slice = orig_row[19:68] if len(orig_row) >= 68 else (orig_row[19:] + [""] * max(0, 49 - len(orig_row[19:])))
-                    batch_output_rows.append(existing_slice)
+            is_57_rev = is_57_col_schema(pf_data[0] if pf_data else None)
+            expected_rev_cols = 8 if is_57_rev else 49
+
+            for row_index, task in tasks_with_index:
+                orig_row = batch[row_index] if row_index < len(batch) else []
+                is_57_b = is_57_col_schema(orig_row)
+                if is_57_b:
+                    orig_slice = orig_row[49:57] if len(orig_row) >= 57 else (orig_row[49:] + [""] * max(0, 8 - len(orig_row[49:])))
                 else:
-                    review_success += 1
-                    batch_output_rows.append(res)
+                    orig_slice = orig_row[19:68] if len(orig_row) >= 68 else (orig_row[19:] + [""] * max(0, 49 - len(orig_row[19:])))
+
+                if task is None:
+                    batch_output_rows.append(orig_slice)
+                else:
+                    try:
+                        res = task.result() if task.done() and not task.cancelled() else None
+                    except Exception as err:
+                        res = err
+
+                    if isinstance(res, Exception) or res is None:
+                        review_fail += 1
+                        batch_output_rows.append(orig_slice)
+                    else:
+                        review_success += 1
+                        # Process_Review_domain returns 40 columns (Cols 18-57) for 57-col, or 49 columns (Cols 20-68) for legacy
+                        slice_to_write = res[-8:] if is_57_b else res
+                        if len(slice_to_write) < expected_rev_cols:
+                            slice_to_write = slice_to_write + [""] * (expected_rev_cols - len(slice_to_write))
+                        elif len(slice_to_write) > expected_rev_cols:
+                            slice_to_write = slice_to_write[:expected_rev_cols]
+                        batch_output_rows.append(slice_to_write)
                 review_processed += 1
 
             if batch_output_rows:
-                is_57_rev = is_57_col_schema(pf_data[0] if pf_data else None)
                 write_col_rev = 50 if is_57_rev else 20
                 await write_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, batch_output_rows, start_row, write_col_rev)
 
