@@ -697,6 +697,13 @@ async def start_pipeline(req: RunRequest, background_tasks: BackgroundTasks):
 
 async def run_clear_and_fetch_task(sheet_id: str):
     try:
+        if "unittest" not in sys.modules:
+            try:
+                import importlib
+                import common.tracxn_domain_ingestor
+                importlib.reload(common.tracxn_domain_ingestor)
+            except Exception:
+                pass
         from common.tracxn_domain_ingestor import TracxnDomainIngestor
         ingestor = TracxnDomainIngestor()
         sheet_cfg = {
