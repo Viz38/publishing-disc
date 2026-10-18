@@ -530,6 +530,10 @@ def _get_status_response():
 
     completed_count = tracxn_count if tracxn_count is not None else current_val
 
+    # Any fully completed tracxn domain must have completed Gemini predictions
+    if tracxn_count is not None and (gemini_count is None or tracxn_count > gemini_count):
+        gemini_count = tracxn_count
+
     # Waterfall cascading bounding: tracxn <= gemini <= nim <= tc_success <= scraped_count <= total_val
     if total_val >= 1000:
         scraped_count = min(scraped_count if scraped_count is not None else 0, total_val)

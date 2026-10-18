@@ -4585,9 +4585,9 @@ async def Integrated_Extract_domains(
     pre_nim_no_content = sum(1 for r in pf_data if len(r) > nim_col_idx and safe_str(r[nim_col_idx]).strip().upper() in ("NO_CONTENT", "FAILED_NO_CONTENT"))
     pre_nim_completed = min(pre_tc_scraped, pre_nim_success + pre_nim_no_content)
 
+    pre_gemini_if = sum(1 for r in pf_data if len(r) > (37 if is_57 else 44) and safe_str(r[37 if is_57 else 44]).strip())
     pre_gemini_feed = sum(1 for r in pf_data if len(r) > gemini_col_idx and safe_str(r[gemini_col_idx]).strip())
-    pre_gemini_terminal_if = sum(1 for r in pf_data if len(r) > (37 if is_57 else 44) and any(x in safe_str(r[37 if is_57 else 44]).strip().upper() for x in ("ESCALATED", "MARKED_IRRELEVANT", "SNOOZED")))
-    pre_gemini_completed = min(pre_nim_success, pre_gemini_feed + pre_gemini_terminal_if)
+    pre_gemini_completed = min(pre_nim_success, max(pre_gemini_if, pre_gemini_feed))
 
     pre_completed = min(pre_gemini_completed, sum(1 for r in pf_data if is_row_fully_completed(r)))
 
@@ -5021,7 +5021,7 @@ async def Integrated_Extract_domains(
                                 if is_57col_sheet:
                                     feed_val = final_write_data[26] if len(final_write_data) > 26 else ""
                                     if_val = final_write_data[20] if len(final_write_data) > 20 else ""
-                                    if feed_val or any(x in str(if_val).upper() for x in ("ESCALATED", "MARKED_IRRELEVANT", "SNOOZED")):
+                                    if str(feed_val).strip() or str(if_val).strip():
                                         gemini_completed_count += 1
                                 else:
                                     gemini_completed_count += 1
@@ -5341,7 +5341,10 @@ async def Process_Review_domain(session, row, row_number, client, semaphore, SHE
 
             # Prepare output data
             if is_57:
-                output_row = list(row[17:49]) + [
+                existing_prefix = list(row[17:49]) if len(row) > 17 else []
+                if len(existing_prefix) < 32:
+                    existing_prefix = existing_prefix + [""] * (32 - len(existing_prefix))
+                output_row = existing_prefix + [
                     cf_if_status,
                     cf_if_time,
                     if_pf_status,
@@ -5425,6 +5428,11 @@ async def Process_Review_Caller(client, mainheaders, SHEET_ID, EXTRACTING_SHEET_
 
             for row_index, row in enumerate(batch):
                 if row and row[0]:
+                    is_57_chk = is_57_col_schema(row)
+                    tc_chk = safe_str(row[23 if is_57_chk else 25]).strip().upper() if len(row) > (23 if is_57_chk else 25) else ""
+                    raw_chk = safe_str(row[29 if is_57_chk else 31]).strip() if len(row) > (29 if is_57_chk else 31) else ""
+                    if not raw_chk and tc_chk != "SUCCESS":
+                        continue
                     task = asyncio.create_task(
                         Process_Review_domain(
                             session, row, start_row + row_index, client, semaphore, SHEET_ID, EXTRACTING_SHEET_NAME, write_to_sheet=False
@@ -5874,9 +5882,9 @@ async def main():
             fin_nim_nocontent = sum(1 for r in pf_final if len(r) > (34 if is_57_fin else 40) and safe_str(r[34 if is_57_fin else 40]).strip().upper() in ("NO_CONTENT", "FAILED_NO_CONTENT"))
             fin_nim = min(fin_tc_scraped, fin_nim_succ + fin_nim_nocontent)
 
+            fin_gem_if = sum(1 for r in pf_final if len(r) > (37 if is_57_fin else 44) and safe_str(r[37 if is_57_fin else 44]).strip())
             fin_gem_feed = sum(1 for r in pf_final if len(r) > (43 if is_57_fin else 48) and safe_str(r[43 if is_57_fin else 48]).strip())
-            fin_gem_terminal_if = sum(1 for r in pf_final if len(r) > (37 if is_57_fin else 44) and any(x in safe_str(r[37 if is_57_fin else 44]).strip().upper() for x in ("ESCALATED", "MARKED_IRRELEVANT", "SNOOZED")))
-            fin_gem = min(fin_nim_succ, fin_gem_feed + fin_gem_terminal_if)
+            fin_gem = min(fin_nim_succ, max(fin_gem_if, fin_gem_feed))
 
             fin_tracxn = min(fin_gem, sum(1 for r in pf_final if is_row_fully_completed(r)))
             fin_total = len(pf_final)
