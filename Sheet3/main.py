@@ -3735,11 +3735,12 @@ async def Integrated_Process_domain(
                             scrappingBeautySoup = home_body
 
                 # Check 3-hour timeout rule ONLY if still PROCESSING after real-time check
-                is_timeout = (time.time() - created_timestamp) >= (3 * 3600)
+                c_ts = created_timestamp if created_timestamp is not None else time.time()
+                is_timeout = (time.time() - c_ts) >= (3 * 3600)
                 if is_timeout and tc_status == "PROCESSING":
                     logging.warning(
                         f"Tech Crawler job {tc_job_id} for {domain} has been PROCESSING for >= 3 hours "
-                        f"({(time.time() - created_timestamp)/3600:.1f}h). Switching to Waterfall Scraper fallback."
+                        f"({(time.time() - c_ts)/3600:.1f}h). Switching to Waterfall Scraper fallback."
                     )
                     tc_status = "FAILED"
 
