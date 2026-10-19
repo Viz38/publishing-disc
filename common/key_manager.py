@@ -586,7 +586,7 @@ class NIMKeyManager:
                         and self._in_flight.get(k, 0) < self.max_in_flight_per_key
                     ]
                     if available_under_capacity:
-                        earliest_key = min(available_under_capacity, key=lambda k: self._last_used.get(earliest_key, 0))
+                        earliest_key = min(available_under_capacity, key=lambda k: self._last_used.get(k, 0))
                         wait_time = max(0.05, self._min_interval - (now - self._last_used.get(earliest_key, 0)))
                         self._in_flight[earliest_key] = self._in_flight.get(earliest_key, 0) + 1
                         self._last_used[earliest_key] = now + wait_time
