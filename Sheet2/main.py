@@ -32,6 +32,7 @@ from common import (
     is_doc_too_large_error,
     is_nim_dead_domain,
     is_57_col_schema,
+    is_valid_s3_url,
 )
 
 import asyncio
@@ -3730,7 +3731,7 @@ async def Integrated_Process_domain(
                         tc_signals = track_res["signals"]
 
                 # 3. If Tech Crawler succeeded, fetch signed S3 Markdown BEFORE checking timeout!
-                if tc_status == "SUCCESS" and tc_s3_markdown:
+                if tc_status == "SUCCESS" and tc_s3_markdown and is_valid_s3_url(tc_s3_markdown):
                     signed_url = await tc_client.get_signed_s3_url(session, tc_s3_markdown)
                     if signed_url:
                         home_body = await tc_client.fetch_raw_markdown(session, signed_url) or ""
@@ -3787,7 +3788,7 @@ async def Integrated_Process_domain(
                     }
 
                 # 3. If Tech Crawler succeeded, fetch signed S3 Markdown
-                if tc_status == "SUCCESS" and tc_s3_markdown:
+                if tc_status == "SUCCESS" and tc_s3_markdown and is_valid_s3_url(tc_s3_markdown) and not home_body:
                     signed_url = await tc_client.get_signed_s3_url(session, tc_s3_markdown)
                     if signed_url:
                         home_body = await tc_client.fetch_raw_markdown(session, signed_url) or ""

@@ -321,8 +321,13 @@ class NIMKeyManager:
 
     PREFLIGHT_URL = "https://integrate.api.nvidia.com/v1/models"
 
+    KNOWN_EXPIRED_NIM_KEYS: Set[str] = {
+        "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",  # HTTP 403 Forbidden
+        "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",  # HTTP 403 Forbidden
+    }
+
     def __init__(self, keys: Optional[List[str]] = None):
-        self.invalid_keys: Set[str] = set()
+        self.invalid_keys: Set[str] = set(self.KNOWN_EXPIRED_NIM_KEYS)
         if keys is not None:
             raw_keys = [str(k).strip() for k in keys if str(k).strip()]
         else:
@@ -635,17 +640,15 @@ class NIMKeyManager:
 def get_sharded_nim_keys(
     sheet_num: int,
     total_sheets: int = 4,
-    keys: Optional[List[str]] = None
+    keys: Optional[List[str]] = None,
+    invalid_keys: Optional[Set[str]] = None
 ) -> List[str]:
     """
-    Partitions the full NIM key pool into disjoint, dedicated subsets for each sheet.
+    Partitions the full NIM key pool into balanced, interleaved subsets for each sheet.
+    Filters out permanently expired/invalid keys (e.g. 401/403).
+    Uses round-robin interleaving so that fast and slow keys are distributed evenly across
+    all sheets, completely avoiding clustered stalling.
     Ensures 0 key collision across parallel sheet processes.
-
-    For a 35-key pool across 4 sheets:
-    - Sheet 1: 9 keys
-    - Sheet 2: 9 keys
-    - Sheet 3: 9 keys
-    - Sheet 4: 8 keys
     """
     if sheet_num < 1 or sheet_num > total_sheets:
         raise ValueError(f"sheet_num must be between 1 and {total_sheets}, got {sheet_num}")
@@ -662,19 +665,18 @@ def get_sharded_nim_keys(
     if not raw_keys:
         return []
 
-    n = len(raw_keys)
-    base_size = n // total_sheets
-    remainder = n % total_sheets
+    bad_keys = set(NIMKeyManager.KNOWN_EXPIRED_NIM_KEYS)
+    if invalid_keys:
+        bad_keys.update(invalid_keys)
 
-    # Determine slice [start, end)
-    # The first `remainder` sheets get (base_size + 1) keys each,
-    # the remaining sheets get `base_size` keys each.
-    idx = sheet_num - 1
-    if idx < remainder:
-        start = idx * (base_size + 1)
-        end = start + (base_size + 1)
-    else:
-        start = remainder * (base_size + 1) + (idx - remainder) * base_size
-        end = start + base_size
+    valid_candidates = [k for k in raw_keys if k and k not in bad_keys]
+    if not valid_candidates:
+        valid_candidates = [k for k in raw_keys if k]
 
-    return raw_keys[start:end]
+    # Interleaved round-robin distribution:
+    # Sheet 1 gets indices 0, 4, 8, ...
+    # Sheet 2 gets indices 1, 5, 9, ...
+    # Sheet 3 gets indices 2, 6, 10, ...
+    # Sheet 4 gets indices 3, 7, 11, ...
+    assigned = [k for idx, k in enumerate(valid_candidates) if idx % total_sheets == (sheet_num - 1)]
+    return assigned

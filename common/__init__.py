@@ -4,7 +4,7 @@ Contains modular utilities, key managers, scrapers, API clients, and the streami
 """
 
 from .key_manager import TracxnKeyManager, NIMKeyManager, get_sharded_nim_keys
-from .tech_crawler import TechCrawlerClient
+from .tech_crawler import TechCrawlerClient, is_valid_s3_url
 from .waterfall_scraper import (
     WaterfallScraper,
     clean_html_to_text,
@@ -36,6 +36,7 @@ __all__ = [
     "NIMKeyManager",
     "get_sharded_nim_keys",
     "TechCrawlerClient",
+    "is_valid_s3_url",
     "WaterfallScraper",
     "clean_html_to_text",
     "is_permanent_network_error",

@@ -7,6 +7,17 @@ import aiohttp
 
 logger = logging.getLogger(__name__)
 
+def is_valid_s3_url(s3_url: Optional[str]) -> bool:
+    """
+    Checks if a URL has a valid S3 format before requesting signed URLs from Tracxn API.
+    Prevents HTTP 400 'Invalid S3 URL format' errors on malformed links, timestamps, or domain URLs.
+    """
+    if not s3_url or not isinstance(s3_url, str):
+        return False
+    s = s3_url.strip().lower()
+    return "s3.amazonaws.com" in s or s.startswith("s3://") or ".s3." in s or "s3-" in s
+
+
 class TechCrawlerClient:
     """
     Asynchronous client for Tracxn Tech Crawler / URL rendering backend.
@@ -232,7 +243,9 @@ class TechCrawlerClient:
         s3_url: str,
         max_retries: int = 3,
     ) -> Optional[str]:
-        if not s3_url:
+        if not s3_url or not is_valid_s3_url(s3_url):
+            if s3_url:
+                logger.info(f"Fast-skipping malformed S3 URL format: {str(s3_url)[:60]}")
             return None
 
         payload = {"url": s3_url}
