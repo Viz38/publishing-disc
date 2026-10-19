@@ -454,9 +454,8 @@ def _get_status_response():
         from common import get_sharded_nim_keys
         svc_name = getattr(settings, "SERVICE_NAME", "")
         shard_idx = 2 if ("CF-2" in svc_name or "Sheet2" in BASE_DIR) else (4 if ("Filter-V2" in svc_name or "Sheet4" in BASE_DIR) else (3 if ("CF-3" in svc_name or "Sheet3" in BASE_DIR) else 1))
-        shard_num = 1 if shard_idx in (1, 3) else 2
-        sharded = get_sharded_nim_keys(shard_num, total_sheets=2, keys=nim_keys)
-        active_nim = len(sharded) if sharded else (17 if shard_num == 1 else 18)
+        sharded = get_sharded_nim_keys(shard_idx, total_sheets=4, keys=nim_keys)
+        active_nim = len(sharded) if sharded else 8
     
     if "Phase 1" in curr_phase or "Crawl" in curr_phase or state["status"] in ("running", "stopping"):
         workers_phase = "16 workers (14 domain + 1 TC sweep + 1 writer)"

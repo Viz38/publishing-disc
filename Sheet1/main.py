@@ -132,24 +132,30 @@ def update_progress_file(current: int, total: int, success: int, fail: int, phas
         except Exception:
             pass
 
+    live_tc_success = max(tc_success if tc_success is not None else 0, prev_prog.get('tc_success', 0), success if success is not None else 0)
+    live_scraped_count = max(scraped_count if scraped_count is not None else 0, prev_prog.get('scraped_count', 0), live_tc_success)
+    live_nim_count = max(nim_count if nim_count is not None else 0, prev_prog.get('nim_count', 0))
+    live_gemini_count = max(gemini_count if gemini_count is not None else 0, prev_prog.get('gemini_count', 0))
+    live_tracxn_count = max(tracxn_count if tracxn_count is not None else 0, prev_prog.get('tracxn_count', 0), current if current is not None else 0)
+
     prog_data = {
-        'current': current,
+        'current': live_tracxn_count,
         'total': total,
-        'success': success,
+        'success': live_tc_success,
         'fail': fail,
         'phase': phase,
         'stage_details': stage_details,
         'pending_tc': pending_tc,
         'mode': mode,
-        'scraped_count': scraped_count if scraped_count is not None else prev_prog.get('scraped_count', success),
-        'tc_success': tc_success if tc_success is not None else (success if success is not None else prev_prog.get('tc_success', success)),
-        'nim_count': nim_count if nim_count is not None else prev_prog.get('nim_count', 0),
-        'gemini_count': gemini_count if gemini_count is not None else prev_prog.get('gemini_count', 0),
-        'tracxn_count': tracxn_count if tracxn_count is not None else prev_prog.get('tracxn_count', current),
+        'scraped_count': live_scraped_count,
+        'tc_success': live_tc_success,
+        'nim_count': live_nim_count,
+        'gemini_count': live_gemini_count,
+        'tracxn_count': live_tracxn_count,
         'active_tc_keys': TRACXN_KEY_MANAGER.get_active_tokens_count() if 'TRACXN_KEY_MANAGER' in globals() else prev_prog.get('active_tc_keys', 30),
         'total_tc_keys': len(getattr(TRACXN_KEY_MANAGER, 'tokens', [])) if 'TRACXN_KEY_MANAGER' in globals() else prev_prog.get('total_tc_keys', 30),
-        'active_nim_keys': NIM_KEY_MANAGER.get_active_keys_count() if ('NIM_KEY_MANAGER' in globals() and hasattr(NIM_KEY_MANAGER, 'get_active_keys_count')) else (len(getattr(NIM_KEY_MANAGER, 'keys', [])) if 'NIM_KEY_MANAGER' in globals() else prev_prog.get('active_nim_keys', 17)),
-        'total_nim_keys': 35
+        'active_nim_keys': NIM_KEY_MANAGER.get_active_keys_count() if ('NIM_KEY_MANAGER' in globals() and hasattr(NIM_KEY_MANAGER, 'get_active_keys_count')) else (len(getattr(NIM_KEY_MANAGER, 'keys', [])) if 'NIM_KEY_MANAGER' in globals() else prev_prog.get('active_nim_keys', 8)),
+        'total_nim_keys': len(getattr(NIM_KEY_MANAGER, 'keys', [])) if 'NIM_KEY_MANAGER' in globals() else prev_prog.get('total_nim_keys', 8)
     }
     tmp_path = f"{PROGRESS_FILE}.tmp.{os.getpid()}"
     try:
@@ -305,8 +311,8 @@ BACKLOG_MANAGER = BacklogManager()
 Nvidia_Base_Model  = "meta/muse-glimmer-30b"
 Nvidia_Endpoint = "https://integrate.api.nvidia.com/v1/chat/completions"
 
-# Dedicated sharded NIM API keys for Sheet 1 (sharded across 2 sheets per host = 16-17 isolated keys)
-NIM_HARDCODED_KEYS = get_sharded_nim_keys(1, total_sheets=2, keys=settings.NIM_API_KEYS)
+# Dedicated sharded NIM API keys for Sheet 1 (sharded across 4 sheets fleet-wide = zero key collision)
+NIM_HARDCODED_KEYS = get_sharded_nim_keys(1, total_sheets=4, keys=settings.NIM_API_KEYS)
 NIM_KEY_MANAGER = NIMKeyManager(list(NIM_HARDCODED_KEYS))
 
 # Error strings to check
@@ -787,7 +793,7 @@ async def Nvidia_API_ASYNC(promptMsg, token_rotator: NIMKeyManager = None, max_a
                     # 429 Rate Limited
                     elif resp.status == 429:
                         if token_rotator:
-                            token_rotator.mark_rate_limited(api_key, cooldown_seconds=25.0)
+                            token_rotator.mark_rate_limited(api_key, cooldown_seconds=3.0)
                         logging.info(f"NIM 429 rate limit on key ...{api_key[-6:]}. Rotating (attempt {attempt})...")
                         await asyncio.sleep(0.3)
 
@@ -4555,6 +4561,9 @@ async def reconcile_existing_tech_crawler_jobs(
                     pdata = json.load(pf)
                 pdata['pending_tc'] = len(pending_retained)
                 pdata['stage_details'] = f"Streaming active | Reconciling TC jobs: batch {batch_num}/{num_batches} ({processed_so_far}/{total_candidates} checked | {resolved_success} SUCCESS, {resolved_failed} FAILED)"
+                pdata['tc_success'] = pre_tc_scraped + resolved_success
+                pdata['scraped_count'] = pre_tc_completed + resolved_success + resolved_failed
+                pdata['success'] = pdata['tc_success']
                 tmp_path = f"{PROGRESS_FILE}.tmp.{os.getpid()}"
                 with open(tmp_path, 'w') as pf:
                     json.dump(pdata, pf)
@@ -4901,7 +4910,7 @@ async def Integrated_Extract_domains(
                     )
                     had_nim_at_start = (len(row) > nim_col_idx and safe_str(row[nim_col_idx]).strip().upper() in ("SUCCESS", "NO_CONTENT", "FAILED_NO_CONTENT"))
                     if not had_nim_at_start:
-                        nim_completed_count = min(pre_tc_scraped, nim_completed_count + 1)
+                        nim_completed_count = min(total_domains, nim_completed_count + 1)
                     if isinstance(stage1_res, dict) and stage1_res.get("tc_status") in ("SUCCESS", "FAILED"):
                         had_tc_at_start = (len(row) > tc_col_idx and safe_str(row[tc_col_idx]).strip().upper() in ("SUCCESS", "FAILED")) or (len(row) > (29 if is_57 else 31) and bool(safe_str(row[29 if is_57 else 31]).strip()))
                         if not had_tc_at_start:
@@ -4909,8 +4918,20 @@ async def Integrated_Extract_domains(
                     # Persist NIM summary or crawler status to sheet immediately if newly generated
                     if not had_nim_at_start and isinstance(stage1_res, dict) and stage1_res.get("write_data") and stage1_res.get("start_col"):
                         await sheet_write_queue.put((row_number, stage1_res["start_col"], stage1_res["write_data"]))
-                    if nim_completed_count % 25 == 0:
+                    if nim_completed_count % 10 == 0:
                         logging.info(f"⚡ [NIM Producer] {nim_completed_count}/{total_domains} summarized (Buffer: {summarized_queue.qsize()})")
+                        update_progress_file(
+                            tracxn_completed_count, total_domains, success_count, fail_count,
+                            phase=phase_title,
+                            stage_details=f"Pipelined: {nim_completed_count}/{total_domains} summarized | {tracxn_completed_count}/{total_domains} fully completed ({tc_completed_count} resolved)",
+                            pending_tc=len(pending_tech_crawler_jobs),
+                            mode=mode,
+                            scraped_count=tc_completed_count,
+                            tc_success=success_count,
+                            nim_count=nim_completed_count,
+                            gemini_count=gemini_completed_count,
+                            tracxn_count=tracxn_completed_count
+                        )
                     await summarized_queue.put((idx, row, stage1_res, False))
                 except Exception as ex:
                     logging.error(f"Error in NIM producer for {domain} at row {row_number}: {ex}")

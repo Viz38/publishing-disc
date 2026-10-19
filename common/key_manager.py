@@ -335,9 +335,10 @@ class NIMKeyManager:
         self.keys: List[str] = [k for k in raw_keys if k and k not in self.invalid_keys]
         self._index = 0
         self._penalties: Dict[str, float] = {}
-        self._in_flight: Set[str] = set()
+        self.max_in_flight_per_key: int = 2
+        self._in_flight: Dict[str, int] = {}
         self._last_used: Dict[str, float] = {}
-        self._min_interval: float = 1.0  # seconds between calls on the SAME key
+        self._min_interval: float = 0.5  # seconds between calls on the SAME key
         self._lock = threading.Lock()
         self._async_lock: Optional[asyncio.Lock] = None
         self._async_condition: Optional[asyncio.Condition] = None
@@ -364,7 +365,10 @@ class NIMKeyManager:
         if not key:
             return
         with self._lock:
-            self._in_flight.discard(key)
+            if key in self._in_flight:
+                self._in_flight[key] -= 1
+                if self._in_flight[key] <= 0:
+                    del self._in_flight[key]
         if self._async_condition is not None:
             try:
                 loop = asyncio.get_running_loop()
@@ -385,14 +389,14 @@ class NIMKeyManager:
     def total_tokens(self) -> int:
         return self.get_total_keys()
 
-    def mark_rate_limited(self, key: str, penalty_sec: float = 25.0, cooldown_seconds: Optional[float] = None) -> None:
+    def mark_rate_limited(self, key: str, penalty_sec: float = 3.0, cooldown_seconds: Optional[float] = None) -> None:
         sec = cooldown_seconds if cooldown_seconds is not None else penalty_sec
         if key and key not in self.invalid_keys:
             with self._lock:
                 self._penalties[key] = time.time() + sec
             logger.warning(f"NIM key ...{key[-6:]} penalized for {sec:.1f}s")
 
-    def penalize_key(self, key: str, cooldown_seconds: float = 25.0) -> None:
+    def penalize_key(self, key: str, cooldown_seconds: float = 3.0) -> None:
         self.mark_rate_limited(key, penalty_sec=cooldown_seconds)
 
     def mark_invalid(self, key: str) -> None:
@@ -403,7 +407,7 @@ class NIMKeyManager:
             return
         with self._lock:
             self.invalid_keys.add(key)
-            self._in_flight.discard(key)
+            self._in_flight.pop(key, None)
             if key in self.keys:
                 self.keys.remove(key)
             if key in self._penalties:
@@ -517,42 +521,38 @@ class NIMKeyManager:
             now = time.time()
             n = len(self.keys)
 
-            # Pass 1: find a key not in-flight, not penalized, and respecting min_interval
+            # Pass 1: find a key under capacity, not penalized, and respecting min_interval
             for _ in range(n):
                 key = self.keys[self._index % n]
                 self._index = (self._index + 1) % n
                 if key not in self.invalid_keys and self._penalties.get(key, 0) <= now:
-                    if key not in self._in_flight:
+                    if self._in_flight.get(key, 0) < self.max_in_flight_per_key:
                         last_t = self._last_used.get(key, 0)
                         if now - last_t >= self._min_interval:
-                            self._in_flight.add(key)
+                            self._in_flight[key] = self._in_flight.get(key, 0) + 1
                             self._last_used[key] = now
                             return key
 
-            # Pass 2: any key not in-flight
-            available_not_inflight = [
+            # Pass 2: any key under capacity
+            available_under_capacity = [
                 k for k in self.keys
                 if k not in self.invalid_keys
                 and self._penalties.get(k, 0) <= now
-                and k not in self._in_flight
+                and self._in_flight.get(k, 0) < self.max_in_flight_per_key
             ]
-            if available_not_inflight:
-                chosen = min(available_not_inflight, key=lambda k: self._last_used.get(k, 0))
-                self._in_flight.add(chosen)
+            if available_under_capacity:
+                chosen = min(available_under_capacity, key=lambda k: self._last_used.get(k, 0))
+                self._in_flight[chosen] = self._in_flight.get(chosen, 0) + 1
                 self._last_used[chosen] = now
                 return chosen
 
-            valid_candidates = [k for k in self.keys if k not in self.invalid_keys]
-            if not valid_candidates:
-                return ""
-            earliest_key = min(valid_candidates, key=lambda k: self._penalties.get(k, 0))
-            return earliest_key
+            return ""
 
     async def get_next_key_async(self, timeout: float = 60.0):
         """
-        Leases a NIM key with strict 1:1 concurrency (zero in-flight collisions)
+        Leases a NIM key with controlled concurrency (up to max_in_flight_per_key)
         and rate-limiting / penalty awareness.
-        If all keys are in-flight or penalized, waits on async condition until a key is released.
+        If all keys are at capacity or penalized, waits on async condition until a key is released.
         """
         cond = self._get_async_condition()
         start_time = time.time()
@@ -566,33 +566,33 @@ class NIMKeyManager:
 
                     n = len(self.keys)
 
-                    # Pass 1: key not penalized, not in-flight, respecting min_interval
+                    # Pass 1: key not penalized, under capacity, respecting min_interval
                     for _ in range(n):
                         key = self.keys[self._index % n]
                         self._index = (self._index + 1) % n
                         if key not in self.invalid_keys and self._penalties.get(key, 0) <= now:
-                            if key not in self._in_flight:
+                            if self._in_flight.get(key, 0) < self.max_in_flight_per_key:
                                 last_t = self._last_used.get(key, 0)
                                 if now - last_t >= self._min_interval:
-                                    self._in_flight.add(key)
+                                    self._in_flight[key] = self._in_flight.get(key, 0) + 1
                                     self._last_used[key] = now
                                     return key, 0.0
 
-                    # Pass 2: free keys that are not in-flight but used recently (< min_interval)
-                    available_not_inflight = [
+                    # Pass 2: free keys that are under capacity but used recently (< min_interval)
+                    available_under_capacity = [
                         k for k in self.keys
                         if k not in self.invalid_keys
                         and self._penalties.get(k, 0) <= now
-                        and k not in self._in_flight
+                        and self._in_flight.get(k, 0) < self.max_in_flight_per_key
                     ]
-                    if available_not_inflight:
-                        earliest_key = min(available_not_inflight, key=lambda k: self._last_used.get(k, 0))
+                    if available_under_capacity:
+                        earliest_key = min(available_under_capacity, key=lambda k: self._last_used.get(earliest_key, 0))
                         wait_time = max(0.05, self._min_interval - (now - self._last_used.get(earliest_key, 0)))
-                        self._in_flight.add(earliest_key)
+                        self._in_flight[earliest_key] = self._in_flight.get(earliest_key, 0) + 1
                         self._last_used[earliest_key] = now + wait_time
                         return earliest_key, wait_time
 
-                    # Pass 3: All keys are either currently in-flight or penalized
+                    # Pass 3: All keys are either currently at capacity or penalized
                     valid_candidates = [k for k in self.keys if k not in self.invalid_keys]
                     if not valid_candidates:
                         return "", 0.0
