@@ -160,7 +160,7 @@ def pull_logs_for_target(
         "issues": []
     }
 
-    if is_reachable and output_dir:
+    if is_reachable and output_dir and log_data:
         target_dir = os.path.join(output_dir, desktop, sheet)
         os.makedirs(target_dir, exist_ok=True)
 
