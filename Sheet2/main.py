@@ -3961,8 +3961,26 @@ async def Integrated_Process_domain(
             output_data_summery = AI_Engine_Output_Result[3]
 
             if mode == "phase2":
-                phase2_data = [summary_status, output_data_summery]
-                write_start_p2 = 35 if is_57col else 40
+                raw_soup_49k = str(scrappingBeautySoup)[:49000]
+                if is_57col:
+                    phase2_data = [
+                        raw_soup_49k,
+                        tc_job_gen_time,
+                        tc_final_url,
+                        "",
+                        "",
+                        summary_status,
+                        output_data_summery,
+                    ]
+                    write_start_p2 = 30
+                    new_row_data = list(rowData)
+                    new_row_data[29] = raw_soup_49k
+                    new_row_data[34] = summary_status
+                    new_row_data[35] = output_data_summery
+                else:
+                    phase2_data = [summary_status, output_data_summery]
+                    write_start_p2 = 40
+                    new_row_data = rowData
                 LOCAL_CACHE.save_record(domain, {
                     "summary_status": summary_status,
                     "output_data_summery": output_data_summery,
@@ -3970,12 +3988,6 @@ async def Integrated_Process_domain(
                 })
                 if write_to_sheet:
                     await write_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, [phase2_data], row, write_start_p2)
-                if is_57col:
-                    new_row_data = list(rowData)
-                    new_row_data[34] = summary_status
-                    new_row_data[35] = output_data_summery
-                else:
-                    new_row_data = rowData
                 return {
                     "tc_status": tc_status,
                     "domain": domain,
