@@ -219,6 +219,14 @@ def is_row_fully_completed(row: list) -> bool:
 
     # Non-retryable terminal exit: Dead domain / no content for NIM
     if len(row) > nim_idx and str(row[nim_idx]).strip().upper() in ("NO_CONTENT", "FAILED_NO_CONTENT"):
+        # Guard against false NO_CONTENT if Tech Crawler actually succeeded and S3 link exists but raw data wasn't saved
+        raw_idx = 29 if is_57 else 31
+        s3_idx = 26 if is_57 else 28
+        tc_stat = str(row[tc_idx]).strip().upper() if len(row) > tc_idx else ""
+        has_s3 = (len(row) > s3_idx and str(row[s3_idx]).strip().startswith("http"))
+        has_raw = (len(row) > raw_idx and bool(str(row[raw_idx]).strip()))
+        if tc_stat == "SUCCESS" and has_s3 and not has_raw:
+            return False
         return True
 
     def _is_valid_timestamp(s: str) -> bool:
@@ -3851,16 +3859,16 @@ async def Integrated_Process_domain(
                 engineClearedStatus = safe_str(rowData[20]) if len(rowData) > 20 else ""
                 engineTimeTaken = ""
                 # 57-column master schema: Col AD (index 29) is Raw Scraped Data
-                Final_Scrapped_Raw_data = rowData[29] if len(rowData) > 29 else ""
-                scrappingBeautySoup = safe_str(rowData[29]) if len(rowData) > 29 else ""
+                Final_Scrapped_Raw_data = rowData[29] if (len(rowData) > 29 and safe_str(rowData[29]).strip()) else (scrappingBeautySoup or home_body)
+                scrappingBeautySoup = safe_str(Final_Scrapped_Raw_data)
             else:
                 crawl_status = safe_str(rowData[21]) if len(rowData) > 21 else ""
                 enginePickedTime = safe_str(rowData[19]) if len(rowData) > 19 else ""
                 engineClearedTime = safe_str(rowData[20]) if len(rowData) > 20 else ""
                 engineClearedStatus = safe_str(rowData[21]) if len(rowData) > 21 else ""
                 engineTimeTaken = rowData[22] if len(rowData) > 22 else ""
-                Final_Scrapped_Raw_data = rowData[37] if len(rowData) > 37 else ""
-                scrappingBeautySoup = safe_str(rowData[31]) if len(rowData) > 31 else ""
+                Final_Scrapped_Raw_data = rowData[37] if (len(rowData) > 37 and safe_str(rowData[37]).strip()) else (scrappingBeautySoup or home_body)
+                scrappingBeautySoup = safe_str(Final_Scrapped_Raw_data)
 
             currentFunnelName = rowData[24] if len(rowData) > 24 else ""
             currentFunnelID = rowData[25] if len(rowData) > 25 else ""
