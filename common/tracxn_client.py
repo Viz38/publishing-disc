@@ -1,6 +1,6 @@
 import os
 import logging
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional, Union, List, Set
 import aiohttp
 
 logger = logging.getLogger(__name__)
@@ -105,7 +105,7 @@ class TracxnClient:
                         if "move" in url and "current state is 'MOVED_OUT'" in text:
                             logger.debug(f"Domain already moved out in funnel: {text[:80]}")
                             return "ALREADY_MOVED"
-                        logger.warning(f"Tracxn PUT {url} failed with 422 (unassignable/assigned to other user): {text[:100]}. Fast-skipping.")
+                        logger.debug(f"Tracxn PUT {url} failed with 422 (unassignable/assigned to other user): {text[:80]}. Fast-skipping.")
                         return "UNASSIGNABLE"
                     else:
                         text = await resp.text()
@@ -285,6 +285,8 @@ class TracxnClient:
         """
         Safely unsnoozes (if snoozed), force-assigns, and moves a domain into its target Industry Funnel.
         Handles state transitions: SNOOZED -> UNSNOOZED -> ASSIGNED -> MOVED_OUT.
+        CRITICAL: All steps for a domain MUST use the exact same user token, because Tracxn
+        strictly requires the moving user to match the assigned user.
         """
         tok = await self._acquire_token(token)
         if is_snoozed:
@@ -305,6 +307,73 @@ class TracxnClient:
         if move_res in ("YES", "ALREADY_MOVED"):
             return "YES"
         return move_res
+
+    async def sync_domain_hashtags(
+        self,
+        session: aiohttp.ClientSession,
+        domain: str,
+        add_tags: Optional[Union[List[str], Set[str], str]] = None,
+        remove_tags: Optional[Union[List[str], Set[str], str]] = None,
+        domain_profile_id: Optional[str] = None,
+        token: Optional[str] = None,
+    ) -> str:
+        """
+        Synchronizes hashtags for a domain in a single optimized pass.
+        Fetches current hashtags once, modifies the set in memory,
+        and executes at most ONE PUT request only if the hashtag list changed.
+        Returns 'YES' if tags are up-to-date or successfully updated, else 'NO'.
+        """
+        if isinstance(add_tags, str):
+            add_tags = [add_tags] if add_tags and add_tags != "NO" else []
+        if isinstance(remove_tags, str):
+            remove_tags = [remove_tags] if remove_tags and remove_tags != "NO" else []
+        add_set = set(add_tags or [])
+        remove_set = set(remove_tags or [])
+
+        if not add_set and not remove_set:
+            return "YES"
+
+        tok = await self._acquire_token(token)
+        cur_tags = []
+        dp_id = domain_profile_id
+        try:
+            fetch_payload = {"filter": {"domain": [domain]}, "dataset": "internal"}
+            async with session.post(
+                self.DOMAINS_API_URL,
+                json=fetch_payload,
+                headers=self._headers(tok),
+                timeout=aiohttp.ClientTimeout(total=20),
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    res = data.get("result", [])
+                    if res and res[0]:
+                        cur_tags = res[0].get("keywords", {}).get("hashTags", []) or []
+                        if not dp_id:
+                            dp_id = res[0].get("domainProfileId", "")
+                elif resp.status in (401, 403, 429) and self.token_rotator is not None:
+                    self._handle_token_error(tok, resp.status)
+        except Exception as e:
+            logger.warning(f"Error fetching existing hashtags for {domain}: {e}")
+
+        if not dp_id:
+            return "NO"
+
+        updated = set(cur_tags)
+        updated.difference_update(remove_set)
+        updated.update(add_set)
+
+        if updated == set(cur_tags):
+            return "YES"
+
+        new_tags = list(updated)
+        update_url = f"{self.BASE_URL}/data/entities/2.0/domain-profile?domain={domain}&tab=COMPANY_PROFILE"
+        update_payload = {
+            "id": dp_id,
+            "keywords": {"value": {"HASHTAGS": new_tags}},
+            "dataset": "internal",
+        }
+        return await self._send_put(session, update_url, update_payload, tok)
 
     async def add_domain_hashtag(
         self,

@@ -2176,33 +2176,40 @@ async def WriteAPI_Domain_Funnel_async(domainProfileId, source_funnelID, filterG
     try:
         tok = str(token).strip() if (token and str(token).strip() and token != Tracxn_API_Token) else None
         if 'TRACXN_CLIENT' in globals() and TRACXN_CLIENT is not None:
-            assign_res = await TRACXN_CLIENT.force_assign_domain(
-                active_sess, domainProfileId, source_funnelID, filterGroupId, filterId, comments, token=tok
-            )
-            if assign_res == "UNASSIGNABLE":
-                return 'SKIPPED_UNASSIGNABLE'
-            ret = "NO"
+            # Bind single user token across all actions for this domain to preserve assignment identity
+            tok = await TRACXN_CLIENT._acquire_token(tok)
             if status == 'MOVED_OUT':
-                ret = await TRACXN_CLIENT.move_domain_funnel(
-                    active_sess, domainProfileId, source_funnelID, filterGroupId, filterId, dest_Funnel, comments, token=tok
+                # Safely unsnoozes (if snoozed), force-assigns, and moves under the SAME user token
+                move_res = await TRACXN_CLIENT.unsnooze_and_move_domain(
+                    active_sess, domainProfileId, source_funnelID, filterGroupId, filterId, dest_Funnel, comments, token=tok, is_snoozed=True
                 )
-            elif status == 'SNOOZED':
-                ret = await TRACXN_CLIENT.snooze_domain(
+                if move_res == "UNASSIGNABLE":
+                    return 'SKIPPED_UNASSIGNABLE'
+                return 'TRUE' if move_res in ("YES", "ALREADY_MOVED") else 'FALSE'
+            else:
+                assign_res = await TRACXN_CLIENT.force_assign_domain(
                     active_sess, domainProfileId, source_funnelID, filterGroupId, filterId, comments, token=tok
                 )
-            elif status == 'ESCALATED':
-                ret = await TRACXN_CLIENT.escalate_domain(
-                    active_sess, domainProfileId, source_funnelID, filterGroupId, filterId, comments, token=tok
-                )
-            elif status == 'MARKED_FOR_LATER':
-                ret = await TRACXN_CLIENT.mark_domain_for_later(
-                    active_sess, domainProfileId, source_funnelID, filterGroupId, filterId, comments, token=tok
-                )
-            elif status == 'MARKED_IRRELEVANT':
-                ret = await TRACXN_CLIENT.mark_domain_irrelevant(
-                    active_sess, domainProfileId, source_funnelID, filterGroupId, filterId, comments, token=tok
-                )
-            return 'TRUE' if ret == 'YES' else 'FALSE'
+                if assign_res == "UNASSIGNABLE":
+                    return 'SKIPPED_UNASSIGNABLE'
+                ret = "NO"
+                if status == 'SNOOZED':
+                    ret = await TRACXN_CLIENT.snooze_domain(
+                        active_sess, domainProfileId, source_funnelID, filterGroupId, filterId, comments, token=tok
+                    )
+                elif status == 'ESCALATED':
+                    ret = await TRACXN_CLIENT.escalate_domain(
+                        active_sess, domainProfileId, source_funnelID, filterGroupId, filterId, comments, token=tok
+                    )
+                elif status == 'MARKED_FOR_LATER':
+                    ret = await TRACXN_CLIENT.mark_domain_for_later(
+                        active_sess, domainProfileId, source_funnelID, filterGroupId, filterId, comments, token=tok
+                    )
+                elif status == 'MARKED_IRRELEVANT':
+                    ret = await TRACXN_CLIENT.mark_domain_irrelevant(
+                        active_sess, domainProfileId, source_funnelID, filterGroupId, filterId, comments, token=tok
+                    )
+                return 'TRUE' if ret == 'YES' else 'FALSE'
         else:
             await Domain_Funnel_Assign_async(domainProfileId, source_funnelID, filterGroupId, filterId, comments, tok, session=active_sess)
             await asyncio.sleep(0.5)
@@ -3462,6 +3469,11 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
     #********************************************* Write API - Industry Funnel ************************************************
 
     if mode not in ("phase2", "phase3"):
+        if 'TRACXN_CLIENT' in globals() and TRACXN_CLIENT is not None:
+            token = await TRACXN_CLIENT._acquire_token()
+        elif 'TRACXN_KEY_MANAGER' in globals() and TRACXN_KEY_MANAGER is not None:
+            token = await TRACXN_KEY_MANAGER.acquire() if hasattr(TRACXN_KEY_MANAGER, "acquire") else TRACXN_KEY_MANAGER.get_token()
+
         if cf_if_status == "DONE":
             logging.info(f"Smart resume: CF->IF write API already completed for {domain}")
         elif EXTRACTING_SHEET_NAME == CF_EXTRACTING_SHEET_NAME and output_data_if_validation and "Yes" not in output_data_if_validation:
@@ -5311,7 +5323,12 @@ def get_ist_timestamp():
 async def Process_Review_domain(session, row, row_number, client, semaphore, SHEET_ID, EXTRACTING_SHEET_NAME, write_to_sheet=False):
     try:
         async with semaphore:
-            token = TRACXN_KEY_MANAGER.get_next_token()
+            if 'TRACXN_CLIENT' in globals() and TRACXN_CLIENT is not None:
+                token = await TRACXN_CLIENT._acquire_token()
+            elif 'TRACXN_KEY_MANAGER' in globals() and TRACXN_KEY_MANAGER is not None:
+                token = await TRACXN_KEY_MANAGER.acquire() if hasattr(TRACXN_KEY_MANAGER, "acquire") else TRACXN_KEY_MANAGER.get_token()
+            else:
+                token = Tracxn_API_Token
             TOKEN = token
             domain = row[0]
             domain_profile_id = row[10]
@@ -5635,6 +5652,10 @@ async def Execute_Phase4_Ingestion_Write_APIs(client, mainheaders, SHEET_ID, EXT
                         tag_status_discovery = row[68] if len(row) > 68 else ""
 
                     token = None
+                    if 'TRACXN_CLIENT' in globals() and TRACXN_CLIENT is not None:
+                        token = await TRACXN_CLIENT._acquire_token()
+                    elif 'TRACXN_KEY_MANAGER' in globals() and TRACXN_KEY_MANAGER is not None:
+                        token = await TRACXN_KEY_MANAGER.acquire() if hasattr(TRACXN_KEY_MANAGER, "acquire") else TRACXN_KEY_MANAGER.get_token()
                     comment = "This is a Write API Movement by Gemini"
                     tag_name_if = "bu_llm_industry_prediction"
                     tag_name_pf = "bu_llm_feed_prediction"

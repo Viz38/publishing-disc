@@ -19,7 +19,12 @@ class TracxnKeyManager:
 
     PREFLIGHT_URL = "https://platform.tracxn.com/utils/web-scraper/fetch/url/track"
 
-    def __init__(self, tokens: Optional[List[str]] = None, max_rate_per_sec: int = 90):
+    def __init__(
+        self,
+        tokens: Optional[List[str]] = None,
+        max_rate_per_sec: int = 2,
+        max_rate_per_min: int = 65,
+    ):
         self.invalid_tokens: Set[str] = set()
         if tokens is not None:
             raw_tokens = [str(t).strip() for t in tokens if str(t).strip()]
@@ -35,6 +40,7 @@ class TracxnKeyManager:
         self._index = 0
         self._penalties: Dict[str, float] = {}
         self.max_rate_per_sec = max_rate_per_sec
+        self.max_rate_per_min = max_rate_per_min
         self._call_history: Dict[str, deque] = defaultdict(deque)
         self._lock = threading.Lock()
 
@@ -193,20 +199,24 @@ class TracxnKeyManager:
 
     def _prune_history(self, token: str, now: float) -> None:
         q = self._call_history[token]
-        cutoff = now - 1.0
+        cutoff = now - 60.0
         while q and q[0] <= cutoff:
             q.popleft()
 
     def can_consume(self, token: str) -> bool:
         """
-        Checks whether token is within its per-second rate limit (max_rate_per_sec).
+        Checks whether token is within its rate limits (both 1s burst and 60s window).
         """
         if token in self.invalid_tokens:
             return False
         with self._lock:
             now = time.time()
             self._prune_history(token, now)
-            return len(self._call_history[token]) < self.max_rate_per_sec
+            q = self._call_history[token]
+            if len(q) >= self.max_rate_per_min:
+                return False
+            calls_in_1s = sum(1 for t in reversed(q) if t > now - 1.0)
+            return calls_in_1s < self.max_rate_per_sec
 
     def record_call(self, token: str) -> None:
         """
@@ -222,7 +232,7 @@ class TracxnKeyManager:
     def acquire_sync(self, token: Optional[str] = None) -> str:
         """
         Synchronously acquires permission to make an API call using the given token (or next available).
-        Blocks/sleeps if the token is currently at its per-second rate ceiling.
+        Blocks/sleeps if the token is currently at its rate ceiling, rotating across candidates first.
         """
         tok = token or self.get_next_token()
         if not tok:
@@ -236,17 +246,29 @@ class TracxnKeyManager:
                 now = time.time()
                 self._prune_history(tok, now)
                 q = self._call_history[tok]
-                if len(q) < self.max_rate_per_sec:
-                    q.append(now)
-                    return tok
-                oldest = q[0]
-                wait_time = max(0.01, 1.0 - (now - oldest) + 0.005)
-            time.sleep(wait_time)
+
+                if len(q) >= self.max_rate_per_min:
+                    wait_time = max(0.02, 60.0 - (now - q[0]) + 0.05)
+                else:
+                    calls_in_1s = [t for t in q if t > now - 1.0]
+                    if len(calls_in_1s) >= self.max_rate_per_sec:
+                        wait_time = max(0.02, 1.0 - (now - calls_in_1s[0]) + 0.05)
+                    else:
+                        q.append(now)
+                        return tok
+
+            if token is None:
+                next_tok = self.get_next_token()
+                if next_tok != tok and self.can_consume(next_tok):
+                    tok = next_tok
+                    continue
+
+            time.sleep(min(wait_time, 0.5))
 
     async def acquire(self, token: Optional[str] = None) -> str:
         """
         Asynchronously acquires permission to make an API call using the given token (or next available).
-        Sleeps asynchronously if the token is currently at its per-second rate ceiling.
+        Sleeps asynchronously if all candidate tokens are currently saturated.
         """
         tok = token or self.get_next_token()
         if not tok:
@@ -260,12 +282,24 @@ class TracxnKeyManager:
                 now = time.time()
                 self._prune_history(tok, now)
                 q = self._call_history[tok]
-                if len(q) < self.max_rate_per_sec:
-                    q.append(now)
-                    return tok
-                oldest = q[0]
-                wait_time = max(0.01, 1.0 - (now - oldest) + 0.005)
-            await asyncio.sleep(wait_time)
+
+                if len(q) >= self.max_rate_per_min:
+                    wait_time = max(0.02, 60.0 - (now - q[0]) + 0.05)
+                else:
+                    calls_in_1s = [t for t in q if t > now - 1.0]
+                    if len(calls_in_1s) >= self.max_rate_per_sec:
+                        wait_time = max(0.02, 1.0 - (now - calls_in_1s[0]) + 0.05)
+                    else:
+                        q.append(now)
+                        return tok
+
+            if token is None:
+                next_tok = self.get_next_token()
+                if next_tok != tok and self.can_consume(next_tok):
+                    tok = next_tok
+                    continue
+
+            await asyncio.sleep(min(wait_time, 0.5))
 
     def get_next_token(self) -> str:
         """
@@ -286,8 +320,11 @@ class TracxnKeyManager:
 
                 if token not in self.invalid_tokens and self._penalties.get(token, 0) <= now:
                     self._prune_history(token, now)
-                    if len(self._call_history[token]) < self.max_rate_per_sec:
-                        return token
+                    q = self._call_history[token]
+                    if len(q) < self.max_rate_per_min:
+                        calls_in_1s = sum(1 for t in reversed(q) if t > now - 1.0)
+                        if calls_in_1s < self.max_rate_per_sec:
+                            return token
 
             # 2. Fallback to unpenalized (even if near saturation)
             for _ in range(n):
@@ -307,8 +344,8 @@ class TracxnKeyManager:
         return self.get_next_token()
 
     @classmethod
-    def from_env(cls, max_rate_per_sec: int = 90) -> "TracxnKeyManager":
-        return cls(max_rate_per_sec=max_rate_per_sec)
+    def from_env(cls, max_rate_per_sec: int = 2, max_rate_per_min: int = 65) -> "TracxnKeyManager":
+        return cls(max_rate_per_sec=max_rate_per_sec, max_rate_per_min=max_rate_per_min)
 
 
 class NIMKeyManager:
