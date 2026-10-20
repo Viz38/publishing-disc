@@ -2746,9 +2746,8 @@ replacable_char_Domain = "[Extract_Domain]"
 summery_base_prompt = ""
 if_pred_base_prompt = ""
 if_pred_base_prompt_cache = ""
-funnel_name_map = {"name": [], "id": []}
-funnel_id_map = {"name": [], "id": []}
-funnel_num_map = {"name": [], "id": []}
+from common.industry_funnel_map import build_default_funnel_maps, resolve_industry_funnel
+funnel_name_map, funnel_id_map, funnel_num_map = build_default_funnel_maps()
 config_funnel_prompt = {"FunnelIdPromptMap": {}, "FunnelNamePromptMap": {}, "Feed_cache_Id": {}, "Feed_cache_Info_API_Token": {}, "Feed_cache_Info_Model": {}, "Feed_cache_Info_Gen_Date": {}, "Feed_cache_Info_Final_Status": {}}
 config_funnel_id_prompt = {}
 config_funnel_name_prompt = {}
@@ -3137,7 +3136,11 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
             if output_data_if:
                 output_data_if = output_data_if.strip()
 
-                if output_data_if in funnel_num_map:
+                res_name, res_id = resolve_industry_funnel(output_data_if)
+                if res_name and res_id:
+                    output_data_if_name = res_name
+                    output_data_if_id = res_id
+                elif output_data_if in funnel_num_map:
                     output_data_if_name = funnel_num_map[output_data_if][0]
                     output_data_if_id = funnel_num_map[output_data_if][1]
                 elif output_data_if in funnel_name_map:
@@ -3530,13 +3533,11 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
                 if cf_if_status == "TRUE":
                     cf_if_status = "DONE"
             else:
-                # print(f"This Domain will be Snoozed as in SNOOZED, Result :- {output_data_if}")
-                cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id,filter_id,source_funnel_id, "SNOOZED", comment, token, session=session)
-                #DiscoveryCentralFunctions.WriteAPI_Domain_Funnel_With_Tab(domain_profile_id, source_funnel_id,source_funnel_id, filter_group_id, filter_id, "SNOOZED", comment, token, 10)  #Need to define/implement
+                # User directive: DO NOT SNOOZE unmapped/unresolved predictions.
+                # Keep for retry when there are no more new domains to process.
+                cf_if_status = "RETRY_UNMAPPED_IF"
                 cf_if_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
-
-                if cf_if_status == "TRUE":
-                    cf_if_status = "DONE"
+                logging.warning(f"Domain {domain} predicted IF '{output_data_if}' unmapped. Preserved as RETRY_UNMAPPED_IF (DO NOT SNOOZE).")
 
         #********************************************* Write API - Publish Funnel ************************************************
 
@@ -5339,33 +5340,38 @@ async def Process_Review_domain(session, row, row_number, client, semaphore, SHE
                 if_pf_status = row[63] if len(row) > 63 else ""
                 if_pf_time = row[64] if len(row) > 64 else ""
 
-            tag_status_review = tagStatusForReview
+            tc_idx = 23 if is_57 else 25
+            raw_idx = 29 if is_57 else 31
+            tc_status_val = str(row[tc_idx]).strip().upper() if len(row) > tc_idx else ""
+            raw_data_val = str(row[raw_idx]).strip() if len(row) > raw_idx else ""
+            is_truly_unscrapable = (tc_status_val == "FAILED" and not raw_data_val)
 
             if is_row_fully_completed(row):
                 pass
             elif tagStatusForIF == "YES" or tagStatusForPF == "YES" or tagStatusForReview == "YES":
                 pass
-            else :
-                # print("Domain Picked for review - ",domain)
-                
-                if source_funnel_id and ("22" in output_data_if or "MARKED_IRRELEVANT" in output_data_if):
-                    cf_if_status = await WriteAPI_Domain_Funnel_async( domain_profile_id, source_funnel_id, filter_group_id, filter_id,source_funnel_id, "MARKED_IRRELEVANT", COMMENT, TOKEN, session=session)
-                    cf_if_time = get_ist_timestamp()
-                    if cf_if_status == "TRUE":
-                        cf_if_status = "DONE"
-
-                elif source_funnel_id and ("23" in output_data_if or "ESCALATED" in output_data_if):
-                    cf_if_status = await WriteAPI_Domain_Funnel_async( domain_profile_id, source_funnel_id, filter_group_id, filter_id,source_funnel_id, "ESCALATED", COMMENT, TOKEN, session=session)
-                    cf_if_time = get_ist_timestamp()
-                    if cf_if_status == "TRUE":
-                        cf_if_status = "DONE"
-
-                else:
-                    tag_status_review = await Domain_HashTag_async(domain, To_Review_TAG_NAME, TOKEN)
-                    cf_if_status = await WriteAPI_Domain_Funnel_async( domain_profile_id, source_funnel_id, filter_group_id, filter_id,source_funnel_id, "SNOOZED", COMMENT, TOKEN, session=session)
-                    cf_if_time = get_ist_timestamp()
-                    if cf_if_status == "TRUE":
-                        cf_if_status = "DONE"
+            elif is_truly_unscrapable:
+                # User directive: Domains should be snoozed ONLY on valid failure cases:
+                # unable to scrape website when both TC and waterfall scraper fails.
+                tag_status_review = await Domain_HashTag_async(domain, To_Review_TAG_NAME, TOKEN)
+                cf_if_status = await WriteAPI_Domain_Funnel_async( domain_profile_id, source_funnel_id, filter_group_id, filter_id,source_funnel_id, "SNOOZED", COMMENT, TOKEN, session=session)
+                cf_if_time = get_ist_timestamp()
+                if cf_if_status == "TRUE":
+                    cf_if_status = "DONE"
+            elif source_funnel_id and ("22" in output_data_if or "MARKED_IRRELEVANT" in output_data_if):
+                cf_if_status = await WriteAPI_Domain_Funnel_async( domain_profile_id, source_funnel_id, filter_group_id, filter_id,source_funnel_id, "MARKED_IRRELEVANT", COMMENT, TOKEN, session=session)
+                cf_if_time = get_ist_timestamp()
+                if cf_if_status == "TRUE":
+                    cf_if_status = "DONE"
+            elif source_funnel_id and ("23" in output_data_if or "ESCALATED" in output_data_if):
+                cf_if_status = await WriteAPI_Domain_Funnel_async( domain_profile_id, source_funnel_id, filter_group_id, filter_id,source_funnel_id, "ESCALATED", COMMENT, TOKEN, session=session)
+                cf_if_time = get_ist_timestamp()
+                if cf_if_status == "TRUE":
+                    cf_if_status = "DONE"
+            else:
+                # Domain was scraped successfully, in-flight, or had transient write API error:
+                # DO NOT SNOOZE! Preserve for retry.
+                logging.info(f"Process_Review_Caller: Preserving {domain} for retry (not unscrapable). Bypassing snooze.")
 
             tag_status_discovery = ""
             valid_movement_terminals = {"DONE", "YES", "TRUE", "MOVED", "MOVED_OUT", "SNOOZED", "MARKED_IRRELEVANT", "MARKED_FOR_LATER", "ESCALATED", "SKIPPED_UNASSIGNABLE"}

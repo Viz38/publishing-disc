@@ -19,6 +19,7 @@ class TracxnClient:
     MARK_LATER_URL = f"{BASE_URL}/data/funnel-action/mark-for-later"
     MARK_IRRELEVANT_URL = f"{BASE_URL}/data/funnel-action/mark-irrelevant"
     FORCE_ASSIGN_URL = f"{BASE_URL}/data/funnel-action/force-assign"
+    UNSNOOZE_URL = f"{BASE_URL}/data/funnel-action/unsnooze"
     CHANGE_STATUS_URL = f"{BASE_URL}/data/funnel-action/change-status"
     DOMAINS_API_URL = f"{BASE_URL}/api/2.2/domains"
 
@@ -98,6 +99,12 @@ class TracxnClient:
                         continue
                     elif resp.status == 422:
                         text = await resp.text()
+                        if "unsnooze" in url:
+                            logger.debug(f"Unsnooze 422 for domainProfileId (state not SNOOZED): {text[:80]}")
+                            return "NOT_SNOOZED"
+                        if "move" in url and "current state is 'MOVED_OUT'" in text:
+                            logger.debug(f"Domain already moved out in funnel: {text[:80]}")
+                            return "ALREADY_MOVED"
                         logger.warning(f"Tracxn PUT {url} failed with 422 (unassignable/assigned to other user): {text[:100]}. Fast-skipping.")
                         return "UNASSIGNABLE"
                     else:
@@ -245,56 +252,153 @@ class TracxnClient:
         }
         return await self._send_put(session, self.CHANGE_STATUS_URL, payload, token)
 
+    async def unsnooze_domain(
+        self,
+        session: aiohttp.ClientSession,
+        domain_profile_id: str,
+        current_funnel_id: str,
+        filter_group_id: Any,
+        filter_id: Any,
+        comments: str,
+        token: Optional[str] = None,
+    ) -> str:
+        payload = {
+            "funnelId": current_funnel_id,
+            "domainProfileId": domain_profile_id,
+            "comment": comments,
+            "sourceDetails": self._build_source_details(filter_group_id, filter_id),
+        }
+        return await self._send_put(session, self.UNSNOOZE_URL, payload, token)
+
+    async def unsnooze_and_move_domain(
+        self,
+        session: aiohttp.ClientSession,
+        domain_profile_id: str,
+        current_funnel_id: str,
+        filter_group_id: Any,
+        filter_id: Any,
+        dest_funnel: str,
+        comments: str,
+        token: Optional[str] = None,
+        is_snoozed: bool = True,
+    ) -> str:
+        """
+        Safely unsnoozes (if snoozed), force-assigns, and moves a domain into its target Industry Funnel.
+        Handles state transitions: SNOOZED -> UNSNOOZED -> ASSIGNED -> MOVED_OUT.
+        """
+        tok = await self._acquire_token(token)
+        if is_snoozed:
+            unsnooze_res = await self.unsnooze_domain(
+                session, domain_profile_id, current_funnel_id, filter_group_id, filter_id, comments, token=tok
+            )
+            logger.debug(f"Unsnooze result for {domain_profile_id}: {unsnooze_res}")
+
+        assign_res = await self.force_assign_domain(
+            session, domain_profile_id, current_funnel_id, filter_group_id, filter_id, comments, token=tok
+        )
+        if assign_res == "UNASSIGNABLE":
+            return "UNASSIGNABLE"
+
+        move_res = await self.move_domain_funnel(
+            session, domain_profile_id, current_funnel_id, filter_group_id, filter_id, dest_funnel, comments, token=tok
+        )
+        if move_res in ("YES", "ALREADY_MOVED"):
+            return "YES"
+        return move_res
+
     async def add_domain_hashtag(
         self,
         session: aiohttp.ClientSession,
         domain: str,
         tag: str = "NO",
+        domain_profile_id: Optional[str] = None,
         token: Optional[str] = None,
     ) -> str:
+        if not tag or tag == "NO":
+            return "NO"
         tok = await self._acquire_token(token)
-        url = f"{self.DOMAINS_API_URL}/{domain}/hashtag"
-        payload = {"domain": domain, "hashTag": tag}
+        cur_tags = []
+        dp_id = domain_profile_id
         try:
+            fetch_payload = {"filter": {"domain": [domain]}, "dataset": "internal"}
             async with session.post(
-                url,
-                json=payload,
+                self.DOMAINS_API_URL,
+                json=fetch_payload,
                 headers=self._headers(tok),
                 timeout=aiohttp.ClientTimeout(total=20),
             ) as resp:
                 if resp.status == 200:
-                    return "YES"
+                    data = await resp.json()
+                    res = data.get("result", [])
+                    if res and res[0]:
+                        cur_tags = res[0].get("keywords", {}).get("hashTags", []) or []
+                        if not dp_id:
+                            dp_id = res[0].get("domainProfileId", "")
                 elif resp.status in (401, 403, 429) and self.token_rotator is not None:
                     self._handle_token_error(tok, resp.status)
-                    logger.warning(f"Tracxn token ...{tok[-6:]} got status {resp.status} on POST {url}")
-                return "NO"
         except Exception as e:
-            logger.error(f"Error adding hashtag to domain {domain}: {e}")
+            logger.warning(f"Error fetching existing hashtags for {domain}: {e}")
+
+        if not dp_id:
             return "NO"
+
+        if tag in cur_tags:
+            return "YES"
+
+        new_tags = list(cur_tags) + [tag]
+        update_url = f"{self.BASE_URL}/data/entities/2.0/domain-profile?domain={domain}&tab=COMPANY_PROFILE"
+        update_payload = {
+            "id": dp_id,
+            "keywords": {"value": {"HASHTAGS": new_tags}},
+            "dataset": "internal",
+        }
+        return await self._send_put(session, update_url, update_payload, tok)
 
     async def remove_domain_hashtag(
         self,
         session: aiohttp.ClientSession,
         domain: str,
         tag: str = "NO",
+        domain_profile_id: Optional[str] = None,
         token: Optional[str] = None,
     ) -> str:
+        if not tag or tag == "NO":
+            return "NO"
         tok = await self._acquire_token(token)
-        url = f"{self.DOMAINS_API_URL}/{domain}/hashtag"
-        payload = {"domain": domain, "hashTag": tag}
+        cur_tags = []
+        dp_id = domain_profile_id
         try:
-            async with session.delete(
-                url,
-                json=payload,
+            fetch_payload = {"filter": {"domain": [domain]}, "dataset": "internal"}
+            async with session.post(
+                self.DOMAINS_API_URL,
+                json=fetch_payload,
                 headers=self._headers(tok),
                 timeout=aiohttp.ClientTimeout(total=20),
             ) as resp:
                 if resp.status == 200:
-                    return "YES"
+                    data = await resp.json()
+                    res = data.get("result", [])
+                    if res and res[0]:
+                        cur_tags = res[0].get("keywords", {}).get("hashTags", []) or []
+                        if not dp_id:
+                            dp_id = res[0].get("domainProfileId", "")
                 elif resp.status in (401, 403, 429) and self.token_rotator is not None:
                     self._handle_token_error(tok, resp.status)
-                    logger.warning(f"Tracxn token ...{tok[-6:]} got status {resp.status} on DELETE {url}")
-                return "NO"
         except Exception as e:
-            logger.error(f"Error removing hashtag from domain {domain}: {e}")
+            logger.warning(f"Error fetching existing hashtags for {domain}: {e}")
+
+        if not dp_id:
             return "NO"
+
+        if tag not in cur_tags:
+            return "YES"
+
+        new_tags = [t for t in cur_tags if t != tag]
+        update_url = f"{self.BASE_URL}/data/entities/2.0/domain-profile?domain={domain}&tab=COMPANY_PROFILE"
+        update_payload = {
+            "id": dp_id,
+            "keywords": {"value": {"HASHTAGS": new_tags}},
+            "dataset": "internal",
+        }
+        return await self._send_put(session, update_url, update_payload, tok)
+
