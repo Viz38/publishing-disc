@@ -361,6 +361,7 @@ class NIMKeyManager:
     KNOWN_EXPIRED_NIM_KEYS: Set[str] = {
         "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",  # HTTP 403 Forbidden
         "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",  # HTTP 403 Forbidden
+        "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",  # Stalling: >50s socket timeouts (2026-10-20). Remove to re-enable after issue resolves.
     }
 
     def __init__(self, keys: Optional[List[str]] = None):

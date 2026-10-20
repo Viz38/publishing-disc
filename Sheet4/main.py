@@ -4888,34 +4888,64 @@ async def Integrated_Extract_domains(
                 domain = row[0]
 
                 try:
-                    stage1_mode = "phase1" if mode == "phase1" else "phase2"
-                    stage1_res = await Integrated_Process_domain(
-                        session,
-                        domain,
-                        row_number,
-                        client,
-                        nim_semaphore,
-                        row,
-                        SHEET_ID,
-                        EXTRACTING_SHEET_NAME,
-                        cache_id_IF_Prediction,
-                        token_IF_Prediction,
-                        date_IF_Prediction,
-                        status_IF_Prediction,
-                        exp_date_IF_Prediction,
-                        config_funnel_prompt,
-                        config_funnel_id_prompt,
-                        config_funnel_name_prompt,
-                        config_funnel_name_Feed_Cached_prompt,
-                        config_funnel_name_Feed_Cached_API_Token,
-                        config_funnel_name_Feed_Cached_Model,
-                        config_funnel_name_Feed_Cached_Gen_Date,
-                        config_funnel_name_Feed_Cached_Final_Status,
-                        token_rotator,
-                        mode=stage1_mode,
-                        write_to_sheet=False,
-                        precomputed_summary=None,
-                    )
+                    # ⚡ Fast-forward optimization: if row already has NIM summary, skip
+                    # Integrated_Process_domain entirely and pass summary directly to consumer.
+                    # This eliminates the ~2.5s/row "Smart auto-resume" overhead that stalls
+                    # the producer when scanning thousands of pre-summarized rows on resume.
+                    is_57_row = is_57_col_schema(row)
+                    existing_nim_summary = ""
+                    existing_nim_status = ""
+                    if is_57_row:
+                        existing_nim_summary = safe_str(row[35]).strip() if len(row) > 35 else ""
+                        existing_nim_status = safe_str(row[34]).strip() if len(row) > 34 else ""
+                    else:
+                        existing_nim_summary = safe_str(row[40]).strip() if len(row) > 40 else ""
+                        existing_nim_status = safe_str(row[39]).strip() if len(row) > 39 else ""
+
+                    if len(existing_nim_summary) > 10 and not existing_nim_summary.startswith("http"):
+                        # Row has a valid existing NIM summary — fast-forward to consumer
+                        if not existing_nim_status:
+                            existing_nim_status = "SUCCESS"
+                        stage1_res = {
+                            "tc_status": safe_str(row[23 if is_57_row else 25]).strip().upper() if len(row) > (23 if is_57_row else 25) else "",
+                            "domain": domain,
+                            "row": row_number,
+                            "tc_job_id": safe_str(row[21 if is_57_row else 23]) if len(row) > (21 if is_57_row else 23) else "",
+                            "summary_status": existing_nim_status,
+                            "summary": existing_nim_summary,
+                            "rowData": row,
+                            "write_data": None,
+                            "start_col": None,
+                        }
+                    else:
+                        stage1_mode = "phase1" if mode == "phase1" else "phase2"
+                        stage1_res = await Integrated_Process_domain(
+                            session,
+                            domain,
+                            row_number,
+                            client,
+                            nim_semaphore,
+                            row,
+                            SHEET_ID,
+                            EXTRACTING_SHEET_NAME,
+                            cache_id_IF_Prediction,
+                            token_IF_Prediction,
+                            date_IF_Prediction,
+                            status_IF_Prediction,
+                            exp_date_IF_Prediction,
+                            config_funnel_prompt,
+                            config_funnel_id_prompt,
+                            config_funnel_name_prompt,
+                            config_funnel_name_Feed_Cached_prompt,
+                            config_funnel_name_Feed_Cached_API_Token,
+                            config_funnel_name_Feed_Cached_Model,
+                            config_funnel_name_Feed_Cached_Gen_Date,
+                            config_funnel_name_Feed_Cached_Final_Status,
+                            token_rotator,
+                            mode=stage1_mode,
+                            write_to_sheet=False,
+                            precomputed_summary=None,
+                        )
                     had_nim_at_start = (len(row) > nim_col_idx and safe_str(row[nim_col_idx]).strip().upper() in ("SUCCESS", "NO_CONTENT", "FAILED_NO_CONTENT"))
                     if not had_nim_at_start:
                         nim_completed_count = min(total_domains, nim_completed_count + 1)
@@ -5365,6 +5395,7 @@ async def Process_Review_domain(session, row, row_number, client, semaphore, SHE
             raw_data_val = str(row[raw_idx]).strip() if len(row) > raw_idx else ""
             is_truly_unscrapable = (tc_status_val == "FAILED" and not raw_data_val)
 
+            tag_status_review = ""
             if is_row_fully_completed(row):
                 pass
             elif tagStatusForIF == "YES" or tagStatusForPF == "YES" or tagStatusForReview == "YES":
