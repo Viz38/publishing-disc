@@ -370,6 +370,8 @@ class TracxnClient:
         update_url = f"{self.BASE_URL}/data/entities/2.0/domain-profile?domain={domain}&tab=COMPANY_PROFILE"
         update_payload = {
             "id": dp_id,
+            "name": domain,
+            "domain": domain,
             "keywords": {"value": {"HASHTAGS": new_tags}},
             "dataset": "internal",
         }

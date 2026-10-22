@@ -126,17 +126,9 @@ LEGACY_SHEET_IDS = {
 
 def is_57_col_schema(row: Optional[list] = None, sheet_id: Optional[str] = None) -> bool:
     """
-    Returns True if the sheet or row belongs to the target 57-column master schema.
-    All active production sheets (CF-1, CF-2, CF-3, Filter-V2) strictly follow
-    the 57-column layout (A through BE, col_count 57 to 69).
-    Legacy 70/93-column schema is only active if explicitly running against a legacy sheet ID
-    or a row with >= 75 columns.
+    Returns True. All active production sheets strictly follow the 57-column master schema.
+    Legacy 70/93-column schema is eliminated.
     """
-    target_id = str(sheet_id or "").strip()
-    if target_id in LEGACY_SHEET_IDS:
-        return False
-    if row is not None and len(row) >= 75:
-        return False
     return True
 
 class LocalSheetCache:
@@ -311,7 +303,7 @@ class LocalSheetCache:
 
     def hydrate_row_from_cache(self, domain: str, row: List[Any]) -> Tuple[List[Any], bool]:
         """
-        Merges existing sheet row with cached CSV data.
+        Merges existing sheet row with cached CSV data strictly adhering to the 57-column master schema.
         Returns (hydrated_row, can_direct_write).
         can_direct_write is True if all pipeline steps are present in CSV
         and Google Sheets was never updated (missing engineClearedTime/summary).
@@ -321,156 +313,113 @@ class LocalSheetCache:
             return row, False
 
         hydrated = list(row)
-        min_len = 70
+        min_len = 57
         if len(hydrated) < min_len:
             hydrated = hydrated + [""] * (min_len - len(hydrated))
+        elif len(hydrated) > min_len:
+            hydrated = hydrated[:min_len]
 
-        # Tech Crawler: row[23]=tc_job_id, row[24]=gen_time, row[25]=status, row[26]=url, row[27]=s3_html, row[28]=s3_md
-        if not hydrated[23] and rec.get("tc_job_id"):
-            hydrated[23] = rec["tc_job_id"]
-        if not hydrated[24] and rec.get("tc_job_gen_time"):
-            hydrated[24] = rec["tc_job_gen_time"]
-        if not hydrated[25] and rec.get("tc_status"):
-            hydrated[25] = rec["tc_status"]
-        if not hydrated[26] and rec.get("tc_final_url"):
-            hydrated[26] = rec["tc_final_url"]
-        if not hydrated[27] and rec.get("tc_s3_html"):
-            hydrated[27] = rec["tc_s3_html"]
-        if not hydrated[28] and rec.get("tc_s3_markdown"):
-            hydrated[28] = rec["tc_s3_markdown"]
-        if not hydrated[31] and rec.get("scrappingBeautySoup"):
-            hydrated[31] = rec["scrappingBeautySoup"]
+        # Section 2: Engine Stats (Cols 18-20 / R-T / idx 17-19)
+        if not hydrated[17] and rec.get("databaseAddedTime"):
+            hydrated[17] = rec["databaseAddedTime"]
+        if not hydrated[18] and rec.get("enginePickedTime"):
+            hydrated[18] = rec["enginePickedTime"]
+        if not hydrated[19] and rec.get("engineClearedTime"):
+            hydrated[19] = rec["engineClearedTime"]
 
-        # Summary: row[39]=status, row[40]=summary
-        if not hydrated[39] and rec.get("summary_status"):
-            hydrated[39] = rec["summary_status"]
-        if not hydrated[40] and rec.get("output_data_summery"):
-            hydrated[40] = rec["output_data_summery"]
+        # Section 3: Tech Crawler (Cols 21-34 / U-AH / idx 20-33)
+        if not hydrated[20] and rec.get("engineClearedStatus"):
+            hydrated[20] = rec["engineClearedStatus"]
+        if not hydrated[21] and rec.get("tc_job_id"):
+            hydrated[21] = rec["tc_job_id"]
+        if not hydrated[22] and rec.get("tc_job_gen_time"):
+            hydrated[22] = rec["tc_job_gen_time"]
+        if not hydrated[23] and rec.get("tc_status"):
+            hydrated[23] = rec["tc_status"]
+        if not hydrated[24] and rec.get("tc_final_url"):
+            hydrated[24] = rec["tc_final_url"]
+        if not hydrated[25] and rec.get("tc_s3_html"):
+            hydrated[25] = rec["tc_s3_html"]
+        if not hydrated[26] and rec.get("tc_s3_markdown"):
+            hydrated[26] = rec["tc_s3_markdown"]
+        if not hydrated[27] and rec.get("tc_http_status"):
+            hydrated[27] = rec["tc_http_status"]
+        if not hydrated[28] and rec.get("tc_signals"):
+            hydrated[28] = rec["tc_signals"]
+        if not hydrated[29] and rec.get("scrappingBeautySoup"):
+            hydrated[29] = str(rec["scrappingBeautySoup"])[:49000]
+        if not hydrated[30] and rec.get("tc_job_gen_time"):
+            hydrated[30] = rec["tc_job_gen_time"]
+        if not hydrated[31] and rec.get("tc_final_url"):
+            hydrated[31] = rec["tc_final_url"]
 
-        # Prediction: row[44]=output_data_if, row[45]=name, row[46]=id, row[50]=validation, row[54]=feed
-        if not hydrated[44] and rec.get("output_data_if"):
-            hydrated[44] = rec["output_data_if"]
-        if not hydrated[45] and rec.get("output_data_if_name"):
-            hydrated[45] = rec["output_data_if_name"]
-        if not hydrated[46] and rec.get("output_data_if_id"):
-            hydrated[46] = rec["output_data_if_id"]
-        if not hydrated[50] and rec.get("output_data_if_validation"):
-            hydrated[50] = rec["output_data_if_validation"]
-        if not hydrated[54] and rec.get("output_data_feed"):
-            hydrated[54] = rec["output_data_feed"]
-        if not hydrated[55] and rec.get("final_feed_name"):
-            hydrated[55] = rec["final_feed_name"]
-        if not hydrated[56] and rec.get("final_feed_id"):
-            hydrated[56] = rec["final_feed_id"]
-        if not hydrated[57] and rec.get("final_pub_funnel_name"):
-            hydrated[57] = rec["final_pub_funnel_name"]
-        if not hydrated[58] and rec.get("final_pub_funnel_id"):
-            hydrated[58] = rec["final_pub_funnel_id"]
+        # Section 4: NIM Summary & Gemini Predictions (Cols 35-49 / AI-AW / idx 34-48)
+        if not hydrated[34] and rec.get("summary_status"):
+            hydrated[34] = rec["summary_status"]
+        if not hydrated[35] and rec.get("output_data_summery"):
+            hydrated[35] = rec["output_data_summery"]
+        if not hydrated[36] and rec.get("output_data_summery"):
+            hydrated[36] = rec["output_data_summery"]
+        if not hydrated[37] and rec.get("output_data_if"):
+            hydrated[37] = rec["output_data_if"]
+        if not hydrated[38] and rec.get("output_data_if_name"):
+            hydrated[38] = rec["output_data_if_name"]
+        if not hydrated[39] and rec.get("output_data_if_id"):
+            hydrated[39] = rec["output_data_if_id"]
+        if not hydrated[40] and rec.get("output_data_if_name"):
+            hydrated[40] = rec["output_data_if_name"]
+        if not hydrated[41] and rec.get("output_data_if_validation"):
+            hydrated[41] = rec["output_data_if_validation"]
+        if not hydrated[42] and rec.get("output_data_feed"):
+            hydrated[42] = rec["output_data_feed"]
+        if not hydrated[43] and rec.get("output_data_feed"):
+            hydrated[43] = rec["output_data_feed"]  # Col AR (idx 43): Feed Number
+        if not hydrated[44] and rec.get("final_feed_name"):
+            hydrated[44] = rec["final_feed_name"]  # Col AS (idx 44): Feed Name
+        if not hydrated[45] and rec.get("final_feed_id"):
+            hydrated[45] = rec["final_feed_id"]    # Col AT (idx 45): Feed ID
+        if not hydrated[46] and rec.get("final_pub_funnel_name"):
+            hydrated[46] = rec["final_pub_funnel_name"]  # Col AU (idx 46): PF Name
+        if not hydrated[47] and rec.get("final_pub_funnel_id"):
+            hydrated[47] = rec["final_pub_funnel_id"]    # Col AV (idx 47): PF ID
 
-        # Write API: row[62]=cf_if_status, row[63]=cf_if_time, row[64]=if_pf_status, row[65]=if_pf_time
-        if not hydrated[62] and rec.get("cf_if_status"):
-            hydrated[62] = rec["cf_if_status"]
-        if not hydrated[63] and rec.get("cf_if_time"):
-            hydrated[63] = rec["cf_if_time"]
-        if not hydrated[64] and rec.get("if_pf_status"):
-            hydrated[64] = rec["if_pf_status"]
-        if not hydrated[65] and rec.get("if_pf_time"):
-            hydrated[65] = rec["if_pf_time"]
-        if not hydrated[66] and rec.get("tag_status_if"):
-            hydrated[66] = rec["tag_status_if"]
-        if not hydrated[67] and rec.get("tag_status_pf"):
-            hydrated[67] = rec["tag_status_pf"]
-        if not hydrated[69] and rec.get("discovery_bq"):
-            hydrated[69] = rec["discovery_bq"]
-
-        # Col U engineClearedTime and Col V engineClearedStatus
-        if not hydrated[20] and rec.get("engineClearedTime"):
-            hydrated[20] = rec["engineClearedTime"]
-        if not hydrated[21] and rec.get("engineClearedStatus"):
-            hydrated[21] = rec["engineClearedStatus"]
+        # Section 5: Tracxn Write APIs & Hashtags (Cols 50-57 / AX-BE / idx 49-56)
+        if not hydrated[49] and rec.get("cf_if_status"):
+            hydrated[49] = rec["cf_if_status"]  # Col AX (idx 49): CF->IF Movement
+        if not hydrated[50] and rec.get("cf_if_time"):
+            hydrated[50] = rec["cf_if_time"]    # Col AY (idx 50): Movement Time
+        if not hydrated[51] and rec.get("if_pf_status"):
+            hydrated[51] = rec["if_pf_status"]  # Col AZ (idx 51): IF->PF Movement
+        if not hydrated[52] and rec.get("if_pf_time"):
+            hydrated[52] = rec["if_pf_time"]    # Col BA (idx 52): Movement Time
+        if not hydrated[53] and rec.get("tag_status_if"):
+            hydrated[53] = rec["tag_status_if"]  # Col BB (idx 53): IF Hashtag
+        if not hydrated[54] and rec.get("tag_status_pf"):
+            hydrated[54] = rec["tag_status_pf"]  # Col BC (idx 54): PF Hashtag
+        if not hydrated[55] and rec.get("tag_status_review"):
+            hydrated[55] = rec["tag_status_review"]  # Col BD (idx 55): Review Hashtag
+        if not hydrated[56] and rec.get("discovery_bq"):
+            hydrated[56] = rec["discovery_bq"]  # Col BE (idx 56): Disc Movement Hashtag
 
         # Can directly write if fully completed in CSV but missing in sheet
-        can_direct_write = self.is_fully_completed(domain) and (not str(row[20]).strip() or not str(row[40]).strip())
+        can_direct_write = self.is_fully_completed(domain) and (not str(row[19] if len(row) > 19 else "").strip() or not str(row[35] if len(row) > 35 else "").strip())
         return hydrated, can_direct_write
 
+
     @staticmethod
-    def build_full_write_row(domain: str, hydrated_row: List[Any], is_cf_sheet: bool = True, record: Optional[Dict[str, Any]] = None, cache_instance: Optional[Any] = None) -> List[Any]:
+    def build_full_write_row(
+        domain: str,
+        hydrated_row: List[Any],
+        is_cf_sheet: bool = True,
+        record: Optional[Dict[str, Any]] = None,
+        cache_instance: Optional[Any] = None
+    ) -> List[Any]:
         """
-        Builds the exact 50-element array (starting at Col T / Col 20)
-        from hydrated data for writing directly to Google Sheets.
+        Legacy compatibility method redirected strictly to build_57col_write_row.
+        Returns the exact 57-column row.
         """
-        rec = record or (cache_instance.get(domain) if cache_instance else {}) or {}
-        engine_picked = hydrated_row[19] or rec.get("enginePickedTime", "")
-        engine_cleared = hydrated_row[20] or rec.get("engineClearedTime", "")
-        engine_status = hydrated_row[21] or rec.get("engineClearedStatus", "DONE")
-        engine_time = hydrated_row[22] or rec.get("engineTimeTaken", "")
+        return LocalSheetCache.build_57col_write_row(domain, hydrated_row, record=record, cache_instance=cache_instance)
 
-        tc_job_id = hydrated_row[23] or rec.get("tc_job_id", "")
-        tc_job_gen_time = hydrated_row[24] or rec.get("tc_job_gen_time", "")
-        tc_status = hydrated_row[25] or rec.get("tc_status", "")
-        tc_final_url = hydrated_row[26] or rec.get("tc_final_url", "")
-        tc_s3_html = hydrated_row[27] or rec.get("tc_s3_html", "")
-        tc_s3_markdown = hydrated_row[28] or rec.get("tc_s3_markdown", "")
-        tc_http_status = hydrated_row[29] or rec.get("tc_http_status", "")
-        tc_signals = hydrated_row[30] or rec.get("tc_signals", "")
-        scrappingBeautySoup = str(hydrated_row[31] or rec.get("scrappingBeautySoup", ""))[:49000]
-
-        summary_status = hydrated_row[39] or rec.get("summary_status", "SUCCESS")
-        output_data_summery = hydrated_row[40] or rec.get("output_data_summery", "")
-
-        output_data_if = hydrated_row[44] or rec.get("output_data_if", "")
-        output_data_if_name = hydrated_row[45] or rec.get("output_data_if_name", "")
-        output_data_if_id = hydrated_row[46] or rec.get("output_data_if_id", "")
-
-        input_sumry_for_if_validation = hydrated_row[47] or rec.get("input_sumry_for_if_validation", "")
-        input_data_for_if_validation = hydrated_row[49] or rec.get("input_data_for_if_validation", "")
-        output_data_if_validation = hydrated_row[50] or rec.get("output_data_if_validation", "")
-
-        input_sumry_for_feed = hydrated_row[51] or rec.get("input_sumry_for_feed", "")
-        base_prompt_for_feed = hydrated_row[52] or rec.get("base_prompt_for_feed", "")
-        input_data_for_feed = hydrated_row[53] or rec.get("input_data_for_feed", "")
-        output_data_feed = hydrated_row[54] or rec.get("output_data_feed", "")
-
-        final_feed_name = hydrated_row[55] or rec.get("final_feed_name", "")
-        final_feed_id = hydrated_row[56] or rec.get("final_feed_id", "")
-        final_pub_funnel_name = hydrated_row[57] or rec.get("final_pub_funnel_name", "")
-        final_pub_funnel_id = hydrated_row[58] or rec.get("final_pub_funnel_id", "")
-
-        cf_if_status = hydrated_row[62] or rec.get("cf_if_status", "")
-        cf_if_time = hydrated_row[63] or rec.get("cf_if_time", "")
-        if_pf_status = hydrated_row[64] or rec.get("if_pf_status", "")
-        if_pf_time = hydrated_row[65] or rec.get("if_pf_time", "")
-        tag_status_if = hydrated_row[66] or rec.get("tag_status_if", "")
-        tag_status_pf = hydrated_row[67] or rec.get("tag_status_pf", "")
-        discovery_bq = hydrated_row[69] or rec.get("discovery_bq", "")
-
-        row_36 = hydrated_row[36] if len(hydrated_row) > 36 else ""
-
-        if is_cf_sheet:
-            return [
-                engine_picked, engine_cleared, engine_status, engine_time,
-                tc_job_id, tc_job_gen_time, tc_status, tc_final_url, tc_s3_html, tc_s3_markdown,
-                tc_http_status, tc_signals, scrappingBeautySoup, "", "", "", "", row_36, "", "",
-                summary_status, output_data_summery, "", "",
-                output_data_if, output_data_if_name, output_data_if_id, input_sumry_for_if_validation,
-                "", input_data_for_if_validation, output_data_if_validation,
-                input_sumry_for_feed, base_prompt_for_feed, input_data_for_feed, output_data_feed,
-                final_feed_name, final_feed_id, final_pub_funnel_name, final_pub_funnel_id, "", "", "",
-                cf_if_status, cf_if_time, if_pf_status, if_pf_time, tag_status_if, tag_status_pf, "", discovery_bq
-            ]
-        else:
-            return [
-                engine_picked, engine_cleared, engine_status, engine_time,
-                tc_job_id, tc_job_gen_time, tc_status, tc_final_url, tc_s3_html, tc_s3_markdown,
-                tc_http_status, tc_signals, scrappingBeautySoup, "", "", "", "", row_36, "", "",
-                summary_status, output_data_summery, "",
-                input_data_for_if_validation, output_data_if_validation, input_sumry_for_if_validation,
-                "", "", output_data_if, output_data_if_name,
-                output_data_if_id, input_sumry_for_feed, base_prompt_for_feed, input_data_for_feed,
-                output_data_feed, final_feed_name, final_feed_id, final_pub_funnel_name,
-                final_pub_funnel_id, "", "", "", cf_if_status, cf_if_time, if_pf_status,
-                if_pf_time, tag_status_if, tag_status_pf, "", discovery_bq
-            ]
 
     @staticmethod
     def build_57col_write_row(
@@ -480,143 +429,88 @@ class LocalSheetCache:
         cache_instance: Optional[Any] = None
     ) -> List[Any]:
         """
-        Builds the 57-column row adhering to the optimized Google Sheet layout:
-        - Section 1 (Cols 1-17 / A-Q): INPUT metadata
-        - Section 2 (Cols 18-20 / R-T): ENGINE STATS (Database Added, Pick Time, Clear Time)
-        - Section 3 (Cols 21-34 / U-AH): TECH CRAWLER STATUS (Status, Job ID, S3 URLs, Raw Data capped at 49,000 chars)
-        - Section 4 (Cols 35-49 / AI-AW): LLM PREDICTIONS (NIM Status, NIM Summary, Gemini IF, Validation, Feed, PF)
-        - Section 5 (Cols 50-57 / AX-BE): TRACXN APIs (CF->IF Status & Time, IF->PF Status & Time, Tags, Hashtag yes/no)
+        Builds the 57-column row adhering strictly to the official Google Sheet layout:
+        - Section 1 (Cols 1-17 / A-Q / idx 0-16): INPUT metadata
+        - Section 2 (Cols 18-20 / R-T / idx 17-19): ENGINE STATS (Database Added Time, Pick Time, Clear Time)
+        - Section 3 (Cols 21-34 / U-AH / idx 20-33): TECH CRAWLER STATUS (Status, Job ID, S3 URLs, Raw Data capped at 49k)
+        - Section 4 (Cols 35-49 / AI-AW / idx 34-48): LLM PREDICTIONS (NIM Status, NIM Summary, Gemini IF, Feed Number, Feed Name, PF)
+        - Section 5 (Cols 50-57 / AX-BE / idx 49-56): TRACXN APIs (CF->IF, Movement Time, IF->PF, Movement Time, Hashtags)
         """
         rec = record or (cache_instance.get(domain) if cache_instance else {}) or {}
 
         in_row = list(hydrated_row)
-        if len(in_row) < 18:
-            in_row = in_row + [""] * (18 - len(in_row))
+        if len(in_row) < 57:
+            in_row = in_row + [""] * (57 - len(in_row))
+        elif len(in_row) > 57:
+            in_row = in_row[:57]
 
         row_out = [""] * 57
 
-        is_legacy = (len(in_row) > 65)
-
         # 1. INPUT (Cols 1-17 / A-Q / idx 0-16)
         for i in range(17):
-            row_out[i] = in_row[i] if i < len(in_row) else ""
+            row_out[i] = in_row[i]
 
-        if is_legacy:
-            # 2. ENGINE STATS (Cols 18-20 / R-T / idx 17-19)
-            row_out[17] = rec.get("databaseAddedTime") or (in_row[18] if len(in_row) > 18 else "") or (in_row[17] if len(in_row) > 17 else "")
-            row_out[18] = rec.get("enginePickedTime") or (in_row[19] if len(in_row) > 19 else "")
-            row_out[19] = rec.get("engineClearedTime") or (in_row[20] if len(in_row) > 20 else "")
+        # 2. ENGINE STATS (Cols 18-20 / R-T / idx 17-19)
+        row_out[17] = in_row[17] or rec.get("databaseAddedTime", "")
+        row_out[18] = in_row[18] or rec.get("enginePickedTime", "")
+        row_out[19] = in_row[19] or rec.get("engineClearedTime", "")
 
-            # 3. TECH CRAWLER STATUS (Cols 21-34 / U-AH / idx 20-33)
-            tc_status = rec.get("tc_status") or (in_row[25] if len(in_row) > 25 else "") or ""
-            row_out[20] = rec.get("engineClearedStatus") or (in_row[21] if len(in_row) > 21 else "") or ""
-            row_out[21] = rec.get("tc_job_id") or (in_row[23] if len(in_row) > 23 else "")
-            row_out[22] = rec.get("tc_job_gen_time") or (in_row[24] if len(in_row) > 24 else "")
-            row_out[23] = tc_status
-            row_out[24] = rec.get("tc_final_url") or (in_row[26] if len(in_row) > 26 else "")
-            row_out[25] = rec.get("tc_s3_html") or (in_row[27] if len(in_row) > 27 else "")
-            row_out[26] = rec.get("tc_s3_markdown") or (in_row[28] if len(in_row) > 28 else "")
-            row_out[27] = rec.get("tc_http_status") or (in_row[29] if len(in_row) > 29 else "") or ""
-            row_out[28] = rec.get("tc_signals") or (in_row[30] if len(in_row) > 30 else "") or ""
+        # 3. TECH CRAWLER STATUS (Cols 21-34 / U-AH / idx 20-33)
+        row_out[20] = in_row[20] or rec.get("engineClearedStatus", "") or "DONE"
+        row_out[21] = in_row[21] or rec.get("tc_job_id", "")
+        row_out[22] = in_row[22] or rec.get("tc_job_gen_time", "")
+        row_out[23] = in_row[23] or rec.get("tc_status", "")
+        row_out[24] = in_row[24] or rec.get("tc_final_url", "")
+        row_out[25] = in_row[25] or rec.get("tc_s3_html", "")
+        row_out[26] = in_row[26] or rec.get("tc_s3_markdown", "")
+        row_out[27] = in_row[27] or rec.get("tc_http_status", "") or ""
+        row_out[28] = in_row[28] or rec.get("tc_signals", "") or ""
 
-            # Raw Data at Col 30 (idx 29 / Col AD) - CAP AT 49,000 CHARS
-            raw_content = rec.get("scrappingBeautySoup") or (in_row[31] if len(in_row) > 31 and in_row[31] else "") or (in_row[37] if len(in_row) > 37 else "") or ""
-            row_out[29] = str(raw_content)[:49000]
+        # Raw Data at Col 30 (idx 29 / Col AD) - CAP AT 49,000 CHARS
+        raw_content = rec.get("scrappingBeautySoup") or in_row[29] or ""
+        row_out[29] = str(raw_content)[:49000]
 
-            row_out[30] = row_out[22]  # TimeStamp
-            row_out[31] = row_out[24]  # URL
-            row_out[32] = ""  # Error - Code
-            row_out[33] = ""  # Error - Reason
+        row_out[30] = in_row[30] or rec.get("tc_job_gen_time", "")
+        row_out[31] = in_row[31] or rec.get("tc_final_url", "")
+        row_out[32] = ""  # Error - Code
+        row_out[33] = ""  # Error - Reason
 
-            # 4. LLM PREDICTIONS (Cols 35-49 / AI-AW / idx 34-48)
-            summary_val = rec.get("output_data_summery") or (in_row[40] if len(in_row) > 40 else "") or ""
-            row_out[34] = rec.get("summary_status") or (in_row[39] if len(in_row) > 39 else "") or ""
-            row_out[35] = summary_val
-            row_out[36] = summary_val  # Domain Summery context
-            row_out[37] = rec.get("output_data_if") or (in_row[43] if len(in_row) > 43 else "") or ""
-            row_out[38] = rec.get("output_data_if_name") or (in_row[44] if len(in_row) > 44 else "") or ""
-            row_out[39] = rec.get("output_data_if_id") or (in_row[45] if len(in_row) > 45 else "") or ""
-            row_out[40] = row_out[38]  # Context
-            row_out[41] = rec.get("output_data_if_validation") or (in_row[49] if len(in_row) > 49 and in_row[49] else (in_row[50] if len(in_row) > 50 else "")) or ""
-            row_out[42] = rec.get("output_data_feed") or (in_row[53] if len(in_row) > 53 and in_row[53] else (in_row[54] if len(in_row) > 54 else "")) or ""
-            row_out[43] = row_out[42]
-            row_out[44] = rec.get("final_feed_name") or (in_row[54] if len(in_row) > 54 and in_row[54] else (in_row[55] if len(in_row) > 55 else "")) or ""
-            row_out[45] = rec.get("final_feed_id") or (in_row[55] if len(in_row) > 55 and in_row[55] else (in_row[56] if len(in_row) > 56 else "")) or ""
-            row_out[46] = rec.get("final_pub_funnel_name") or (in_row[56] if len(in_row) > 56 and in_row[56] else (in_row[57] if len(in_row) > 57 else "")) or ""
-            row_out[47] = rec.get("final_pub_funnel_id") or (in_row[57] if len(in_row) > 57 and in_row[57] else (in_row[58] if len(in_row) > 58 else "")) or ""
-            row_out[48] = ""  # Funnel Recheck
+        # 4. LLM PREDICTIONS (Cols 35-49 / AI-AW / idx 34-48)
+        summary_val = rec.get("output_data_summery") or in_row[35] or ""
+        row_out[34] = in_row[34] or rec.get("summary_status", "") or ""
+        row_out[35] = summary_val
+        row_out[36] = summary_val  # Domain Summery context
+        row_out[37] = rec.get("output_data_if") or in_row[37] or ""
+        row_out[38] = rec.get("output_data_if_name") or in_row[38] or ""
+        row_out[39] = rec.get("output_data_if_id") or in_row[39] or ""
+        row_out[40] = row_out[38]  # Context
+        row_out[41] = rec.get("output_data_if_validation") or in_row[41] or ""
+        row_out[42] = rec.get("output_data_feed") or in_row[42] or ""
+        row_out[43] = rec.get("output_data_feed") or in_row[43] or "" # Col AR (idx 43): Feed Number
+        row_out[44] = rec.get("final_feed_name") or in_row[44] or ""  # Col AS (idx 44): Feed Name
+        row_out[45] = rec.get("final_feed_id") or in_row[45] or ""    # Col AT (idx 45): Feed ID
+        row_out[46] = rec.get("final_pub_funnel_name") or in_row[46] or "" # Col AU (idx 46): PF Name
+        row_out[47] = rec.get("final_pub_funnel_id") or in_row[47] or ""   # Col AV (idx 47): PF ID
+        row_out[48] = ""  # Funnel Recheck
 
-            # 5. TRACXN APIs (Cols 50-57 / AX-BE / idx 49-56)
-            row_out[49] = rec.get("cf_if_status") or (in_row[61] if len(in_row) > 61 else "") or ""
-            row_out[50] = rec.get("cf_if_time") or (in_row[62] if len(in_row) > 62 else "") or ""
-            row_out[51] = rec.get("if_pf_status") or (in_row[63] if len(in_row) > 63 else "") or ""
-            row_out[52] = rec.get("if_pf_time") or (in_row[64] if len(in_row) > 64 else "") or ""
-            row_out[53] = rec.get("tag_status_if") or (in_row[65] if len(in_row) > 65 else "") or ""
-            row_out[54] = rec.get("tag_status_pf") or (in_row[66] if len(in_row) > 66 else "") or ""
-            row_out[55] = rec.get("tag_status_review") or (in_row[67] if len(in_row) > 67 else "") or ""
-            pf_tag = str(row_out[54]).strip().upper()
-            if pf_tag in ("YES", "TRUE"):
-                row_out[56] = rec.get("discovery_bq") or (in_row[68] if len(in_row) > 68 else "") or "yes"
-            else:
-                row_out[56] = "no" if (row_out[49] or row_out[51]) else ""
+        # 5. TRACXN APIs & HASHTAGS (Cols 50-57 / AX-BE / idx 49-56)
+        row_out[49] = rec.get("cf_if_status") or in_row[49] or ""  # Col AX: CF->IF Movement
+        row_out[50] = rec.get("cf_if_time") or in_row[50] or ""    # Col AY: Movement Time
+        row_out[51] = rec.get("if_pf_status") or in_row[51] or ""  # Col AZ: IF->PF Movement
+        row_out[52] = rec.get("if_pf_time") or in_row[52] or ""    # Col BA: Movement Time
+        row_out[53] = rec.get("tag_status_if") or in_row[53] or ""  # Col BB: IF Hashtag (bu_llm_industry_prediction)
+        row_out[54] = rec.get("tag_status_pf") or in_row[54] or ""  # Col BC: PF Hashtag (bu_llm_feed_prediction)
+        row_out[55] = rec.get("tag_status_review") or in_row[55] or ""  # Col BD: Review Hashtag (domainformanualreview)
+
+        # Col BE: Disc Movement Hashtag (bu_llm_discovery_processing)
+        # Added ONLY if PF Hashtag (bu_llm_feed_prediction) is YES/TRUE
+        pf_tag = str(row_out[54]).strip().upper()
+        if pf_tag in ("YES", "TRUE"):
+            row_out[56] = rec.get("discovery_bq") or in_row[56] or "YES"
+        elif row_out[49] or row_out[51]:
+            row_out[56] = "NO"
         else:
-            # 2. ENGINE STATS (Cols 18-20 / R-T / idx 17-19)
-            row_out[17] = in_row[17] or rec.get("databaseAddedTime", "")
-            row_out[18] = in_row[18] or rec.get("enginePickedTime", "")
-            row_out[19] = in_row[19] or rec.get("engineClearedTime", "")
-
-            # 3. TECH CRAWLER STATUS (Cols 21-34 / U-AH / idx 20-33)
-            tc_status = rec.get("tc_status") or (in_row[23] if len(in_row) > 23 else "") or ""
-            row_out[20] = in_row[20] or rec.get("engineClearedStatus", "") or ""
-            row_out[21] = in_row[21] or rec.get("tc_job_id", "")
-            row_out[22] = in_row[22] or rec.get("tc_job_gen_time", "")
-            row_out[23] = in_row[23] or tc_status
-            row_out[24] = in_row[24] or rec.get("tc_final_url", "")
-            row_out[25] = in_row[25] or rec.get("tc_s3_html", "")
-            row_out[26] = in_row[26] or rec.get("tc_s3_markdown", "")
-            row_out[27] = in_row[27] or rec.get("tc_http_status", "") or ""
-            row_out[28] = in_row[28] or rec.get("tc_signals", "") or ""
-
-            # Raw Data at Col 30 (idx 29 / Col AD) - CAP AT 49,000 CHARS
-            raw_content = rec.get("scrappingBeautySoup") or (in_row[29] if len(in_row) > 29 else "") or ""
-            row_out[29] = str(raw_content)[:49000]
-
-            row_out[30] = in_row[30] if len(in_row) > 30 else rec.get("tc_job_gen_time", "")
-            row_out[31] = in_row[31] if len(in_row) > 31 else rec.get("tc_final_url", "")
-            row_out[32] = ""  # Error - Code
-            row_out[33] = ""  # Error - Reason
-
-            # 4. LLM PREDICTIONS (Cols 35-49 / AI-AW / idx 34-48)
-            summary_val = rec.get("output_data_summery") or (in_row[35] if len(in_row) > 35 else "") or ""
-            row_out[34] = in_row[34] or rec.get("summary_status", "") or ""
-            row_out[35] = summary_val
-            row_out[36] = summary_val  # Domain Summery context
-            row_out[37] = rec.get("output_data_if") or (in_row[37] if len(in_row) > 37 else "") or ""
-            row_out[38] = rec.get("output_data_if_name") or (in_row[38] if len(in_row) > 38 else "") or ""
-            row_out[39] = rec.get("output_data_if_id") or (in_row[39] if len(in_row) > 39 else "") or ""
-            row_out[40] = row_out[38]  # Context
-            row_out[41] = rec.get("output_data_if_validation") or (in_row[41] if len(in_row) > 41 else "") or ""
-            row_out[42] = rec.get("output_data_feed") or ""
-            row_out[43] = rec.get("output_data_feed") or (in_row[43] if len(in_row) > 43 else "") or ""
-            row_out[44] = rec.get("final_feed_name") or (in_row[44] if len(in_row) > 44 else "") or ""
-            row_out[45] = rec.get("final_feed_id") or (in_row[45] if len(in_row) > 45 else "") or ""
-            row_out[46] = rec.get("final_pub_funnel_name") or (in_row[46] if len(in_row) > 46 else "") or ""
-            row_out[47] = rec.get("final_pub_funnel_id") or (in_row[47] if len(in_row) > 47 else "") or ""
-            row_out[48] = ""  # Funnel Recheck
-
-            # 5. TRACXN APIs (Cols 50-57 / AX-BE / idx 49-56)
-            row_out[49] = rec.get("cf_if_status") or (in_row[49] if len(in_row) > 49 else "") or ""
-            row_out[50] = rec.get("cf_if_time") or (in_row[50] if len(in_row) > 50 else "") or ""
-            row_out[51] = rec.get("if_pf_status") or (in_row[51] if len(in_row) > 51 else "") or ""
-            row_out[52] = rec.get("if_pf_time") or (in_row[52] if len(in_row) > 52 else "") or ""
-            row_out[53] = rec.get("tag_status_if") or (in_row[53] if len(in_row) > 53 else "") or ""
-            row_out[54] = rec.get("tag_status_pf") or (in_row[54] if len(in_row) > 54 else "") or ""
-            row_out[55] = rec.get("tag_status_review") or (in_row[55] if len(in_row) > 55 else "") or ""
-            pf_tag = str(row_out[54]).strip().upper()
-            if pf_tag in ("YES", "TRUE"):
-                row_out[56] = rec.get("discovery_bq") or (in_row[56] if len(in_row) > 56 else "") or "yes"
-            else:
-                row_out[56] = "no" if (row_out[49] or row_out[51]) else ""
+            row_out[56] = rec.get("discovery_bq") or in_row[56] or ""
 
         return row_out
 
