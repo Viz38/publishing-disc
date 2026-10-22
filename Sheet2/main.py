@@ -2044,19 +2044,28 @@ async def Domain_HashTag_async(domain, newtag='NO', token=None, session: aiohttp
     if result.get('keywords') and result['keywords'].get('hashTags') is not None:
         hashtags = result['keywords']['hashTags']
 
-    if newtag in hashtags:
+    if isinstance(newtag, (list, tuple, set)):
+        tags_to_add = [str(t).strip() for t in newtag if str(t).strip() and str(t).strip() != 'NO']
+    else:
+        tags_to_add = [str(newtag).strip()] if newtag and str(newtag).strip() != 'NO' else []
+
+    if not tags_to_add:
+        return 'NO'
+
+    needed = [t for t in tags_to_add if t not in hashtags]
+    if not needed:
         return 'YES'
-    elif newtag != 'NO' and newtag not in hashtags:
-        hashtags.append(newtag)
-        Payload = {"id": domainprofileid, "name": domain, "domain": domain, "keywords": {"value": {"HASHTAGS": hashtags}}, "dataset": "internal"}
-        API_URL = f"https://platform.tracxn.com/data/entities/2.0/domain-profile?domain={domain}&tab=COMPANY_PROFILE"
 
-        writestatus = await get_api_result_async(Payload, API_URL, 'PUT', token, session=session)
+    hashtags.extend(needed)
+    Payload = {"id": domainprofileid, "name": domain, "domain": domain, "keywords": {"value": {"HASHTAGS": hashtags}}, "dataset": "internal"}
+    API_URL = f"https://platform.tracxn.com/data/entities/2.0/domain-profile?domain={domain}&tab=COMPANY_PROFILE"
 
-        if "errorCode" in writestatus and writestatus["errorCode"] is not None and writestatus["errorCode"] != 400000000 and writestatus["message"] is not None:
-            return 'NO'
-        else:
-            return 'YES'
+    writestatus = await get_api_result_async(Payload, API_URL, 'PUT', token, session=session)
+
+    if "errorCode" in writestatus and writestatus["errorCode"] is not None and writestatus["errorCode"] != 400000000 and writestatus["message"] is not None:
+        return 'NO'
+    else:
+        return 'YES'
 
 
 #**************************** Tag Remove ***********************************
@@ -3515,20 +3524,26 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
         if if_pf_status == "DONE":
             logging.info(f"Smart resume: IF->PF write API already completed for {domain}")
         elif industry_funnel_id and publish_funnel_id:
-            tag_status_pf = await Domain_HashTag_async(domain, tag_name_pf, token) 
-            #DiscoveryCentralFunctions.Domain_HashTag(domain, tag_name_pf, token) #Need to define/implement
+            # Combined hashtag batch: sync both bu_llm_feed_prediction and bu_llm_discovery_processing in 1 call
+            combined_tags = [tag_name_pf, Discovery_Processing_TAG_NAME]
+            batch_tag_res = await Domain_HashTag_async(domain, combined_tags, token, session=session)
+            tag_status_pf = batch_tag_res
+            tag_status_discovery = batch_tag_res
 
             if_pf_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, industry_funnel_id, None, None, publish_funnel_id, if_pf_action, comment, token, session=session) 
-            #DiscoveryCentralFunctions.WriteAPI_Domain_Funnel_With_Tab(domain_profile_id, industry_funnel_id,publish_funnel_id, filter_group_id, filter_id, if_pf_action, comment, token, 10) #Need to define/implement
             if_pf_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
 
             if if_pf_status == "TRUE":
                 if_pf_status = "DONE"
+        else:
+            tag_status_discovery = ""
 
-        # User rule: ONLY for cases where Publish Funnel (bu_llm_feed_prediction) is YES should Hashtag (bu_llm_discovery_processing) be added
-        tag_status_discovery = ""
-        if str(tag_status_pf).strip().upper() in ("YES", "TRUE"):
-            tag_status_discovery = await Domain_HashTag_async(domain, Discovery_Processing_TAG_NAME, token, session=session)
+        # Fallback if discovery tag not yet assigned
+        if not tag_status_discovery:
+            if str(tag_status_pf).strip().upper() in ("YES", "TRUE"):
+                tag_status_discovery = await Domain_HashTag_async(domain, Discovery_Processing_TAG_NAME, token, session=session)
+            else:
+                tag_status_discovery = ""
 
     # inbetween_sheet.update_acell("B7", dstart + i) #Save point for next execution.
 
@@ -4878,14 +4893,25 @@ async def Integrated_Extract_domains(
                             if final_write_data:
                                 try:
                                     updated_row = list(downstream_row[:17]) + list(final_write_data)
-                                    rev_res = await Process_Review_domain(
-                                        session, updated_row, row_number, client, downstream_semaphore,
-                                        SHEET_ID, EXTRACTING_SHEET_NAME, write_to_sheet=False
+                                    # Optimization: Bypass redundant review pass if domain is already classified/moved
+                                    tag_if = str(final_write_data[36]).strip().upper() if len(final_write_data) > 36 else ""
+                                    tag_pf = str(final_write_data[37]).strip().upper() if len(final_write_data) > 37 else ""
+                                    tag_rev = str(final_write_data[38]).strip().upper() if len(final_write_data) > 38 else ""
+                                    cf_st = str(final_write_data[32]).strip().upper() if len(final_write_data) > 32 else ""
+                                    if_pf_st = str(final_write_data[34]).strip().upper() if len(final_write_data) > 34 else ""
+                                    already_resolved = (
+                                        (cf_st in ("DONE", "TRUE", "MOVED", "MOVED_OUT") and (if_pf_st == "DONE" or tag_pf == "YES")) or
+                                        (tag_if == "YES" or tag_pf == "YES" or tag_rev == "YES")
                                     )
-                                    if rev_res and not isinstance(rev_res, Exception):
-                                        final_write_data = rev_res
-                                    elif rev_res is not None and not isinstance(rev_res, Exception):
-                                        final_write_data = rev_res
+                                    if not already_resolved:
+                                        rev_res = await Process_Review_domain(
+                                            session, updated_row, row_number, client, downstream_semaphore,
+                                            SHEET_ID, EXTRACTING_SHEET_NAME, write_to_sheet=False
+                                        )
+                                        if rev_res and not isinstance(rev_res, Exception):
+                                            final_write_data = rev_res
+                                        elif rev_res is not None and not isinstance(rev_res, Exception):
+                                            final_write_data = rev_res
                                 except Exception as rev_err:
                                     logging.warning(f"Domain real-time review warning for {domain}: {rev_err}")
 
