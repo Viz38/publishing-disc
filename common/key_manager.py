@@ -229,33 +229,98 @@ class TracxnKeyManager:
             self._prune_history(token, now)
             self._call_history[token].append(now)
 
-    def acquire_sync(self, token: Optional[str] = None) -> str:
+    def reload_tokens_from_env(self, env_path: Optional[str] = None) -> int:
+        """
+        Dynamically re-reads TRACXN_API_TOKENS from .env file into the active pool.
+        Clears penalty and invalid status for any tokens refreshed in the new environment.
+        Returns the number of active valid tokens loaded.
+        """
+        try:
+            target_env = env_path or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+            env_tokens = ""
+            if os.path.exists(target_env):
+                try:
+                    from dotenv import dotenv_values
+                    vals = dotenv_values(target_env)
+                    env_tokens = vals.get("TRACXN_API_TOKENS", "") or ""
+                except Exception:
+                    pass
+            if not env_tokens:
+                env_tokens = os.getenv("TRACXN_API_TOKENS", "")
+
+            raw_tokens = [t.strip() for t in env_tokens.split(",") if t.strip()] if env_tokens else []
+            if not raw_tokens:
+                fallback = os.getenv("TRACXN_API_TOKEN", "")
+                raw_tokens = [fallback] if fallback else []
+
+            with self._lock:
+                new_tokens = [t for t in raw_tokens if t]
+                # If fresh tokens were provided, clear invalid/penalty state
+                for t in new_tokens:
+                    self.invalid_tokens.discard(t)
+                    if t in self._penalties and self._penalties[t] > time.time() + 60.0:
+                        del self._penalties[t]
+
+                self.tokens = [t for t in new_tokens if t and t not in self.invalid_tokens]
+                if self.tokens:
+                    self._index = self._index % len(self.tokens)
+                else:
+                    self._index = 0
+
+            logger.info(f"🔄 Dynamic token reload: {len(self.tokens)} active tokens in pool.")
+            return len(self.tokens)
+        except Exception as e:
+            logger.warning(f"Error reloading tokens from env: {e}")
+            return len(self.tokens)
+
+    def acquire_sync(self, token: Optional[str] = None, timeout: float = 45.0) -> str:
         """
         Synchronously acquires permission to make an API call using the given token (or next available).
         Blocks/sleeps if the token is currently at its rate ceiling, rotating across candidates first.
+        Times out after `timeout` seconds (default 45s) and returns "" if no tokens available.
         """
         tok = token or self.get_next_token()
-        if not tok:
-            return ""
+        start_time = time.time()
+        reloaded = False
         while True:
+            if not tok or len(self.tokens) == 0:
+                if not reloaded:
+                    self.reload_tokens_from_env()
+                    reloaded = True
+                    tok = token or self.get_next_token()
+                if not tok:
+                    if time.time() - start_time > timeout:
+                        logger.error(f"TracxnKeyManager: Token acquisition timed out after {timeout}s (pool exhausted).")
+                        return ""
+                    time.sleep(0.5)
+                    tok = token or self.get_next_token()
+                    continue
+
             with self._lock:
-                if tok in self.invalid_tokens:
+                if tok in self.invalid_tokens or tok not in self.tokens:
                     tok = self.get_next_token()
                     if not tok:
-                        return ""
+                        continue
                 now = time.time()
-                self._prune_history(tok, now)
-                q = self._call_history[tok]
-
-                if len(q) >= self.max_rate_per_min:
-                    wait_time = max(0.02, 60.0 - (now - q[0]) + 0.05)
+                penalty_until = self._penalties.get(tok, 0)
+                if penalty_until > now:
+                    wait_time = max(0.05, penalty_until - now)
                 else:
-                    calls_in_1s = [t for t in q if t > now - 1.0]
-                    if len(calls_in_1s) >= self.max_rate_per_sec:
-                        wait_time = max(0.02, 1.0 - (now - calls_in_1s[0]) + 0.05)
+                    self._prune_history(tok, now)
+                    q = self._call_history[tok]
+                    if len(q) >= self.max_rate_per_min:
+                        wait_time = max(0.02, 60.0 - (now - q[0]) + 0.05)
                     else:
-                        q.append(now)
-                        return tok
+                        calls_in_1s = [t for t in q if t > now - 1.0]
+                        if len(calls_in_1s) >= self.max_rate_per_sec:
+                            wait_time = max(0.02, 1.0 - (now - calls_in_1s[0]) + 0.05)
+                        else:
+                            q.append(now)
+                            return tok
+
+            if time.time() - start_time > timeout:
+                logger.error(f"TracxnKeyManager: Token acquisition timed out after {timeout}s.")
+                return ""
 
             if token is None:
                 next_tok = self.get_next_token()
@@ -265,33 +330,54 @@ class TracxnKeyManager:
 
             time.sleep(min(wait_time, 0.5))
 
-    async def acquire(self, token: Optional[str] = None) -> str:
+    async def acquire(self, token: Optional[str] = None, timeout: float = 45.0) -> str:
         """
         Asynchronously acquires permission to make an API call using the given token (or next available).
         Sleeps asynchronously if all candidate tokens are currently saturated.
+        Times out after `timeout` seconds (default 45s) and returns "" if no tokens available.
         """
         tok = token or self.get_next_token()
-        if not tok:
-            return ""
+        start_time = time.time()
+        reloaded = False
         while True:
+            if not tok or len(self.tokens) == 0:
+                if not reloaded:
+                    self.reload_tokens_from_env()
+                    reloaded = True
+                    tok = token or self.get_next_token()
+                if not tok:
+                    if time.time() - start_time > timeout:
+                        logger.error(f"TracxnKeyManager: Async token acquisition timed out after {timeout}s (pool exhausted).")
+                        return ""
+                    await asyncio.sleep(0.5)
+                    tok = token or self.get_next_token()
+                    continue
+
             with self._lock:
-                if tok in self.invalid_tokens:
+                if tok in self.invalid_tokens or tok not in self.tokens:
                     tok = self.get_next_token()
                     if not tok:
-                        return ""
+                        continue
                 now = time.time()
-                self._prune_history(tok, now)
-                q = self._call_history[tok]
-
-                if len(q) >= self.max_rate_per_min:
-                    wait_time = max(0.02, 60.0 - (now - q[0]) + 0.05)
+                penalty_until = self._penalties.get(tok, 0)
+                if penalty_until > now:
+                    wait_time = max(0.05, penalty_until - now)
                 else:
-                    calls_in_1s = [t for t in q if t > now - 1.0]
-                    if len(calls_in_1s) >= self.max_rate_per_sec:
-                        wait_time = max(0.02, 1.0 - (now - calls_in_1s[0]) + 0.05)
+                    self._prune_history(tok, now)
+                    q = self._call_history[tok]
+                    if len(q) >= self.max_rate_per_min:
+                        wait_time = max(0.02, 60.0 - (now - q[0]) + 0.05)
                     else:
-                        q.append(now)
-                        return tok
+                        calls_in_1s = [t for t in q if t > now - 1.0]
+                        if len(calls_in_1s) >= self.max_rate_per_sec:
+                            wait_time = max(0.02, 1.0 - (now - calls_in_1s[0]) + 0.05)
+                        else:
+                            q.append(now)
+                            return tok
+
+            if time.time() - start_time > timeout:
+                logger.error(f"TracxnKeyManager: Async token acquisition timed out after {timeout}s.")
+                return ""
 
             if token is None:
                 next_tok = self.get_next_token()

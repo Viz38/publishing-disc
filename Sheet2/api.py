@@ -742,17 +742,12 @@ async def run_clear_and_fetch_task(sheet_id: str):
             pipeline_req = RunRequest(start_row=3, mode="full", sheet_id=sheet_id)
             await run_pipeline_task(pipeline_req)
 
-            # Spawn next day's advance pre-crawl in the background
+            # Spawn next day's advance pre-crawl in an isolated background subprocess
             try:
-                from common.advance_precrawl import run_precrawl_for_sheet
-                target_cfg = {
-                    "num": int(folder_name.replace("Sheet", "") if "Sheet" in folder_name else 2),
-                    "id": sheet_id,
-                    "name": f"Sheet-{sheet_id[:8]}",
-                    "folder": folder_name
-                }
-                logger.info(f"🚀 Spawning background Day T+1 advance pre-crawl for {folder_name} (15,000 budget)...")
-                asyncio.create_task(run_precrawl_for_sheet(target_cfg, budget=15000))
+                from common.advance_precrawl import spawn_advance_precrawl_subprocess
+                sheet_num = int(folder_name.replace("Sheet", "") if "Sheet" in folder_name else 2)
+                pid = spawn_advance_precrawl_subprocess(folder_name, sheet_num=sheet_num, budget=15000)
+                logger.info(f"🚀 Spawned isolated background Day T+1 advance pre-crawl subprocess (PID {pid}) for {folder_name} (15,000 budget)")
             except Exception as pe:
                 logger.warning(f"Could not spawn background advance pre-crawl: {pe}")
         else:
@@ -775,21 +770,17 @@ async def clear_and_fetch_domains_route(background_tasks: BackgroundTasks, req: 
 
 @app.post("/discovery/advance-precrawl", dependencies=[Depends(verify_token)])
 @app.post("/sheet2/advance-precrawl", dependencies=[Depends(verify_token)])
-async def advance_precrawl_route(background_tasks: BackgroundTasks, req: Optional[RunRequest] = None):
+async def advance_precrawl_route(req: Optional[RunRequest] = None):
     target_sheet_id = (req.sheet_id if req else None) or settings.CF_SHEET_ID
-    from common.advance_precrawl import run_precrawl_for_sheet
+    from common.advance_precrawl import spawn_advance_precrawl_subprocess
     folder_name = os.path.basename(BASE_DIR)
-    target_cfg = {
-        "num": int(folder_name.replace("Sheet", "") if "Sheet" in folder_name else 2),
-        "id": target_sheet_id,
-        "name": f"Sheet-{target_sheet_id[:8]}",
-        "folder": folder_name
-    }
-    background_tasks.add_task(run_precrawl_for_sheet, target_cfg, 15000)
+    sheet_num = int(folder_name.replace("Sheet", "") if "Sheet" in folder_name else 2)
+    pid = spawn_advance_precrawl_subprocess(folder_name, sheet_num=sheet_num, budget=15000)
     return {
         "status": "accepted",
-        "message": f"Advance pre-crawl for tomorrow initiated for {folder_name} (15,000 budget)",
-        "sheet_id": target_sheet_id
+        "message": f"Advance pre-crawl for tomorrow launched as isolated background process (PID {pid}) for {folder_name} (15,000 budget)",
+        "sheet_id": target_sheet_id,
+        "pid": pid
     }
 
 if __name__ == "__main__":

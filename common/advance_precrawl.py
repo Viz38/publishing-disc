@@ -11,6 +11,7 @@ import aiohttp
 import requests
 import gspread
 from google.oauth2.service_account import Credentials
+import subprocess
 from dotenv import load_dotenv
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -269,7 +270,6 @@ async def generate_job_ids_for_rows(rows: List[List[str]], concurrency: int = 25
     """
     token_manager = TracxnKeyManager()
     tc_client = TechCrawlerClient(token_rotator=token_manager)
-    sem = asyncio.Semaphore(concurrency)
 
     connector = aiohttp.TCPConnector(limit=concurrency + 10, ttl_dns_cache=300)
     timeout = aiohttp.ClientTimeout(total=35)
@@ -278,43 +278,94 @@ async def generate_job_ids_for_rows(rows: List[List[str]], concurrency: int = 25
     failed_count = 0
     total = len(rows)
 
+    queue: asyncio.Queue = asyncio.Queue()
+    for item in enumerate(rows):
+        queue.put_nowait(item)
+
     async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-        async def _generate_one(idx: int, r: List[str]):
+        async def _worker():
             nonlocal created_count, failed_count
-            domain = r[0].strip() if r and r[0] else ""
-            if not domain:
-                return
-
-            async with sem:
-                await asyncio.sleep(0.04)  # Small pacing
+            while True:
                 try:
-                    job_id = await tc_client.generate_job_id(session, domain)
-                    gen_time = datetime.datetime.now().strftime("%d/%b/%Y %H:%M:%S")
-                    if job_id:
-                        r[20] = "DONE"
-                        r[21] = job_id
-                        r[22] = gen_time
-                        r[23] = "PROCESSING"
-                        created_count += 1
-                    else:
-                        r[20] = "DONE"
-                        r[21] = ""
-                        r[22] = gen_time
-                        r[23] = "FAILED"
+                    item = queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+
+                idx, r = item
+                domain = r[0].strip() if r and r[0] else ""
+                if domain:
+                    await asyncio.sleep(0.04)  # Small pacing
+                    try:
+                        job_id = await tc_client.generate_job_id(session, domain)
+                        gen_time = datetime.datetime.now().strftime("%d/%b/%Y %H:%M:%S")
+                        if job_id:
+                            r[20] = "DONE"
+                            r[21] = job_id
+                            r[22] = gen_time
+                            r[23] = "PROCESSING"
+                            created_count += 1
+                        else:
+                            r[20] = "DONE"
+                            r[21] = ""
+                            r[22] = gen_time
+                            r[23] = "FAILED"
+                            failed_count += 1
+                    except Exception as e:
+                        logger.debug(f"Error generating job ID for {domain}: {e}")
                         failed_count += 1
-                except Exception as e:
-                    logger.debug(f"Error generating job ID for {domain}: {e}")
-                    failed_count += 1
 
-                done = created_count + failed_count
-                if done % 500 == 0 or done == total:
-                    logger.info(f"Tech Crawler Job ID Generation Progress: {done}/{total} ({created_count} OK, {failed_count} FAIL)")
+                    done = created_count + failed_count
+                    if done % 500 == 0 or done == total:
+                        logger.info(f"Tech Crawler Job ID Generation Progress: {done}/{total} ({created_count} OK, {failed_count} FAIL)")
 
-        tasks = [asyncio.create_task(_generate_one(i, row)) for i, row in enumerate(rows)]
-        await asyncio.gather(*tasks)
+                queue.task_done()
+
+        # Bounded worker pool: exactly `concurrency` workers running concurrently
+        workers = [asyncio.create_task(_worker()) for _ in range(concurrency)]
+        await queue.join()
+        for w in workers:
+            w.cancel()
+        await asyncio.gather(*workers, return_exceptions=True)
 
     logger.info(f"✅ Tech Crawler Job ID Generation Complete: {created_count} Job IDs created, {failed_count} failed out of {total}")
     return rows
+
+def spawn_advance_precrawl_subprocess(folder: str, sheet_num: int, budget: int = 15000) -> int:
+    """
+    Spawns advance_precrawl.py as a completely detached background subprocess.
+    Redirects stdout/stderr to <folder>/Logs/precrawl_run.log and records PID in <folder>/.precrawl.pid.
+    Ensures uvicorn event loop is NEVER blocked or starved by batch crawlers.
+    Returns the spawned process PID.
+    """
+    sheet_dir = os.path.join(BASE_DIR, folder)
+    logs_dir = os.path.join(sheet_dir, "Logs")
+    os.makedirs(logs_dir, exist_ok=True)
+    log_path = os.path.join(logs_dir, "precrawl_run.log")
+    pid_path = os.path.join(sheet_dir, ".precrawl.pid")
+
+    script_path = os.path.join(BASE_DIR, "common", "advance_precrawl.py")
+    cmd = [sys.executable, script_path, str(budget), str(sheet_num)]
+
+    log_file = open(log_path, "a", encoding="utf-8")
+    log_file.write(f"\n=== LAUNCHING ADVANCE PRE-CRAWL AT {datetime.datetime.now().isoformat()} ===\n")
+    log_file.flush()
+
+    process = subprocess.Popen(
+        cmd,
+        cwd=BASE_DIR,
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        start_new_session=True  # Detached process group
+    )
+
+    try:
+        with open(pid_path, "w", encoding="utf-8") as pf:
+            pf.write(str(process.pid))
+    except Exception as e:
+        logger.warning(f"Could not write .precrawl.pid: {e}")
+
+    logger.info(f"🚀 Spawned isolated advance pre-crawl subprocess (PID {process.pid}) for {folder} (Budget {budget})")
+    return process.pid
 
 def save_precrawl_to_csv(folder: str, rows: List[List[str]]) -> str:
     sheet_dir = os.path.join(BASE_DIR, folder)
