@@ -3709,47 +3709,14 @@ async def Integrated_Process_domain(
                         if home_body:
                             scrappingBeautySoup = home_body
 
-                # Check 3-hour timeout rule ONLY if still PROCESSING after real-time check
-                c_ts = created_timestamp if created_timestamp is not None else time.time()
-                is_timeout = (time.time() - c_ts) >= (3 * 3600)
-                if is_timeout and tc_status == "PROCESSING":
-                    logging.warning(
-                        f"Tech Crawler job {tc_job_id} for {domain} has been PROCESSING for >= 3 hours "
-                        f"({(time.time() - c_ts)/3600:.1f}h). Switching to Waterfall Scraper fallback."
+                # Single-Pass Polling Policy (Advance Pre-Crawl):
+                # If still PROCESSING after initial check, mark FAILED immediately and switch to Waterfall Scraper!
+                if tc_status == "PROCESSING":
+                    logging.info(
+                        f"Tech Crawler job {tc_job_id} for {domain} still PROCESSING. "
+                        "Assuming FAILED under single-pass policy and switching to Waterfall Scraper fallback."
                     )
                     tc_status = "FAILED"
-
-                # If still PROCESSING after initial check, DO NOT call fallback scraper!
-                if tc_status == "PROCESSING":
-                    LOCAL_CACHE.save_record(domain, {
-                        "tc_job_id": tc_job_id,
-                        "tc_job_gen_time": tc_job_gen_time,
-                        "tc_status": tc_status,
-                        "updated_at": datetime.datetime.now().strftime("%d/%b/%Y %H:%M:%S")
-                    })
-                    start_col_proc = 22
-                    if write_to_sheet:
-                        try:
-                            await write_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, [[tc_job_id, tc_job_gen_time, tc_status]], row, start_col_proc)
-                        except Exception as ex:
-                            logging.warning(f"Could not write intermediate PROCESSING state to sheet for {domain}: {ex}")
-
-                    logging.info(f"Tech Crawler job {tc_job_id} for {domain} is PROCESSING. Skipping fallback scraper and yielding to background poller.")
-                    new_row_data = list(rowData)
-                    new_row_data[21] = tc_job_id
-                    new_row_data[22] = tc_job_gen_time
-                    new_row_data[23] = tc_status
-                    return {
-                        "tc_status": "PROCESSING",
-                        "domain": domain,
-                        "row": row,
-                        "tc_job_id": tc_job_id,
-                        "tc_job_gen_time": tc_job_gen_time,
-                        "created_timestamp": created_timestamp,
-                        "rowData": new_row_data,
-                        "write_data": [tc_job_id, tc_job_gen_time, tc_status],
-                        "start_col": start_col_proc
-                    }
 
                 # 3. If Tech Crawler succeeded, fetch signed S3 Markdown
                 if tc_status == "SUCCESS" and tc_s3_markdown and is_valid_s3_url(tc_s3_markdown) and not home_body:
@@ -4305,46 +4272,34 @@ async def reconcile_existing_tech_crawler_jobs(
                                 ]
                                 return ("SUCCESS", r_num, sheet_slice, row_data)
 
-                    if status == "FAILED" or is_over_3hr:
-                        LOCAL_CACHE.save_record(domain, {
-                            "tc_job_id": job_id,
-                            "tc_status": "FAILED",
-                            "updated_at": datetime.datetime.now().strftime("%d/%b/%Y %H:%M:%S")
-                        })
-                        row_data[20] = "DONE"
-                        row_data[23] = "FAILED"
-                        sheet_slice = [
-                            "DONE", job_id, tc_job_gen_time, "FAILED", "", "", "", "", "", "", tc_job_gen_time, "", "", ""
-                        ]
-                        return ("FAILED", r_num, sheet_slice, None)
-
-                    # Still PROCESSING and < 3 hours old: retain for 15-min background loop
-                    return ("RETAIN", r_num, None, {
-                        "domain": domain,
-                        "row": r_num,
+                    # Single-Pass Polling Policy (Advance Pre-Crawl):
+                    # Overnight jobs that did not resolve to SUCCESS are immediately assumed FAILED,
+                    # routing directly to WaterfallScraper without entering background polling or waiting 3 hours.
+                    LOCAL_CACHE.save_record(domain, {
                         "tc_job_id": job_id,
-                        "tc_job_gen_time": tc_job_gen_time,
-                        "created_timestamp": c_ts,
-                        "rowData": row_data
+                        "tc_status": "FAILED",
+                        "updated_at": datetime.datetime.now().strftime("%d/%b/%Y %H:%M:%S")
                     })
+                    row_data[20] = "DONE"
+                    row_data[23] = "FAILED"
+                    sheet_slice = [
+                        "DONE", job_id, tc_job_gen_time, "FAILED", "", "", "", "", "", "", tc_job_gen_time, "", "", ""
+                    ]
+                    return ("FAILED", r_num, sheet_slice, None)
 
                 except Exception as e:
                     logging.debug(f"Error checking candidate {job_id} for {domain}: {e}")
-                    if is_over_3hr:
-                        row_data[20] = "DONE"
-                        row_data[23] = "FAILED"
-                        sheet_slice = [
-                            "DONE", job_id, tc_job_gen_time, "FAILED", "", "", "", "", "", "", tc_job_gen_time, "", "", ""
-                        ]
-                        return ("FAILED", r_num, sheet_slice, None)
-                    return ("RETAIN", r_num, None, {
-                        "domain": domain,
-                        "row": r_num,
+                    LOCAL_CACHE.save_record(domain, {
                         "tc_job_id": job_id,
-                        "tc_job_gen_time": tc_job_gen_time,
-                        "created_timestamp": c_ts,
-                        "rowData": row_data
+                        "tc_status": "FAILED",
+                        "updated_at": datetime.datetime.now().strftime("%d/%b/%Y %H:%M:%S")
                     })
+                    row_data[20] = "DONE"
+                    row_data[23] = "FAILED"
+                    sheet_slice = [
+                        "DONE", job_id, tc_job_gen_time, "FAILED", "", "", "", "", "", "", tc_job_gen_time, "", "", ""
+                    ]
+                    return ("FAILED", r_num, sheet_slice, None)
 
         tasks = [_check_one_candidate(r_num, r) for r_num, r in batch]
         results = await asyncio.gather(*tasks, return_exceptions=True)

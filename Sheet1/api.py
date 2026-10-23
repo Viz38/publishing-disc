@@ -704,17 +704,31 @@ async def run_clear_and_fetch_task(sheet_id: str):
             try:
                 import importlib
                 import common.tracxn_domain_ingestor
+                import common.advance_precrawl
                 importlib.reload(common.tracxn_domain_ingestor)
+                importlib.reload(common.advance_precrawl)
             except Exception:
                 pass
-        from common.tracxn_domain_ingestor import TracxnDomainIngestor
-        ingestor = TracxnDomainIngestor()
-        sheet_cfg = {
-            "name": f"Sheet-{sheet_id[:8]}",
-            "sheet_id": sheet_id
-        }
-        count = await asyncio.to_thread(ingestor.ingest_domains_for_sheet, sheet_cfg, clear_first=True)
-        logger.info(f"✅ Clear & Fetch completed for sheet {sheet_id}: {count} domains ingested.")
+
+        precrawl_csv = os.path.join(BASE_DIR, "next_day_pre_crawl.csv")
+        folder_name = os.path.basename(BASE_DIR)
+        count = 0
+
+        if os.path.exists(precrawl_csv):
+            logger.info(f"📂 Found advance pre-crawl CSV ({precrawl_csv}). Loading pre-crawled domains with Job IDs into sheet {sheet_id}...")
+            from common.advance_precrawl import load_precrawl_to_sheet
+            count = await asyncio.to_thread(load_precrawl_to_sheet, sheet_id, folder_name)
+            logger.info(f"✅ Loaded {count} pre-crawled domains with Job IDs to sheet {sheet_id}.")
+        else:
+            logger.info(f"ℹ️ No advance pre-crawl CSV found at {precrawl_csv}. Falling back to live Tracxn ingestion...")
+            from common.tracxn_domain_ingestor import TracxnDomainIngestor
+            ingestor = TracxnDomainIngestor()
+            sheet_cfg = {
+                "name": f"Sheet-{sheet_id[:8]}",
+                "sheet_id": sheet_id
+            }
+            count = await asyncio.to_thread(ingestor.ingest_domains_for_sheet, sheet_cfg, clear_first=True)
+            logger.info(f"✅ Live Ingestion completed for sheet {sheet_id}: {count} domains ingested.")
 
         if count and count > 0:
             if is_5am_ist_cutoff():
@@ -727,6 +741,20 @@ async def run_clear_and_fetch_task(sheet_id: str):
             EXEC_TRACKER.reset_retry_count()
             pipeline_req = RunRequest(start_row=3, mode="full", sheet_id=sheet_id)
             await run_pipeline_task(pipeline_req)
+
+            # Spawn next day's advance pre-crawl in the background
+            try:
+                from common.advance_precrawl import run_precrawl_for_sheet
+                target_cfg = {
+                    "num": int(folder_name.replace("Sheet", "") if "Sheet" in folder_name else 1),
+                    "id": sheet_id,
+                    "name": f"Sheet-{sheet_id[:8]}",
+                    "folder": folder_name
+                }
+                logger.info(f"🚀 Spawning background Day T+1 advance pre-crawl for {folder_name} (15,000 budget)...")
+                asyncio.create_task(run_precrawl_for_sheet(target_cfg, budget=15000))
+            except Exception as pe:
+                logger.warning(f"Could not spawn background advance pre-crawl: {pe}")
         else:
             logger.warning(f"⚠️ Clear & Fetch returned {count} domains for sheet {sheet_id}. Downstream pipeline auto-start skipped to prevent running on an empty sheet.")
     except Exception as e:
@@ -742,6 +770,25 @@ async def clear_and_fetch_domains_route(background_tasks: BackgroundTasks, req: 
     return {
         "status": "accepted",
         "message": "Clear and fetch domains initiated in background",
+        "sheet_id": target_sheet_id
+    }
+
+@app.post("/discovery/advance-precrawl", dependencies=[Depends(verify_token)])
+@app.post("/sheet1/advance-precrawl", dependencies=[Depends(verify_token)])
+async def advance_precrawl_route(background_tasks: BackgroundTasks, req: Optional[RunRequest] = None):
+    target_sheet_id = (req.sheet_id if req else None) or settings.CF_SHEET_ID
+    from common.advance_precrawl import run_precrawl_for_sheet
+    folder_name = os.path.basename(BASE_DIR)
+    target_cfg = {
+        "num": int(folder_name.replace("Sheet", "") if "Sheet" in folder_name else 1),
+        "id": target_sheet_id,
+        "name": f"Sheet-{target_sheet_id[:8]}",
+        "folder": folder_name
+    }
+    background_tasks.add_task(run_precrawl_for_sheet, target_cfg, 15000)
+    return {
+        "status": "accepted",
+        "message": f"Advance pre-crawl for tomorrow initiated for {folder_name} (15,000 budget)",
         "sheet_id": target_sheet_id
     }
 
