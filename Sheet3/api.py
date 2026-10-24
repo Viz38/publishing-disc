@@ -741,15 +741,6 @@ async def run_clear_and_fetch_task(sheet_id: str):
             EXEC_TRACKER.reset_retry_count()
             pipeline_req = RunRequest(start_row=3, mode="full", sheet_id=sheet_id)
             await run_pipeline_task(pipeline_req)
-
-            # Spawn next day's advance pre-crawl in an isolated background subprocess
-            try:
-                from common.advance_precrawl import spawn_advance_precrawl_subprocess
-                sheet_num = int(folder_name.replace("Sheet", "") if "Sheet" in folder_name else 3)
-                pid = spawn_advance_precrawl_subprocess(folder_name, sheet_num=sheet_num, budget=15000)
-                logger.info(f"🚀 Spawned isolated background Day T+1 advance pre-crawl subprocess (PID {pid}) for {folder_name} (15,000 budget)")
-            except Exception as pe:
-                logger.warning(f"Could not spawn background advance pre-crawl: {pe}")
         else:
             logger.warning(f"⚠️ Clear & Fetch returned {count} domains for sheet {sheet_id}. Downstream pipeline auto-start skipped to prevent running on an empty sheet.")
     except Exception as e:

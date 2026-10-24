@@ -70,6 +70,7 @@ function onOpen() {
   ui.createMenu('\uD83D\uDE80 Discovery Engine (Filter-V2)')
     .addItem('\u25B6\uFE0F Run Pipeline', 'uiStartRun')
     .addItem('\uD83D\uDD04 Clear & Fetch Domains', 'uiClearAndFetchDomains')
+    .addItem("🌐 Launch Tomorrow's Pre-Crawl", 'uiAdvancePreCrawl')
     .addSeparator()
     .addItem('\uD83D\uDEA6 Check Status', 'uiCheckStatus')
     .addItem('\uD83D\uDCCA Check Health', 'uiCheckHealth')
@@ -798,3 +799,110 @@ function uiClearAndFetchDomains() {
     ui.alert('\u274C Clear & Fetch Failed', 'Error: ' + err.message, ui.ButtonSet.OK);
   }
 }
+
+/**
+ * Core Headless Executor for Advance Pre-Crawl
+ * Dispatches POST /discovery/advance-precrawl to the assigned production worker.
+ * Safe for BOTH UI triggers and Time-driven background triggers (ZERO UI dependencies).
+ * 
+ * @param {boolean} silent When true, suppresses spreadsheet toasts.
+ * @return {Object} Status containing success, workerUrl, workerName, response.
+ */
+function executeAdvancePreCrawl(silent = true) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet();
+  const sheetId = sheet.getId();
+
+  if (!silent) {
+    try {
+      sheet.toast('Connecting to worker to launch advance pre-crawl...', '🌐 Pre-Crawl', 10);
+    } catch(e) {}
+  }
+
+  let targetWorker = null;
+  try {
+    targetWorker = findIdleWorker_();
+  } catch (e) {
+    const prodWorkers = CONFIG.WORKER_URLS.filter(w => w.isProduction);
+    targetWorker = prodWorkers.length > 0 ? prodWorkers[0] : CONFIG.WORKER_URLS[0];
+  }
+
+  Logger.log('Dispatching advance pre-crawl to worker: ' + targetWorker.name + ' (' + targetWorker.url + ') for sheetId: ' + sheetId);
+
+  const token = getAuthToken_();
+
+  const res = UrlFetchApp.fetch(targetWorker.url + '/discovery/advance-precrawl', {
+    method: 'post',
+    contentType: 'application/json',
+    headers: { 'Authorization': 'Bearer ' + token },
+    payload: JSON.stringify({ sheet_id: sheetId }),
+    muteHttpExceptions: true
+  });
+
+  const statusCode = res.getResponseCode();
+  const responseText = res.getContentText();
+
+  if (statusCode >= 200 && statusCode < 300) {
+    Logger.log('✅ Worker accepted Advance Pre-Crawl (' + statusCode + '): ' + responseText);
+    if (!silent) {
+      try {
+        sheet.toast('Advance Pre-Crawl accepted on ' + targetWorker.name, '✅ Dispatched', 6);
+      } catch(e) {}
+    }
+    return {
+      success: true,
+      workerUrl: targetWorker.url,
+      workerName: targetWorker.name,
+      response: responseText
+    };
+  } else {
+    throw new Error('Worker returned HTTP ' + statusCode + ': ' + responseText);
+  }
+}
+
+/**
+ * Dedicated Daily 5:00 AM Automated Trigger Function for Advance Pre-Crawl
+ * Select this function when configuring the 5:00 AM Time-driven Trigger in Google Apps Script.
+ */
+function triggerDailyAdvancePreCrawl() {
+  Logger.log('⏰ Starting automated daily advance pre-crawl (silent headless)...');
+  try {
+    const result = executeAdvancePreCrawl(true);
+    Logger.log('✅ Automated advance pre-crawl successfully dispatched to ' + result.workerName + ' (' + result.workerUrl + ')');
+    return result;
+  } catch(err) {
+    Logger.log('❌ Automated daily advance pre-crawl trigger failed: ' + err.message);
+    throw err;
+  }
+}
+
+/**
+ * Interactive UI wrapper around executeAdvancePreCrawl().
+ */
+function uiAdvancePreCrawl() {
+  const ui = SpreadsheetApp.getUi();
+  const confirm = ui.alert(
+    '🌐 Launch Tomorrow\'s Pre-Crawl',
+    'Are you sure you want to launch the advance pre-crawl for tomorrow?\n\n' +
+    '• 15,000 domains will be fetched from Tracxn API.\n' +
+    '• Tech Crawler Job IDs will be generated in background in ~20-25 mins.\n' +
+    '• Saved locally to next_day_pre_crawl.csv on the production worker.\n' +
+    '• Active processing pipelines will NOT be disrupted.\n\n' +
+    'Do you want to proceed?',
+    ui.ButtonSet.YES_NO
+  );
+
+  if (confirm !== ui.Button.YES) return;
+
+  try {
+    const result = executeAdvancePreCrawl(false);
+    ui.alert(
+      '✅ Pre-Crawl Dispatched',
+      'Successfully dispatched advance pre-crawl on ' + result.workerName + ' (' + result.workerUrl + ').\n\n' +
+      'The worker is fetching domains and creating Job IDs in the background.',
+      ui.ButtonSet.OK
+    );
+  } catch (err) {
+    ui.alert('❌ Pre-Crawl Failed', 'Error: ' + err.message, ui.ButtonSet.OK);
+  }
+}
+
