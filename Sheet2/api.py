@@ -327,20 +327,27 @@ def get_device_active_sheets() -> int:
     return active_count
 
 async def run_pipeline_task(request: RunRequest):
+    existing_prog = {"current": 0, "total": 0, "success": 0, "fail": 0}
+    if os.path.exists(PROGRESS_FILE):
+        try:
+            with open(PROGRESS_FILE, "r") as pf:
+                data = json.load(pf)
+                if isinstance(data, dict):
+                    existing_prog = data
+        except Exception:
+            pass
+
     async with state_lock:
         state["status"] = "running"
         state["is_stopping"] = False
         state["start_time"] = utc_now()
-        state["progress"] = {"current": 0, "total": 0, "success": 0, "fail": 0}
+        state["progress"] = existing_prog
 
     if os.path.exists(STOP_FILE):
         try: os.remove(STOP_FILE)
         except Exception: pass
 
     try:
-        if os.path.exists(PROGRESS_FILE):
-            try: os.remove(PROGRESS_FILE)
-            except Exception: pass
 
         effective_start_row = 3
         cmd = [sys.executable, "main.py", str(effective_start_row), request.mode]
@@ -533,13 +540,13 @@ def _get_status_response():
     if tracxn_count is not None and (gemini_count is None or tracxn_count > gemini_count):
         gemini_count = tracxn_count
 
-    # Waterfall cascading bounding: tracxn <= gemini <= nim <= tc_success <= scraped_count <= total_val
+    # Bounding: each stage count must not exceed total_val
     if total_val >= 1000:
         scraped_count = min(scraped_count if scraped_count is not None else 0, total_val)
-        tc_success = min(tc_success if tc_success is not None else 0, scraped_count)
-        nim_count = min(nim_count if nim_count is not None else 0, tc_success)
-        gemini_count = min(gemini_count if gemini_count is not None else 0, nim_count)
-        tracxn_count = min(tracxn_count if tracxn_count is not None else 0, gemini_count)
+        tc_success = min(tc_success if tc_success is not None else 0, total_val)
+        nim_count = min(nim_count if nim_count is not None else 0, total_val)
+        gemini_count = min(gemini_count if gemini_count is not None else 0, total_val)
+        tracxn_count = min(tracxn_count if tracxn_count is not None else 0, total_val)
         completed_count = tracxn_count
 
     return {

@@ -33,6 +33,7 @@ from common import (
     is_nim_dead_domain,
     is_57_col_schema,
     is_valid_s3_url,
+    bulk_sync_cache_to_sheet,
 )
 
 import asyncio
@@ -4393,6 +4394,26 @@ async def Integrated_Extract_domains(
 
     pf_data = await read_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, start_row=start_row_num)
 
+    # 🚀 HIGH-SPEED STARTUP BULK CACHE SYNC:
+    # Instead of trickling cached rows through queues one by one over 30 minutes,
+    # scan pf_data against LOCAL_CACHE, identify all completed domains missing in sheet,
+    # and flush them in bulk contiguous chunks of up to 1000 rows (or 8 MB) in one go!
+    try:
+        if mode in ("full", "phase2", "phase3", "phase4"):
+            await bulk_sync_cache_to_sheet(
+                client=client,
+                sheet_id=SHEET_ID,
+                sheet_name=EXTRACTING_SHEET_NAME,
+                pf_data=pf_data,
+                local_cache=LOCAL_CACHE,
+                write_sheet_fn=write_sheet_data,
+                start_row_num=start_row_num,
+                max_chunk_rows=1000,
+                max_chunk_bytes=8 * 1024 * 1024
+            )
+    except Exception as b_ex:
+        logging.error(f"Error during startup bulk cache sync: {b_ex}")
+
     total_domains = sum(1 for r in pf_data if r and safe_str(r[0]).strip())
     tc_col_idx = 23
     nim_col_idx = 34
@@ -4403,15 +4424,15 @@ async def Integrated_Extract_domains(
     pre_tc_failed = sum(1 for r in pf_data if len(r) > 23 and safe_str(r[23]).strip().upper() == "FAILED")
     pre_tc_completed = min(total_domains, pre_tc_scraped + pre_tc_failed)
 
-    pre_nim_success = sum(1 for r in pf_data if len(r) > 34 and safe_str(r[34]).strip().upper() == "SUCCESS")
+    pre_nim_success = sum(1 for r in pf_data if (len(r) > 34 and safe_str(r[34]).strip().upper() == "SUCCESS") or (len(r) > 35 and len(safe_str(r[35]).strip()) > 10))
     pre_nim_no_content = sum(1 for r in pf_data if len(r) > 34 and safe_str(r[34]).strip().upper() in ("NO_CONTENT", "FAILED_NO_CONTENT"))
     pre_nim_completed = min(pre_tc_scraped, pre_nim_success + pre_nim_no_content)
 
     pre_gemini_if = sum(1 for r in pf_data if len(r) > 37 and safe_str(r[37]).strip())
     pre_gemini_feed = sum(1 for r in pf_data if len(r) > 43 and safe_str(r[43]).strip())
-    pre_gemini_completed = min(pre_nim_success, max(pre_gemini_if, pre_gemini_feed))
+    pre_gemini_completed = max(pre_gemini_if, pre_gemini_feed)
 
-    pre_completed = min(pre_gemini_completed, sum(1 for r in pf_data if is_row_fully_completed(r)))
+    pre_completed = sum(1 for r in pf_data if is_row_fully_completed(r))
 
     processed = 0
     success_count = pre_tc_scraped
@@ -4486,7 +4507,7 @@ async def Integrated_Extract_domains(
                 groups = []
                 curr_grp = [items[0]]
                 for it in items[1:]:
-                    if it[0] == curr_grp[-1][0] + 1:
+                    if it[0] == curr_grp[-1][0] + 1 and len(curr_grp) < 1000:
                         curr_grp.append(it)
                     else:
                         groups.append(curr_grp)
@@ -4539,8 +4560,8 @@ async def Integrated_Extract_domains(
 
                     now = time.time()
                     in_pre_cutoff = is_pre_cutoff_window() or is_5am_ist_cutoff()
-                    flush_threshold = 15 if in_pre_cutoff else 50
-                    flush_interval = 5.0 if in_pre_cutoff else 30.0
+                    flush_threshold = 25 if in_pre_cutoff else 200
+                    flush_interval = 5.0 if in_pre_cutoff else 20.0
 
                     if buffer and (len(buffer) >= flush_threshold or (now - last_flush) >= flush_interval):
                         await _flush_sheet_buffer(buffer)

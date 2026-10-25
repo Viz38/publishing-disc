@@ -30,6 +30,7 @@ from .system_health import trim_memory, SystemHealthMonitor
 from .gsheet_circuit_breaker import GSheetCircuitBreaker, is_doc_too_large_error, is_csv_only_mode, set_csv_only_mode
 from .bulk_pusher import BulkSheetPusher, clear_sheet_data_rows, handle_5am_sheet_cleanup
 from .tracxn_domain_ingestor import TracxnDomainIngestor
+from .bulk_sync import bulk_sync_cache_to_sheet, group_bulk_sync_chunks
 
 __all__ = [
     "TracxnKeyManager",
@@ -63,5 +64,7 @@ __all__ = [
     "clear_sheet_data_rows",
     "handle_5am_sheet_cleanup",
     "TracxnDomainIngestor",
+    "bulk_sync_cache_to_sheet",
+    "group_bulk_sync_chunks",
 ]
 
