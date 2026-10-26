@@ -134,11 +134,14 @@ def update_progress_file(current: int, total: int, success: int, fail: int, phas
         except Exception:
             pass
 
-    live_tc_success = max(tc_success if tc_success is not None else 0, prev_prog.get('tc_success', 0), success if success is not None else 0)
-    live_scraped_count = max(scraped_count if scraped_count is not None else 0, prev_prog.get('scraped_count', 0), live_tc_success)
-    live_nim_count = max(nim_count if nim_count is not None else 0, prev_prog.get('nim_count', 0))
-    live_gemini_count = max(gemini_count if gemini_count is not None else 0, prev_prog.get('gemini_count', 0))
-    live_tracxn_count = max(tracxn_count if tracxn_count is not None else 0, prev_prog.get('tracxn_count', 0), current if current is not None else 0)
+    if prev_prog.get('total') != total:
+        prev_prog = {}
+
+    live_tc_success = tc_success if tc_success is not None else max(prev_prog.get('tc_success', 0), success if success is not None else 0)
+    live_scraped_count = scraped_count if scraped_count is not None else max(prev_prog.get('scraped_count', 0), live_tc_success)
+    live_nim_count = nim_count if nim_count is not None else prev_prog.get('nim_count', 0)
+    live_gemini_count = gemini_count if gemini_count is not None else prev_prog.get('gemini_count', 0)
+    live_tracxn_count = tracxn_count if tracxn_count is not None else max(prev_prog.get('tracxn_count', 0), current if current is not None else 0)
 
     prog_data = {
         'current': live_tracxn_count,

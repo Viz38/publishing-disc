@@ -738,6 +738,28 @@ async def run_clear_and_fetch_task(sheet_id: str):
             logger.info(f"✅ Live Ingestion completed for sheet {sheet_id}: {count} domains ingested.")
 
         if count and count > 0:
+            init_prog = {
+                "current": 0,
+                "total": count,
+                "success": 0,
+                "fail": 0,
+                "scraped_count": 0,
+                "tc_success": 0,
+                "nim_count": 0,
+                "gemini_count": 0,
+                "tracxn_count": 0,
+                "phase": "Starting fresh daily batch",
+                "stage_details": f"Ingested {count} fresh domains",
+                "pending_tc": 0,
+                "mode": "full"
+            }
+            try:
+                with open(PROGRESS_FILE, "w") as pf:
+                    json.dump(init_prog, pf)
+            except Exception:
+                pass
+            state["progress"] = init_prog
+
             if is_5am_ist_cutoff():
                 dt = get_now_ist()
                 wait_secs = max(5, (5 - dt.minute) * 60 - dt.second + 2)
