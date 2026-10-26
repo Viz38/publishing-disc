@@ -771,15 +771,8 @@ async def run_clear_and_fetch_task(sheet_id: str):
             pipeline_req = RunRequest(start_row=3, mode="full", sheet_id=sheet_id)
             await run_pipeline_task(pipeline_req)
 
-            # Auto-spawn tomorrow's Day T-1 pre-crawl in detached background process (24-hour rendering)
-            try:
-                from common.advance_precrawl import spawn_advance_precrawl_subprocess
-                sheet_num_map = {"Sheet1": 1, "Sheet2": 2, "Sheet3": 3, "Sheet4": 4}
-                s_num = sheet_num_map.get(folder_name, 2)
-                spawn_advance_precrawl_subprocess(folder=folder_name, sheet_num=s_num, budget=15000)
-                logger.info(f"🚀 Spawned tomorrow's advance pre-crawl subprocess for {folder_name} (24-hour S3 rendering).")
-            except Exception as pe:
-                logger.warning(f"Could not spawn advance pre-crawl for tomorrow: {pe}")
+            # Note: Advance pre-crawl is scheduled daily at 11:05 PM IST via crontab (run_daily_precrawl.sh).
+            # No redundant spawn needed here.
         else:
             logger.warning(f"⚠️ Clear & Fetch returned {count} domains for sheet {sheet_id}. Downstream pipeline auto-start skipped to prevent running on an empty sheet.")
     except Exception as e:
