@@ -15,8 +15,8 @@ def get_now_ist() -> datetime.datetime:
 
 def is_5am_ist_cutoff(current_dt: Optional[datetime.datetime] = None, now_dt: Optional[datetime.datetime] = None) -> bool:
     """
-    Returns True if current time in IST (UTC+5:30) is within the 5:00 AM daily cutoff window (05:00:00 - 05:05:00 IST).
-    Apps Script drops domains at 5:00 AM IST, so any pipeline running in this window must be halted.
+    Returns True if current time in IST (UTC+5:30) is within the daily cutoff window (23:30:00 - 23:34:59 IST).
+    Apps Script / Ingestion refreshes domains at 11:30 PM IST, so any pipeline running in this window must be halted.
     """
     dt = current_dt or now_dt
     if dt is None:
@@ -25,13 +25,15 @@ def is_5am_ist_cutoff(current_dt: Optional[datetime.datetime] = None, now_dt: Op
         dt = dt.replace(tzinfo=IST_TZ)
     else:
         dt = dt.astimezone(IST_TZ)
-    return dt.hour == 5 and dt.minute < 5
+    return dt.hour == 23 and dt.minute >= 30 and dt.minute < 35
+
+is_cutoff_window = is_5am_ist_cutoff
 
 def is_pre_cutoff_window(current_dt: Optional[datetime.datetime] = None, now_dt: Optional[datetime.datetime] = None) -> bool:
     """
-    Returns True if current time in IST (UTC+5:30) is within the Pre-Cutoff Flush window (04:30:00 - 04:59:59 IST).
-    During this window, no new URLs are accepted for scraping; all NIM-summarized domains are flushed
-    through Gemini predictions and Review & Write APIs so they are marked DONE before 05:00 AM.
+    Returns True if current time in IST (UTC+5:30) is within the Pre-Cutoff Flush window (23:00:00 - 23:29:59 IST).
+    During this 11:00 PM - 11:30 PM window, no new URLs are accepted for scraping; all NIM-summarized domains are flushed
+    through Gemini predictions and Review & Write APIs so they are marked DONE before 11:30 PM.
     """
     dt = current_dt or now_dt
     if dt is None:
@@ -40,13 +42,13 @@ def is_pre_cutoff_window(current_dt: Optional[datetime.datetime] = None, now_dt:
         dt = dt.replace(tzinfo=IST_TZ)
     else:
         dt = dt.astimezone(IST_TZ)
-    return dt.hour == 4 and dt.minute >= 30
+    return dt.hour == 23 and dt.minute < 30
 
 def is_before_4am_ist(current_dt: Optional[datetime.datetime] = None, now_dt: Optional[datetime.datetime] = None) -> bool:
     """
-    Returns True if current time in IST (UTC+5:30) has not reached the 04:00 AM IST cutoff.
-    Between 04:00:00 and 05:05:00 IST, pipeline retries of previously failed phases are halted
-    in preparation for the 05:00 AM daily Apps Script refresh window.
+    Returns True if current time in IST (UTC+5:30) has not reached the 11:00 PM IST cutoff.
+    Between 23:00:00 and 23:35:00 IST, pipeline retries of previously failed phases are halted
+    in preparation for the 11:30 PM daily refresh window.
     """
     dt = current_dt or now_dt
     if dt is None:
@@ -55,11 +57,12 @@ def is_before_4am_ist(current_dt: Optional[datetime.datetime] = None, now_dt: Op
         dt = dt.replace(tzinfo=IST_TZ)
     else:
         dt = dt.astimezone(IST_TZ)
-    if dt.hour == 4:
-        return False
-    if dt.hour == 5 and dt.minute < 5:
+    if dt.hour == 23:
         return False
     return True
+
+is_before_cutoff_retry = is_before_4am_ist
+
 
 def is_nim_dead_domain(raw_data: str) -> bool:
     """
@@ -96,9 +99,10 @@ def get_ist_timestamp() -> str:
 def get_cycle_date_ist(current_dt: Optional[datetime.datetime] = None) -> str:
     """
     Returns the daily processing cycle date string (YYYY-MM-DD) in IST.
-    Daily domains refresh from Apps Script at 05:00 AM IST.
-    Therefore, the window from 00:00:00 to 04:59:59 IST belongs to the cycle
-    that started at 05:00 AM on the previous calendar day.
+    Daily domains refresh and auto-start at 11:35 PM IST (23:35 IST).
+    Therefore, the window from 23:35:00 to 23:59:59 IST belongs to the cycle
+    operating primarily on the next calendar day (days=+1).
+    From 00:00:00 to 23:34:59 IST, it belongs to the current calendar day.
     """
     if current_dt is None:
         current_dt = get_now_ist()
@@ -107,8 +111,8 @@ def get_cycle_date_ist(current_dt: Optional[datetime.datetime] = None) -> str:
     else:
         current_dt = current_dt.astimezone(IST_TZ)
 
-    if current_dt.hour < 5:
-        current_dt = current_dt - datetime.timedelta(days=1)
+    if current_dt.hour == 23 and current_dt.minute >= 35:
+        current_dt = current_dt + datetime.timedelta(days=1)
     return current_dt.strftime("%Y-%m-%d")
 
 def safe_str(val: Any) -> str:
@@ -532,7 +536,7 @@ class ExecutionTracker:
     Tracks start_row, mode, sheet_id, PID, timestamps, and termination reasons.
     Enables autonomous smart resumption when a run was interrupted externally
     (desktop shutdowns, power cuts, OOM killer, kill -9) while respecting user cancellations
-    and daily 5:00 AM IST cutoffs.
+    and daily 11:30 PM IST cutoffs.
     """
     MAX_AUTO_RETRIES = 5
 
@@ -704,13 +708,13 @@ class ExecutionTracker:
         if status == "completed":
             return False, None
 
-        # 2. Daily cycle check: If run was from a previous date, sheet was wiped by Apps Script at 5am
+        # 2. Daily cycle check: If run was from a previous date, sheet was wiped at 11:30 PM cutoff
         run_date_ist = state.get("date_ist")
         today_cycle_ist = get_cycle_date_ist(current_dt)
         if run_date_ist != today_cycle_ist:
             return False, None
 
-        # 3. 5:00 AM IST blackout window: Do not resume while Apps Script is refreshing daily domains
+        # 3. 11:30 PM IST blackout window: Do not resume while daily sheet refresh occurs
         if is_5am_ist_cutoff(current_dt):
             return False, None
 

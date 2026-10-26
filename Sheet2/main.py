@@ -700,7 +700,7 @@ _nim_use_unverified_ssl = False
 async def Nvidia_API_ASYNC(promptMsg, token_rotator: NIMKeyManager = None, max_attempts: int = None, session: aiohttp.ClientSession = None):
     global _nim_use_unverified_ssl
     if is_pre_cutoff_window() or is_5am_ist_cutoff():
-        logging.info("⏰ [Pre-Cutoff Wind-Down] Skipping outbound NVIDIA NIM API call during 04:30-05:00 AM window.")
+        logging.info("⏰ [Pre-Cutoff Wind-Down] Skipping outbound NVIDIA NIM API call during 11:00-11:30 PM window.")
         return ""
     if token_rotator is None and 'NIM_KEY_MANAGER' in globals() and NIM_KEY_MANAGER is not None:
         token_rotator = NIM_KEY_MANAGER
@@ -3627,7 +3627,7 @@ async def Integrated_Process_domain(
                 rowData = rowData + [""] * (57 - len(rowData))
 
             if is_5am_ist_cutoff():
-                logging.warning(f"⏰ 5:00 AM IST cutoff reached before processing {domain}. Halting.")
+                logging.warning(f"⏰ 11:30 PM IST cutoff reached before processing {domain}. Halting.")
                 return None
 
             # 0. Local CSV Redundancy Cache Hydration & Direct Write Check
@@ -5008,7 +5008,7 @@ async def Integrated_Extract_domains(
 
             while pending_tech_crawler_jobs:
                 if is_5am_ist_cutoff():
-                    logging.warning("⏰ 5:00 AM IST cutoff reached during Tech Crawler polling. Halting.")
+                    logging.warning("⏰ 11:30 PM IST cutoff reached during Tech Crawler polling. Halting.")
                     break
                 if os.path.exists(STOP_FILE):
                     logging.info("Stop requested (.stop_requested found). Exiting Tech Crawler polling loop.")
@@ -5272,7 +5272,7 @@ async def Process_Review_Caller(client, mainheaders, SHEET_ID, EXTRACTING_SHEET_
     async with aiohttp.ClientSession(headers=mainheaders, connector=connector) as session:
         for batch_index, batch in enumerate(domains_batches):
             if is_5am_ist_cutoff():
-                logging.warning("⏰ 5:00 AM IST cutoff reached during Process_Review_Caller. Halting.")
+                logging.warning("⏰ 11:30 PM IST cutoff reached during Process_Review_Caller. Halting.")
                 break
             if os.path.exists(STOP_FILE):
                 logging.info("Stop requested during Process_Review_Caller. Halting.")
@@ -5375,7 +5375,7 @@ async def Execute_Phase4_Ingestion_Write_APIs(client, mainheaders, SHEET_ID, EXT
     async with aiohttp.ClientSession(headers=mainheaders, connector=connector) as session:
         for b_idx, batch in enumerate(batches):
             if is_5am_ist_cutoff():
-                logging.warning("⏰ 5:00 AM IST cutoff reached during Phase 4 Ingestion. Halting.")
+                logging.warning("⏰ 11:30 PM IST cutoff reached during Phase 4 Ingestion. Halting.")
                 break
             if os.path.exists(STOP_FILE):
                 break
@@ -5559,7 +5559,7 @@ async def main():
             pass
 
         if is_5am_ist_cutoff():
-            logging.warning("⏰ 5:00 AM IST daily cutoff active. Pipeline execution halted during daily domain refresh window.")
+            logging.warning("⏰ 11:30 PM IST daily cutoff active. Pipeline execution halted during daily domain refresh window.")
             try:
                 EXEC_TRACKER.record_5am_cutoff()
             except Exception:

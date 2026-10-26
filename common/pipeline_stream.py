@@ -68,12 +68,12 @@ class PipelineCoordinator:
 
     def signal_pre_cutoff_flush(self) -> None:
         """
-        Signals 04:30 AM pre-cutoff flush.
+        Signals 11:00 PM pre-cutoff flush.
         Stops accepting new raw scraping jobs and prepares to drain
-        all summarized domains before 05:00 AM.
+        all summarized domains before 11:30 PM.
         """
         self.is_flushing = True
-        logger.warning("🚨 [PipelineCoordinator] 04:30 AM IST Pre-Cutoff Flush activated! Halting new scraping ingestion.")
+        logger.warning("🚨 [PipelineCoordinator] 11:00 PM IST Pre-Cutoff Flush activated! Halting new scraping ingestion.")
 
     async def enqueue_domain(self, item: Dict[str, Any]) -> bool:
         """
@@ -131,7 +131,7 @@ class PipelineCoordinator:
             try:
                 await self.health_monitor.wait_for_resources()
                 processed_item = await self.process_scrape(item)
-                # Keep track in case 05:00 AM hits before NIM completes
+                # Keep track in case 11:30 PM hits before NIM completes
                 self.scraped_pending_nim.append(processed_item)
                 await self.nim_queue.put(processed_item)
             except Exception as e:

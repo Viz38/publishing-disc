@@ -139,13 +139,13 @@ async def handle_5am_sheet_cleanup(
     keep_rows: int = 2
 ) -> Tuple[bool, str]:
     """
-    Executes 5:00 AM sheet data cleanup if NOT in CSV-only mode.
+    Executes 11:30 PM sheet data cleanup if NOT in CSV-only mode.
     If in CSV-only mode, preserves the sheet and skips clearing.
     """
     from common.gsheet_circuit_breaker import is_csv_only_mode
     if is_csv_only_mode(sheet_dir):
         logging.warning(
-            f"⚠️ [5:00 AM Cutoff] Sheet directory {sheet_dir} is in CSV-only mode "
+            f"⚠️ [11:30 PM Cutoff] Sheet directory {sheet_dir} is in CSV-only mode "
             "(circuit breaker tripped or unpushed data). Preserving existing sheet data."
         )
         return False, "csv_only_mode"
@@ -155,10 +155,10 @@ async def handle_5am_sheet_cleanup(
         worksheet = await sheet.worksheet(sheet_name)
         cleared = await clear_sheet_data_rows(worksheet, keep_rows=keep_rows)
         if cleared:
-            logging.info(f"🧹 [5:00 AM Cutoff] Successfully cleared sheet {sheet_id} rows {keep_rows+1}+.")
+            logging.info(f"🧹 [11:30 PM Cutoff] Successfully cleared sheet {sheet_id} rows {keep_rows+1}+.")
             return True, "cleared"
         return False, "clear_failed"
     except Exception as e:
-        logging.error(f"Failed to execute 5:00 AM sheet cleanup for {sheet_id}: {e}")
+        logging.error(f"Failed to execute 11:30 PM sheet cleanup for {sheet_id}: {e}")
         return False, f"error: {e}"
 

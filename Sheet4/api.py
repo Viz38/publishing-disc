@@ -92,7 +92,7 @@ app.add_middleware(
 async def _daily_5am_ist_watchdog():
     """
     Background watchdog checking every 15 seconds:
-    At 05:00 AM IST daily (05:00:00 - 05:05:00 IST), Google Apps Script clears the sheet and loads fresh domains.
+    At 11:30 PM IST daily (23:30:00 - 23:35:00 IST), daily sheet clearing and domain refresh occurs.
     1. Immediately terminates any active pipeline running for this sheet to prevent writing stale results.
     2. Resets state to 'idle' and cleans up lock/progress/stop/active files.
     3. Archives the previous day's discovery_cache.csv into Logs/Cache/discovery_cache_YYYY-MM-DD.csv
@@ -101,28 +101,28 @@ async def _daily_5am_ist_watchdog():
     last_rotated_date = None
     last_cleared_date = None
     FLUSH_FILE = os.path.join(BASE_DIR, ".flush_requested")
-    logger.info("🕒 Daily 5:00 AM IST Watchdog initialized (04:30 AM Pre-Cutoff Flush enabled).")
+    logger.info("🕒 Daily 11:30 PM IST Watchdog initialized (11:00 PM Pre-Cutoff Flush enabled).")
     while True:
         try:
             now_ist = get_now_ist()
             current_date_str = now_ist.strftime("%Y-%m-%d")
 
             if is_pre_cutoff_window(now_ist):
-                # 04:30 AM IST Pre-Cutoff Flush: Signal active pipeline to stop taking new scrapes
+                # 11:00 PM IST Pre-Cutoff Flush: Signal active pipeline to stop taking new scrapes
                 if not os.path.exists(FLUSH_FILE):
                     try:
                         with open(FLUSH_FILE, "w") as f:
                             f.write(f"flush_requested_at={now_ist.isoformat()}")
-                        logger.warning("🚨 [04:30 AM IST Watchdog] Created .flush_requested to trigger pre-cutoff flush!")
+                        logger.warning("🚨 [11:00 PM IST Watchdog] Created .flush_requested to trigger pre-cutoff flush!")
                     except Exception as fe:
                         logger.error(f"Error creating .flush_requested: {fe}")
 
             # At 05:05 AM IST: Clear .flush_requested
-            if now_ist.hour == 5 and now_ist.minute >= 5:
+            if (now_ist.hour == 23 and now_ist.minute >= 35) or now_ist.hour == 0:
                 if os.path.exists(FLUSH_FILE):
                     try:
                         os.remove(FLUSH_FILE)
-                        logger.info("Cleared .flush_requested after 5:00 AM cutoff window.")
+                        logger.info("Cleared .flush_requested after 11:30 PM cutoff window.")
                     except Exception:
                         pass
 
@@ -131,7 +131,7 @@ async def _daily_5am_ist_watchdog():
                 active_pid = state.get("active_pid")
                 if active_pid or state.get("status") in ("running", "stopping"):
                     logger.warning(
-                        f"⏰ 5:00 AM IST Daily Cutoff reached! Terminating active pipeline PID {active_pid} "
+                        f"⏰ 11:30 PM IST Daily Cutoff reached! Terminating active pipeline PID {active_pid} "
                         "so Apps Script can refresh daily domains without conflict."
                     )
                     if active_pid:
@@ -179,19 +179,19 @@ async def _daily_5am_ist_watchdog():
                                 keep_rows=2
                             )
                             if cleared:
-                                logger.info(f"🧹 [5:00 AM Cutoff] Sheet {target_sheet_id} cleared (kept rows 1 & 2).")
+                                logger.info(f"🧹 [11:30 PM Cutoff] Sheet {target_sheet_id} cleared (kept rows 1 & 2).")
                             else:
-                                logger.info(f"ℹ️ [5:00 AM Cutoff] Sheet cleanup skipped: {reason}")
+                                logger.info(f"ℹ️ [11:30 PM Cutoff] Sheet cleanup skipped: {reason}")
                         last_cleared_date = current_date_str
                     except Exception as ce:
-                        logger.error(f"Error during 5:00 AM sheet cleanup: {ce}")
+                        logger.error(f"Error during 11:30 PM sheet cleanup: {ce}")
 
-                # 3. Rotate daily cache once per day during the 5:00 AM window
+                # 3. Rotate daily cache once per day during the 11:30 PM window
                 if last_rotated_date != current_date_str and LOCAL_CACHE:
                     try:
                         archived = LOCAL_CACHE.rotate_daily_cache(ARCHIVE_CACHE_DIR, current_dt=now_ist)
                         last_rotated_date = current_date_str
-                        logger.info(f"📦 5:00 AM IST Daily Cache Rotation complete. Archived to {archived}, fresh cache active.")
+                        logger.info(f"📦 11:30 PM IST Daily Cache Rotation complete. Archived to {archived}, fresh cache active.")
                     except Exception as re:
                         logger.error(f"Error during daily cache rotation: {re}")
 
@@ -227,7 +227,7 @@ async def _delayed_smart_resume(req: RunRequest, delay_sec: int):
     logger.info(f"⏳ Waiting {delay_sec}s buffer before autonomous smart resume...")
     await asyncio.sleep(delay_sec)
     if is_5am_ist_cutoff():
-        logger.warning("5:00 AM IST cutoff reached during resume delay. Postponing resume.")
+        logger.warning("11:30 PM IST cutoff reached during resume delay. Postponing resume.")
         return
     if state["status"] in ("running", "stopping"):
         logger.info("Pipeline already running or stopping. Skipping auto-resume.")
@@ -395,7 +395,7 @@ async def run_pipeline_task(request: RunRequest):
             EXEC_TRACKER.record_user_stop()
             state["status"] = "stopped"
         elif is_5am_ist_cutoff():
-            logger.warning("CF-1 pipeline stopped due to 5:00 AM IST daily cutoff")
+            logger.warning("CF-1 pipeline stopped due to 11:30 PM IST daily cutoff")
             EXEC_TRACKER.record_5am_cutoff()
             state["status"] = "idle"
         elif process.returncode == 0:
@@ -685,7 +685,7 @@ async def start_pipeline(req: RunRequest, background_tasks: BackgroundTasks):
     if is_5am_ist_cutoff():
         return {
             "status": "error",
-            "message": "Cannot start pipeline between 05:00 - 05:05 AM IST. Apps Script daily domain refresh in progress."
+            "message": "Cannot start pipeline between 11:30 - 11:35 PM IST. Daily domain refresh in progress."
         }
 
     if state["status"] in ("running", "stopping"):
@@ -762,8 +762,8 @@ async def run_clear_and_fetch_task(sheet_id: str):
 
             if is_5am_ist_cutoff():
                 dt = get_now_ist()
-                wait_secs = max(5, (5 - dt.minute) * 60 - dt.second + 2)
-                logger.info(f"⏳ Clear & Fetch completed ({count} domains). Waiting {wait_secs}s for 05:05 AM IST cutoff window to pass before starting pipeline...")
+                wait_secs = max(5, (35 - dt.minute) * 60 - dt.second + 2)
+                logger.info(f"⏳ Clear & Fetch completed ({count} domains). Waiting {wait_secs}s for 11:35 PM IST cutoff window to pass before starting pipeline...")
                 await asyncio.sleep(wait_secs)
 
             logger.info(f"🚀 Auto-starting discovery engine pipeline for sheet {sheet_id} (start_row=3, mode=full)...")

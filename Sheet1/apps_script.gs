@@ -807,8 +807,8 @@ function executeAdvancePreCrawl(silent = true) {
 }
 
 /**
- * Dedicated Daily 5:00 AM Automated Trigger Function for Advance Pre-Crawl
- * Select this function when configuring the 5:00 AM Time-driven Trigger in Google Apps Script.
+ * Dedicated Daily 11:05 PM Automated Trigger Function for Advance Pre-Crawl
+ * Select this function when configuring the 11:05 PM Time-driven Trigger in Google Apps Script.
  */
 function triggerDailyAdvancePreCrawl() {
   Logger.log('⏰ Starting automated daily advance pre-crawl (silent headless)...');
