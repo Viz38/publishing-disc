@@ -444,14 +444,31 @@ class NIMKeyManager:
 
     PREFLIGHT_URL = "https://integrate.api.nvidia.com/v1/models"
 
-    KNOWN_EXPIRED_NIM_KEYS: Set[str] = {
-        "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",  # HTTP 403 Forbidden
-        "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",  # HTTP 403 Forbidden
-        "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",  # Stalling: >50s socket timeouts (2026-10-20). Remove to re-enable after issue resolves.
+    # SHA-256 hash digests of historically deactivated NIM keys to avoid storing plaintext tokens in git
+    KNOWN_EXPIRED_NIM_KEY_HASHES: Set[str] = {
+        "7a0f8c299bd0beaef86255b7d145f18334bb3ad95181928673e16b5f8ee9729d",  # HTTP 403 Forbidden
+        "dd9fb9f95bda0f5c1f6343111510b8c77e53e55df5d8648e00d1892326e2f16e",  # HTTP 403 Forbidden
+        "0cc5c3fbb30514be83b82bad53dc68b50113cc97e4cc36c930831db81b469a8d",  # Stalling: >50s socket timeouts
     }
 
+    @classmethod
+    def is_key_expired_or_invalid(cls, key: str) -> bool:
+        if not key:
+            return True
+        import hashlib
+        k_hash = hashlib.sha256(str(key).strip().encode("utf-8")).hexdigest()
+        return k_hash in cls.KNOWN_EXPIRED_NIM_KEY_HASHES
+
     def __init__(self, keys: Optional[List[str]] = None):
-        self.invalid_keys: Set[str] = set(self.KNOWN_EXPIRED_NIM_KEYS)
+        self.invalid_keys: Set[str] = set()
+
+        # Load expired keys from environment variable if present
+        env_expired = os.getenv("EXPIRED_NIM_KEYS", "")
+        if env_expired:
+            for k in env_expired.split(","):
+                if k.strip():
+                    self.invalid_keys.add(k.strip())
+
         if keys is not None:
             raw_keys = [str(k).strip() for k in keys if str(k).strip()]
         else:
@@ -460,6 +477,11 @@ class NIMKeyManager:
                 raw_keys = [k.strip() for k in raw_env_keys.split(",") if k.strip()]
             else:
                 raw_keys = []
+
+        # Auto-blacklist any keys whose SHA-256 hash matches known expired keys
+        for k in raw_keys:
+            if self.is_key_expired_or_invalid(k):
+                self.invalid_keys.add(k)
 
         self.keys: List[str] = [k for k in raw_keys if k and k not in self.invalid_keys]
         self._index = 0
@@ -789,11 +811,11 @@ def get_sharded_nim_keys(
     if not raw_keys:
         return []
 
-    bad_keys = set(NIMKeyManager.KNOWN_EXPIRED_NIM_KEYS)
-    if invalid_keys:
-        bad_keys.update(invalid_keys)
-
-    valid_candidates = [k for k in raw_keys if k and k not in bad_keys]
+    bad_keys = set(invalid_keys or [])
+    valid_candidates = [
+        k for k in raw_keys
+        if k and k not in bad_keys and not NIMKeyManager.is_key_expired_or_invalid(k)
+    ]
     if not valid_candidates:
         valid_candidates = [k for k in raw_keys if k]
 

@@ -31,6 +31,9 @@ from .gsheet_circuit_breaker import GSheetCircuitBreaker, is_doc_too_large_error
 from .bulk_pusher import BulkSheetPusher, clear_sheet_data_rows, handle_5am_sheet_cleanup
 from .tracxn_domain_ingestor import TracxnDomainIngestor
 from .bulk_sync import bulk_sync_cache_to_sheet, group_bulk_sync_chunks
+from .schema_constants import TOTAL_SCHEMA_COLUMNS, COLUMN_INDEX_MAP
+from .fleet_cluster import FleetClusterManager, FleetSummarizeRequest
+from .pipeline_engine import configure_engine, run_engine_for_sheet
 
 __all__ = [
     "TracxnKeyManager",
@@ -66,5 +69,9 @@ __all__ = [
     "TracxnDomainIngestor",
     "bulk_sync_cache_to_sheet",
     "group_bulk_sync_chunks",
+    "FleetClusterManager",
+    "FleetSummarizeRequest",
+    "configure_engine",
+    "run_engine_for_sheet",
 ]
 

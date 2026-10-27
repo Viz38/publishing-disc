@@ -44,6 +44,7 @@ from common import (
     get_now_ist,
     ExecutionTracker,
     BacklogManager,
+    FleetSummarizeRequest,
 )
 from common.local_cache import is_pid_alive
 
@@ -805,6 +806,41 @@ async def advance_precrawl_route(req: Optional[RunRequest] = None):
         "sheet_id": target_sheet_id,
         "pid": pid
     }
+
+@app.get("/fleet/cache/{domain}", dependencies=[Depends(verify_token)])
+async def get_fleet_cache(domain: str):
+    clean_d = str(domain).strip().lower()
+    if LOCAL_CACHE:
+        rec = LOCAL_CACHE.get(clean_d)
+        if rec:
+            return {"status": "ok", "found": True, "domain": clean_d, "record": rec}
+    return {"status": "ok", "found": False, "domain": clean_d, "record": None}
+
+@app.post("/fleet/co-process/nim-summarize", dependencies=[Depends(verify_token)])
+async def co_process_nim_summarize(req: FleetSummarizeRequest):
+    results = []
+    try:
+        from main import Nvidia_API_ASYNC
+    except ImportError:
+        Nvidia_API_ASYNC = None
+
+    for item in req.items:
+        domain = item.get("domain", "")
+        prompt = item.get("prompt", "")
+        summary = ""
+        success = False
+        if Nvidia_API_ASYNC and prompt:
+            try:
+                summary = await Nvidia_API_ASYNC(prompt)
+                success = bool(summary and len(summary) > 20)
+            except Exception as e:
+                logger.error(f"Peer co-processing failed for {domain}: {e}")
+        results.append({
+            "domain": domain,
+            "success": success,
+            "summary": summary
+        })
+    return {"status": "ok", "results": results}
 
 if __name__ == "__main__":
     import uvicorn
