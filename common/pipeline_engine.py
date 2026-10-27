@@ -264,16 +264,22 @@ def is_row_fully_completed(row: list) -> bool:
         "SNOOZED", "MARKED_IRRELEVANT", "MARKED_FOR_LATER", "ESCALATED", "SKIPPED_UNASSIGNABLE"
     }
 
-    # Non-retryable terminal exit: Tech Crawler permanently failed (Col X / idx 23)
+    # Non-retryable terminal exit: Scraper failed after both Tech Crawler and Waterfall Scraper were attempted
     if len(row) > 23 and str(row[23]).strip().upper() == "FAILED":
-        return True
+        signals = str(row[28]).strip().upper() if len(row) > 28 else ""
+        if "WATERFALL_FAILED" in signals:
+            return True
 
     # Non-retryable terminal exit: Dead domain / no content for NIM (Col AI / idx 34)
+    # Valid ONLY if raw data was actually scraped (> 50 chars) and verified dead.
+    # If raw data is empty or placeholder text, NO_CONTENT was stamped prematurely and must be retried with Waterfall Scraper.
     if len(row) > 34 and str(row[34]).strip().upper() in ("NO_CONTENT", "FAILED_NO_CONTENT"):
-        tc_stat = str(row[23]).strip().upper() if len(row) > 23 else ""
-        has_s3 = (len(row) > 26 and str(row[26]).strip().startswith("http"))
-        has_raw = (len(row) > 29 and bool(str(row[29]).strip()))
-        if tc_stat == "SUCCESS" and has_s3 and not has_raw:
+        has_genuine_raw = (
+            len(row) > 29
+            and len(str(row[29]).strip()) >= 50
+            and str(row[29]).strip() != "['Website is not working.']"
+        )
+        if not has_genuine_raw:
             return False
         return True
 
@@ -3016,14 +3022,14 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
         output_data_summery = existing_summary
         summary_status = safe_str(row[34]).strip() if (len(row) > 34 and safe_str(row[34]).strip()) else "SUCCESS"
         logging.info(f"Smart auto-resume: reusing existing summary for {domain} (length {len(output_data_summery)}) with status {summary_status}")
-    elif not final_raw_data:
+    elif not final_raw_data or len(final_raw_data.strip()) < 50 or final_raw_data.strip() == "['Website is not working.']":
         output_data_summery = ""
-        summary_status = "NO_CONTENT"
-        logging.info(f"No raw data found in Col AF or Col AL for {domain}. Marking summary status NO_CONTENT.")
+        summary_status = ""
+        logging.info(f"No usable raw data for {domain}. Halting at Phase 1 (NIM not attempted).")
     elif is_nim_dead_domain(final_raw_data):
         output_data_summery = ""
         summary_status = "NO_CONTENT"
-        logging.info(f"Dead domain content detected for {domain}. Marking summary status NO_CONTENT.")
+        logging.info(f"Dead domain content confirmed for {domain}. Marking summary status NO_CONTENT.")
     elif input_data_summery:
         input_data_summery = Utility_Replace_Response(input_data_summery, base_prompt_for_summery, replacable_char)
         input_data_summery = Utility_Replace_Response(domain, input_data_summery, replacable_char_Domain)
@@ -3780,36 +3786,33 @@ async def Integrated_Process_domain(
                     signed_url = await tc_client.get_signed_s3_url(session, tc_s3_markdown)
                     if signed_url:
                         home_body = await tc_client.fetch_raw_markdown(session, signed_url) or ""
-                        if home_body:
+                        if home_body and len(home_body.strip()) >= 50:
                             scrappingBeautySoup = home_body
 
-                # Single-Pass Polling Policy (Advance Pre-Crawl):
-                # If still PROCESSING after initial check, mark FAILED immediately and switch to Waterfall Scraper!
-                if tc_status == "PROCESSING":
+                # 4. Mandatory Waterfall Scraper Fallback:
+                # If home_body is still empty or unusable (whether TC was in PROCESSING, FAILED, or SUCCESS with empty S3),
+                # Waterfall Scraper MUST attempt scraping at least once!
+                if not home_body or len(home_body.strip()) < 50:
                     logging.info(
-                        f"Tech Crawler job {tc_job_id} for {domain} still PROCESSING. "
-                        "Assuming FAILED under single-pass policy and switching to Waterfall Scraper fallback."
+                        f"Tech Crawler yielded no usable raw data for {domain} (TC Status: {tc_status}). "
+                        "Executing mandatory Waterfall Scraper fallback..."
                     )
-                    tc_status = "FAILED"
-
-                # 3. If Tech Crawler succeeded, fetch signed S3 Markdown
-                if tc_status == "SUCCESS" and tc_s3_markdown and is_valid_s3_url(tc_s3_markdown) and not home_body:
-                    signed_url = await tc_client.get_signed_s3_url(session, tc_s3_markdown)
-                    if signed_url:
-                        home_body = await tc_client.fetch_raw_markdown(session, signed_url) or ""
-
-                # 4. Fallback Rule: Switch to Waterfall Scraper ONLY if Tech Crawler FAILED or unable to scrape
-                if not home_body and tc_status in ("FAILED", ""):
-                    if is_pre_cutoff_window() or is_5am_ist_cutoff():
-                        logging.info(f"⏰ [Pre-Cutoff Wind-Down] Skipping fallback waterfall scraper for {domain}")
+                    waterfall_scraper = WaterfallScraper()
+                    wf_body, scrape_method = await waterfall_scraper.scrape_domain(session, domain)
+                    if wf_body and len(wf_body.strip()) >= 50:
+                        home_body = wf_body
+                        scrappingBeautySoup = wf_body
+                        tc_status = "SUCCESS"
+                        tc_signals = f"WATERFALL_{scrape_method}"
+                        logging.info(f"✅ Waterfall Scraper recovered {domain} via {scrape_method} (length: {len(home_body)})")
                     else:
-                        waterfall_scraper = WaterfallScraper()
-                        home_body, scrape_method = await waterfall_scraper.scrape_domain(session, domain)
-                        if home_body:
-                            scrappingBeautySoup = home_body
-                        logging.info(f"Fallback waterfall scraper for {domain} result: {scrape_method} (length: {len(home_body)})")
+                        home_body = ""
+                        scrappingBeautySoup = ""
+                        tc_status = "FAILED"
+                        tc_signals = f"WATERFALL_FAILED_{scrape_method}"
+                        logging.warning(f"❌ Both Tech Crawler and Waterfall Scraper failed for {domain} ({scrape_method}). Marking Phase 1 FAILED.")
 
-            body_results = home_body if home_body else ["Website is not working."]
+            body_results = home_body if home_body else ""
 
             if mode == "phase1":
                 phase1_data = [
@@ -3858,7 +3861,7 @@ async def Integrated_Process_domain(
             engineClearedTime = safe_str(rowData[19]) if len(rowData) > 19 else ""
             engineClearedStatus = safe_str(rowData[20]) if len(rowData) > 20 else ""
             engineTimeTaken = ""
-            Final_Scrapped_Raw_data = rowData[29] if (len(rowData) > 29 and safe_str(rowData[29]).strip()) else (scrappingBeautySoup or home_body)
+            Final_Scrapped_Raw_data = rowData[29] if (len(rowData) > 29 and safe_str(rowData[29]).strip() and safe_str(rowData[29]).strip() != "['Website is not working.']") else (scrappingBeautySoup or home_body)
             scrappingBeautySoup = safe_str(Final_Scrapped_Raw_data)
 
             currentFunnelName = rowData[24] if len(rowData) > 24 else ""
@@ -3889,13 +3892,14 @@ async def Integrated_Process_domain(
             if rowData[20] == "" and rowData[21] != "DONE" and rowData[29] != "DONE":
                 if not Domain:
                     skip_done = True
-                    # FunnelRecheck = "Failed"
                 else:
-                    # FunnelRecheck = "Passed"
                     scraped_text_bs = body_results
-                    if scraped_text_bs:
+                    if scraped_text_bs and len(safe_str(scraped_text_bs).strip()) >= 50:
                         Final_Scrapped_Raw_data = scraped_text_bs
                         scrappingBeautySoup = safe_str(scraped_text_bs)
+                    else:
+                        Final_Scrapped_Raw_data = ""
+                        scrappingBeautySoup = ""
 
                     # if not Final_Scrapped_Raw_data:
                     #     status_code_pw, scraped_text_pw = scrape_page_playwright(domain)
@@ -3952,20 +3956,34 @@ async def Integrated_Process_domain(
 
             if mode == "phase2":
                 raw_soup_49k = str(scrappingBeautySoup)[:49000]
-                phase2_data = [
-                    raw_soup_49k,
-                    tc_job_gen_time,
-                    tc_final_url,
-                    "",
-                    "",
-                    summary_status,
-                    output_data_summery,
-                ]
-                write_start_p2 = 30
-                new_row_data = list(rowData)
-                new_row_data[29] = raw_soup_49k
-                new_row_data[34] = summary_status
-                new_row_data[35] = output_data_summery
+                if not existing_raw_data:
+                    # Phase 1 ran inside this phase2 call, so persist Phase 1 (Cols U-AC) AND Phase 2 (Cols AD-AJ)
+                    phase2_data = [
+                        engineClearedStatus or "DONE", tc_job_id, tc_job_gen_time, tc_status,
+                        tc_final_url, tc_s3_html, tc_s3_markdown, tc_http_status or "200",
+                        tc_signals or "HTTP_OK", raw_soup_49k,
+                        tc_job_gen_time, tc_final_url, "", "",
+                        summary_status, output_data_summery
+                    ]
+                    write_start_p2 = 21
+                    new_row_data = list(rowData)
+                    new_row_data[20:36] = phase2_data
+                else:
+                    # Phase 1 was already present on the sheet; write from Col AD (col 30)
+                    phase2_data = [
+                        raw_soup_49k,
+                        tc_job_gen_time,
+                        tc_final_url,
+                        "",
+                        "",
+                        summary_status,
+                        output_data_summery,
+                    ]
+                    write_start_p2 = 30
+                    new_row_data = list(rowData)
+                    new_row_data[29] = raw_soup_49k
+                    new_row_data[34] = summary_status
+                    new_row_data[35] = output_data_summery
                 LOCAL_CACHE.save_record(domain, {
                     "summary_status": summary_status,
                     "output_data_summery": output_data_summery,
@@ -4679,11 +4697,15 @@ async def Integrated_Extract_domains(
             tc_status = safe_str(r[23]).strip().upper() if len(r) > 23 else ""
             raw_scraped = safe_str(r[29]).strip() if len(r) > 29 else ""
             nim_txt = safe_str(r[35]).strip() if len(r) > 35 else ""
+            nim_st = safe_str(r[34]).strip().upper() if len(r) > 34 else ""
 
-            if len(nim_txt) > 10:
+            # Tier 0: Valid existing NIM summary ready for Gemini/Tracxn
+            if len(nim_txt) > 20 and nim_st == "SUCCESS" and not nim_txt.startswith("http"):
                 presummarized_items.append((idx, r))
-            elif (raw_scraped or tc_status in ("SUCCESS", "FAILED")):
+            # Tier 1: Truly pre-scraped with usable raw content (>= 50 chars) ready for NIM
+            elif len(raw_scraped) >= 50 and raw_scraped != "['Website is not working.']":
                 priority_items.append((idx, r))
+            # Tier 2: Needs Phase 1 scraping (Tech Crawler or Waterfall Scraper)
             else:
                 regular_items.append((idx, r))
 
@@ -4904,6 +4926,18 @@ async def Integrated_Extract_domains(
                     else:
                         downstream_row = stage1_res.get("rowData") or row
                         precomputed_sum = stage1_res.get("summary")
+                        summary_status = str(stage1_res.get("summary_status", "") if isinstance(stage1_res, dict) else "").strip().upper()
+
+                        # STRICT PHASE GATE:
+                        # Downstream predictions (Gemini IF / Feed) and Tracxn Movements MUST ONLY run
+                        # if NIM summarization succeeded with genuine content.
+                        # If summary is missing or summary_status != "SUCCESS", halt immediately.
+                        if not precomputed_sum or summary_status != "SUCCESS":
+                            logging.info(
+                                f"Halt downstream for {domain} at row {row_number}: "
+                                f"No valid NIM summary (status: '{summary_status}', summary present: {bool(precomputed_sum)})."
+                            )
+                            continue
 
                         if is_pre_cutoff_window() and not precomputed_sum:
                             # Pre-cutoff wind-down: skip un-summarized rows to avoid blocking consumer; only finish predictions on summarized rows

@@ -161,6 +161,19 @@ class PipelineCoordinator:
             try:
                 await self.health_monitor.wait_for_resources()
                 processed_item = await self.process_scrape(item)
+                raw_c = processed_item.get("raw_content", "")
+                if isinstance(raw_c, bytes):
+                    has_usable_raw = len(raw_c) >= 50
+                else:
+                    has_usable_raw = bool(raw_c and len(str(raw_c).strip()) >= 50 and str(raw_c).strip() != "['Website is not working.']")
+
+                if not has_usable_raw:
+                    # Halt at Phase 1: do not push unscraped domain to NIM queue
+                    processed_item["summary"] = ""
+                    processed_item["summary_status"] = ""
+                    await self.write_api_queue.put(processed_item)
+                    continue
+
                 # In-flight compression preserves 100% of 49k chars while using 90% less heap RAM
                 if "raw_content" in processed_item and isinstance(processed_item["raw_content"], str):
                     processed_item["raw_content"] = compress_raw_payload(processed_item["raw_content"])
@@ -187,6 +200,15 @@ class PipelineCoordinator:
                 processed_item = await self.process_nim_summary(item)
                 d = str(processed_item.get("domain", "")).strip()
                 self.remove_scrape_pending(d)
+
+                # Strict phase gate: Only push to Gemini queue if NIM summary succeeded
+                sum_status = str(processed_item.get("summary_status", "")).strip().upper()
+                summary_text = processed_item.get("summary", "")
+                if sum_status != "SUCCESS" or not summary_text:
+                    # Halt at Phase 2: do not push un-summarized domain to Gemini queue
+                    await self.write_api_queue.put(processed_item)
+                    continue
+
                 await self.gemini_queue.put(processed_item)
             except Exception as e:
                 logger.error(f"Error in NIM worker for {item.get('domain')}: {e}")
