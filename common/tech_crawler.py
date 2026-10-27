@@ -2,7 +2,7 @@ import os
 import time
 import logging
 import asyncio
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional, Union, Tuple
 import aiohttp
 
 logger = logging.getLogger(__name__)
@@ -16,6 +16,52 @@ def is_valid_s3_url(s3_url: Optional[str]) -> bool:
         return False
     s = s3_url.strip().lower()
     return "s3.amazonaws.com" in s or s.startswith("s3://") or ".s3." in s or "s3-" in s
+
+
+def extract_tc_error_details(track_data: Dict[str, Any]) -> Tuple[str, str]:
+    """
+    Extracts (error_code, error_reason) from a Tracxn Tech Crawler track response.
+    Returns ("", "") if the crawl succeeded with non-empty markdown.
+    If status is FAILED or SUCCESS with no markdown / HTTP error, extracts
+    pageHttpStatus / error code into error_code, and error reason / signals into error_reason.
+    """
+    if not isinstance(track_data, dict):
+        return ("", "")
+
+    status = str(track_data.get("status") or "").strip().upper()
+    output = track_data.get("output") or {}
+    markdown = str(output.get("markdown") or "").strip()
+    page_http_status = str(output.get("pageHttpStatus") or "").strip()
+
+    # If SUCCESS and valid markdown is present and HTTP is not an error, not an error
+    if status == "SUCCESS" and markdown and (not page_http_status or page_http_status in ("200", "201", "204", "0")):
+        return ("", "")
+
+    # If still PROCESSING, not yet a terminal error
+    if status == "PROCESSING":
+        return ("", "")
+
+    error_obj = output.get("error") or {}
+    error_code = str(error_obj.get("code") or output.get("pageHttpStatus") or "").strip()
+
+    # Extract error reason from error object or signals
+    reason = error_obj.get("reason")
+    if not reason:
+        signals = output.get("signals")
+        if isinstance(signals, list):
+            reason = ", ".join(str(s) for s in signals if s)
+        elif signals:
+            reason = str(signals)
+        else:
+            reason = track_data.get("error_reason") or ""
+
+    error_reason = str(reason or "").strip()
+
+    # Fallback error code if status is FAILED but no specific code
+    if not error_code and status == "FAILED":
+        error_code = "FAILED"
+
+    return (error_code, error_reason)
 
 
 class TechCrawlerClient:
@@ -174,14 +220,9 @@ class TechCrawlerClient:
                         result["http_status"] = str(output.get("pageHttpStatus", "") or "")
                         result["signals"] = str(output.get("signals", "") or "")
 
-                        if result["status"] == "FAILED":
-                            error_obj = output.get("error") or {}
-                            result["error_code"] = str(
-                                error_obj.get("code") or output.get("pageHttpStatus") or ""
-                            )
-                            result["error_reason"] = str(
-                                error_obj.get("reason") or output.get("signals") or ""
-                            )
+                        err_c, err_r = extract_tc_error_details(data)
+                        result["error_code"] = err_c
+                        result["error_reason"] = err_r
                         return result
                     elif resp.status in (401, 403, 429) and self.token_rotator is not None:
                         self._handle_token_error(tok, resp.status)

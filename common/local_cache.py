@@ -144,7 +144,7 @@ class LocalSheetCache:
     CSV_FIELDS = [
         "domain", "enginePickedTime", "engineClearedTime", "engineClearedStatus", "engineTimeTaken",
         "tc_job_id", "tc_job_gen_time", "tc_status", "tc_final_url", "tc_s3_html",
-        "tc_s3_markdown", "tc_http_status", "tc_signals", "scrappingBeautySoup",
+        "tc_s3_markdown", "tc_http_status", "tc_signals", "tc_error_code", "tc_error_reason", "scrappingBeautySoup",
         "summary_status", "output_data_summery",
         "output_data_if", "output_data_if_name", "output_data_if_id",
         "output_data_if_validation", "output_data_feed",
@@ -509,8 +509,8 @@ class LocalSheetCache:
 
         row_out[30] = in_row[30] or rec.get("tc_job_gen_time", "")
         row_out[31] = in_row[31] or rec.get("tc_final_url", "")
-        row_out[32] = ""  # Error - Code
-        row_out[33] = ""  # Error - Reason
+        row_out[32] = in_row[32] or rec.get("tc_error_code", "") or ""  # Col AG (idx 32): TC Error Code
+        row_out[33] = in_row[33] or rec.get("tc_error_reason", "") or ""  # Col AH (idx 33): TC Error Reason
 
         # 4. LLM PREDICTIONS (Cols 35-49 / AI-AW / idx 34-48)
         summary_val = rec.get("output_data_summery") or in_row[35] or ""

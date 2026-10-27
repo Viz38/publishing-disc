@@ -312,6 +312,42 @@ def is_row_fully_completed(row: list) -> bool:
     return False
 
 
+def is_eligible_for_tc_30min_recheck(row: list, active_waterfall_in_flight: Optional[set] = None) -> bool:
+    """
+    Target Candidate Eligibility for 30-Minute Tech Crawler Recheck:
+    1. Row has an existing tc_job_id (Col V / idx 21).
+    2. Columns AG & AH (idx 32 & 33) are currently empty (have not yet received terminal TC error classification).
+    3. Waterfall worker has received them as inputs but has NOT yet processed them:
+       - Domain is not currently in-flight in a waterfall scraper browser session.
+       - Signals (Col AC / idx 28) does not contain "WATERFALL" (has not completed waterfall).
+       - Raw Data (Col AD / idx 29) is empty or < 50 characters (or placeholder text).
+    """
+    if not row or not row[0] or not str(row[0]).strip():
+        return False
+    domain = str(row[0]).strip().lower()
+    if active_waterfall_in_flight and domain in active_waterfall_in_flight:
+        return False
+
+    tc_job_id = str(row[21]).strip() if len(row) > 21 else ""
+    if not tc_job_id:
+        return False
+
+    col_ag = str(row[32]).strip() if len(row) > 32 else ""
+    col_ah = str(row[33]).strip() if len(row) > 33 else ""
+    if col_ag or col_ah:
+        return False
+
+    signals = str(row[28]).strip().upper() if len(row) > 28 else ""
+    if "WATERFALL" in signals:
+        return False
+
+    raw_data = str(row[29]).strip() if len(row) > 29 else ""
+    if len(raw_data) >= 50 and raw_data != "['Website is not working.']":
+        return False
+
+    return True
+
+
 # **************************************************************************************************************************
 # *************************************** Configuration *************************************************
 # **************************************************************************************************************************
@@ -3739,7 +3775,9 @@ async def Integrated_Process_domain(
             tc_http_status = safe_str(rowData[27])
             tc_signals = safe_str(rowData[28])
             scrappingBeautySoup = safe_str(rowData[29])
-            existing_raw_data = scrappingBeautySoup
+            tc_error_code = safe_str(rowData[32]) if len(rowData) > 32 else ""
+            tc_error_reason = safe_str(rowData[33]) if len(rowData) > 33 else ""
+
             if created_timestamp is None and tc_job_gen_time:
                 try:
                     created_timestamp = datetime.datetime.strptime(tc_job_gen_time, "%d/%b/%Y %H:%M:%S").timestamp()
@@ -3752,6 +3790,11 @@ async def Integrated_Process_domain(
             if existing_raw_data:
                 home_body = existing_raw_data
                 status_code = ""
+            elif tc_error_code or tc_error_reason:
+                # Per architectural rule: cases with terminal TC error code/reason in Col AG/AH
+                # need not be retried via TC, but only via waterfall scraper!
+                logging.info(f"Skipping TC network check for {domain} (TC Error {tc_error_code}: {tc_error_reason} in Col AG/AH). Proceeding directly to Waterfall Scraper.")
+                tc_client = None
             else:
                 tc_client = TechCrawlerClient(token_rotator=TRACXN_KEY_MANAGER) if 'TRACXN_KEY_MANAGER' in globals() else TechCrawlerClient(token=Tracxn_API_Token)
 
@@ -3780,6 +3823,10 @@ async def Integrated_Process_domain(
                         tc_http_status = track_res["http_status"]
                     if track_res.get("signals"):
                         tc_signals = track_res["signals"]
+                    if track_res.get("error_code"):
+                        tc_error_code = track_res["error_code"]
+                    if track_res.get("error_reason"):
+                        tc_error_reason = track_res["error_reason"]
 
                 # 3. If Tech Crawler succeeded, fetch signed S3 Markdown BEFORE checking timeout!
                 if tc_status == "SUCCESS" and tc_s3_markdown and is_valid_s3_url(tc_s3_markdown):
@@ -3819,7 +3866,7 @@ async def Integrated_Process_domain(
                     engineClearedStatus or "DONE", tc_job_id, tc_job_gen_time, tc_status,
                     tc_final_url, tc_s3_html, tc_s3_markdown, tc_http_status or "200",
                     tc_signals or "HTTP_OK", str(scrappingBeautySoup)[:49000],
-                    tc_job_gen_time, tc_final_url, "", ""
+                    tc_job_gen_time, tc_final_url, tc_error_code, tc_error_reason
                 ]
                 write_start_p1 = 21
                 new_row_data = list(rowData)
@@ -3833,6 +3880,8 @@ async def Integrated_Process_domain(
                     "tc_s3_markdown": tc_s3_markdown,
                     "tc_http_status": tc_http_status,
                     "tc_signals": tc_signals,
+                    "tc_error_code": tc_error_code,
+                    "tc_error_reason": tc_error_reason,
                     "scrappingBeautySoup": scrappingBeautySoup,
                     "updated_at": datetime.datetime.now().strftime("%d/%b/%Y %H:%M:%S")
                 })
@@ -4090,8 +4139,8 @@ async def Integrated_Process_domain(
                 raw_soup_49k,                               # Col 30 (AD): Raw Data (capped at 49,000 chars)
                 tc_job_gen_time,                            # Col 31 (AE): TimeStamp
                 tc_final_url,                               # Col 32 (AF): URL
-                "",                                         # Col 33 (AG): Error Code
-                "",                                         # Col 34 (AH): Error Reason
+                tc_error_code,                              # Col 33 (AG): Error Code
+                tc_error_reason,                            # Col 34 (AH): Error Reason
                 summary_status,                             # Col 35 (AI): NIM Status
                 output_data_summery,                        # Col 36 (AJ): NIM Summary
                 output_data_summery,                        # Col 37 (AK): Domain Summary Query
@@ -4133,6 +4182,8 @@ async def Integrated_Process_domain(
                 "tc_s3_markdown": tc_s3_markdown,
                 "tc_http_status": tc_http_status,
                 "tc_signals": tc_signals,
+                "tc_error_code": tc_error_code,
+                "tc_error_reason": tc_error_reason,
                 "scrappingBeautySoup": raw_soup_49k,
                 "summary_status": summary_status,
                 "output_data_summery": output_data_summery,
@@ -4365,32 +4416,43 @@ async def reconcile_existing_tech_crawler_jobs(
                                 ]
                                 return ("SUCCESS", r_num, sheet_slice, row_data)
 
-                    # Single-Pass Polling Policy (Advance Pre-Crawl):
-                    # Overnight jobs that did not resolve to SUCCESS are immediately assumed FAILED,
-                    # routing directly to WaterfallScraper without entering background polling or waiting 3 hours.
+                    # Extract error details
+                    err_c, err_r = extract_tc_error_details(track_res)
+                    err_code = err_c or "FAILED"
+                    err_reason = err_r or "NO_USABLE_CONTENT"
+                    row_data[20] = "DONE"
+                    row_data[23] = "FAILED"
+                    row_data[32] = err_code
+                    row_data[33] = err_reason
                     LOCAL_CACHE.save_record(domain, {
                         "tc_job_id": job_id,
                         "tc_status": "FAILED",
+                        "tc_error_code": err_code,
+                        "tc_error_reason": err_reason,
                         "updated_at": datetime.datetime.now().strftime("%d/%b/%Y %H:%M:%S")
                     })
-                    row_data[20] = "DONE"
-                    row_data[23] = "FAILED"
                     sheet_slice = [
-                        "DONE", job_id, tc_job_gen_time, "FAILED", "", "", "", "", "", "", tc_job_gen_time, "", "", ""
+                        "DONE", job_id, tc_job_gen_time, "FAILED", "", "", "", "", "", "", tc_job_gen_time, "", err_code, err_reason
                     ]
                     return ("FAILED", r_num, sheet_slice, None)
 
                 except Exception as e:
                     logging.debug(f"Error checking candidate {job_id} for {domain}: {e}")
+                    err_code = "FAILED"
+                    err_reason = str(e)
+                    row_data[20] = "DONE"
+                    row_data[23] = "FAILED"
+                    row_data[32] = err_code
+                    row_data[33] = err_reason
                     LOCAL_CACHE.save_record(domain, {
                         "tc_job_id": job_id,
                         "tc_status": "FAILED",
+                        "tc_error_code": err_code,
+                        "tc_error_reason": err_reason,
                         "updated_at": datetime.datetime.now().strftime("%d/%b/%Y %H:%M:%S")
                     })
-                    row_data[20] = "DONE"
-                    row_data[23] = "FAILED"
                     sheet_slice = [
-                        "DONE", job_id, tc_job_gen_time, "FAILED", "", "", "", "", "", "", tc_job_gen_time, "", "", ""
+                        "DONE", job_id, tc_job_gen_time, "FAILED", "", "", "", "", "", "", tc_job_gen_time, "", err_code, err_reason
                     ]
                     return ("FAILED", r_num, sheet_slice, None)
 
@@ -4459,6 +4521,154 @@ async def reconcile_existing_tech_crawler_jobs(
         f"Retained for 15m polling loop (<3h): {len(pending_retained)}"
     )
     return pending_retained
+
+
+async def recheck_unprocessed_tc_failed_candidates(
+    session,
+    rows,
+    client,
+    SHEET_ID,
+    sheet_name,
+    start_row_num=3,
+    sheet_write_queue=None,
+    domain_queue=None,
+    active_waterfall_in_flight=None,
+    batch_size=50
+) -> int:
+    """
+    Every 30 minutes:
+    Rechecks all failed cases for Tech Crawler with the same job ID that have been received as
+    inputs by the waterfall worker but have not yet been processed by it.
+    Writes error code to Col AG (idx 32) and error reason to Col AH (idx 33).
+    Once AG/AH are populated, these cases need not be retried via TC but only via waterfall scraper.
+    If TC succeeded with valid S3 markdown in the meantime, downloads markdown, updates row/cache/sheet to SUCCESS,
+    and fast-tracks directly to NIM.
+    """
+    candidates = []
+    in_flight = active_waterfall_in_flight or set()
+    for idx, r in enumerate(rows):
+        if not r or not r[0]:
+            continue
+        if len(r) < 57:
+            r.extend([""] * (57 - len(r)))
+        if is_eligible_for_tc_30min_recheck(r, in_flight):
+            candidates.append((start_row_num + idx, r))
+
+    if not candidates:
+        logging.info("⏰ [30-Min Periodic TC Recheck] No eligible candidate rows found.")
+        return 0
+
+    total_candidates = len(candidates)
+    logging.info(f"⏰ [30-Min Periodic TC Recheck] Rechecking {total_candidates} eligible rows in batches of {batch_size}...")
+
+    tc_client = TechCrawlerClient(token_rotator=TRACXN_KEY_MANAGER) if 'TRACXN_KEY_MANAGER' in globals() else TechCrawlerClient(token=Tracxn_API_Token)
+    recheck_sem = asyncio.Semaphore(15)
+
+    num_batches = (total_candidates + batch_size - 1) // batch_size
+    recovered_success = 0
+    tagged_terminal_failed = 0
+
+    for b_idx in range(num_batches):
+        if is_5am_ist_cutoff() or os.path.exists(STOP_FILE) or is_pre_cutoff_window():
+            break
+
+        batch = candidates[b_idx * batch_size : (b_idx + 1) * batch_size]
+
+        async def _check_one(r_num, row_data):
+            nonlocal recovered_success, tagged_terminal_failed
+            async with recheck_sem:
+                domain = row_data[0].strip()
+                if not is_eligible_for_tc_30min_recheck(row_data, in_flight):
+                    return
+
+                job_id = row_data[21].strip()
+                tc_job_gen_time = safe_str(row_data[22]).strip()
+                try:
+                    track_res = await tc_client.track_job_id(session, job_id)
+                    status = track_res.get("status")
+
+                    # Case A: TC succeeded with valid Markdown!
+                    if status == "SUCCESS" and track_res.get("s3_markdown"):
+                        signed_url = await tc_client.get_signed_s3_url(session, track_res["s3_markdown"])
+                        if signed_url:
+                            md = await tc_client.fetch_raw_markdown(session, signed_url)
+                            if md and len(md.strip()) >= 50:
+                                row_data[20] = "DONE"
+                                row_data[23] = "SUCCESS"
+                                if track_res.get("final_url"): row_data[24] = track_res["final_url"]
+                                if track_res.get("s3_html"): row_data[25] = track_res["s3_html"]
+                                row_data[26] = track_res["s3_markdown"]
+                                if track_res.get("http_status"): row_data[27] = str(track_res["http_status"])
+                                if track_res.get("signals"): row_data[28] = str(track_res["signals"])
+                                row_data[29] = md
+                                row_data[32] = ""
+                                row_data[33] = ""
+                                LOCAL_CACHE.save_record(domain, {
+                                    "tc_job_id": job_id,
+                                    "tc_status": "SUCCESS",
+                                    "tc_final_url": row_data[24],
+                                    "tc_s3_html": row_data[25],
+                                    "tc_s3_markdown": row_data[26],
+                                    "tc_http_status": row_data[27],
+                                    "tc_signals": row_data[28],
+                                    "tc_error_code": "",
+                                    "tc_error_reason": "",
+                                    "scrappingBeautySoup": md,
+                                    "updated_at": datetime.datetime.now().strftime("%d/%b/%Y %H:%M:%S")
+                                })
+                                sheet_slice = [
+                                    "DONE", job_id, tc_job_gen_time, "SUCCESS", row_data[24],
+                                    row_data[25], row_data[26], row_data[27], row_data[28],
+                                    md[:49000], tc_job_gen_time, row_data[24], "", ""
+                                ]
+                                if sheet_write_queue:
+                                    await sheet_write_queue.put((r_num, 21, sheet_slice))
+                                elif client:
+                                    try: await write_sheet_data(client, SHEET_ID, sheet_name, [sheet_slice], r_num, 21)
+                                    except Exception: pass
+                                recovered_success += 1
+                                if domain_queue is not None:
+                                    idx = r_num - start_row_num
+                                    await domain_queue.put((idx, row_data))
+                                    logging.info(f"🎉 [30-Min TC Recheck] Recovered {domain} (row {r_num}) via TC! Enqueued directly to NIM.")
+                                return
+
+                    # Case B: TC returned terminal error, HTTP error, or SUCCESS with 0 bytes
+                    err_c, err_r = extract_tc_error_details(track_res)
+                    if err_c or err_r or status == "FAILED":
+                        err_code = err_c or "FAILED"
+                        err_reason = err_r or "NO_USABLE_CONTENT"
+                        row_data[20] = "DONE"
+                        row_data[23] = "FAILED"
+                        row_data[32] = err_code
+                        row_data[33] = err_reason
+                        LOCAL_CACHE.save_record(domain, {
+                            "tc_job_id": job_id,
+                            "tc_status": "FAILED",
+                            "tc_error_code": err_code,
+                            "tc_error_reason": err_reason,
+                            "updated_at": datetime.datetime.now().strftime("%d/%b/%Y %H:%M:%S")
+                        })
+                        ag_ah_slice = [err_code, err_reason]
+                        if sheet_write_queue:
+                            await sheet_write_queue.put((r_num, 33, ag_ah_slice))
+                        elif client:
+                            try: await write_sheet_data(client, SHEET_ID, sheet_name, [ag_ah_slice], r_num, 33)
+                            except Exception: pass
+                        tagged_terminal_failed += 1
+                        logging.debug(f"Tagged row {r_num} ({domain}) with TC error code={err_code}, reason={err_reason}")
+
+                except Exception as ex:
+                    logging.debug(f"Error checking candidate {job_id} for {domain}: {ex}")
+
+        tasks = [_check_one(r_num, r) for r_num, r in batch]
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    logging.info(
+        f"⏰ [30-Min Periodic TC Recheck Complete] {recovered_success} recovered to SUCCESS, "
+        f"{tagged_terminal_failed} tagged with Col AG/AH error details."
+    )
+    return recovered_success + tagged_terminal_failed
 
 
 
@@ -4677,6 +4887,7 @@ async def Integrated_Extract_domains(
         num_downstream_workers = min(MAX_WORKERS, max(1, len(pf_data)))
         nim_semaphore = asyncio.Semaphore(num_nim_workers)
         downstream_semaphore = asyncio.Semaphore(num_downstream_workers)
+        active_waterfall_in_flight = set()
 
         domain_queue = asyncio.Queue()
         # Fast-Track Prioritization:
@@ -4802,34 +5013,43 @@ async def Integrated_Extract_domains(
                             "start_col": None,
                         }
                     else:
-                        stage1_mode = "phase1" if mode == "phase1" else "phase2"
-                        stage1_res = await Integrated_Process_domain(
-                            session,
-                            domain,
-                            row_number,
-                            client,
-                            nim_semaphore,
-                            row,
-                            SHEET_ID,
-                            EXTRACTING_SHEET_NAME,
-                            cache_id_IF_Prediction,
-                            token_IF_Prediction,
-                            date_IF_Prediction,
-                            status_IF_Prediction,
-                            exp_date_IF_Prediction,
-                            config_funnel_prompt,
-                            config_funnel_id_prompt,
-                            config_funnel_name_prompt,
-                            config_funnel_name_Feed_Cached_prompt,
-                            config_funnel_name_Feed_Cached_API_Token,
-                            config_funnel_name_Feed_Cached_Model,
-                            config_funnel_name_Feed_Cached_Gen_Date,
-                            config_funnel_name_Feed_Cached_Final_Status,
-                            token_rotator,
-                            mode=stage1_mode,
-                            write_to_sheet=False,
-                            precomputed_summary=None,
-                        )
+                        norm_d = safe_str(domain).strip().lower()
+                        existing_raw_data = safe_str(row[29]).strip() if len(row) > 29 else ""
+                        is_wf_run = len(existing_raw_data) < 50
+                        if is_wf_run and norm_d:
+                            active_waterfall_in_flight.add(norm_d)
+                        try:
+                            stage1_mode = "phase1" if mode == "phase1" else "phase2"
+                            stage1_res = await Integrated_Process_domain(
+                                session,
+                                domain,
+                                row_number,
+                                client,
+                                nim_semaphore,
+                                row,
+                                SHEET_ID,
+                                EXTRACTING_SHEET_NAME,
+                                cache_id_IF_Prediction,
+                                token_IF_Prediction,
+                                date_IF_Prediction,
+                                status_IF_Prediction,
+                                exp_date_IF_Prediction,
+                                config_funnel_prompt,
+                                config_funnel_id_prompt,
+                                config_funnel_name_prompt,
+                                config_funnel_name_Feed_Cached_prompt,
+                                config_funnel_name_Feed_Cached_API_Token,
+                                config_funnel_name_Feed_Cached_Model,
+                                config_funnel_name_Feed_Cached_Gen_Date,
+                                config_funnel_name_Feed_Cached_Final_Status,
+                                token_rotator,
+                                mode=stage1_mode,
+                                write_to_sheet=False,
+                                precomputed_summary=None,
+                            )
+                        finally:
+                            if is_wf_run and norm_d:
+                                active_waterfall_in_flight.discard(norm_d)
                     had_nim_at_start = (len(row) > nim_col_idx and safe_str(row[nim_col_idx]).strip().upper() in ("SUCCESS", "NO_CONTENT", "FAILED_NO_CONTENT"))
                     if not had_nim_at_start:
                         nim_completed_count = min(total_domains, nim_completed_count + 1)
@@ -5074,6 +5294,41 @@ async def Integrated_Extract_domains(
 
         sweep_task = asyncio.create_task(_run_background_sweep())
 
+        # Concurrent Background 30-Minute Recheck for Failed TC Candidates
+        async def _run_periodic_tc_30min_recheck():
+            CHECK_INTERVAL_SEC = 1800  # 30 minutes
+            try:
+                while True:
+                    if is_5am_ist_cutoff() or os.path.exists(STOP_FILE) or is_pre_cutoff_window():
+                        break
+                    slept = 0
+                    while slept < CHECK_INTERVAL_SEC:
+                        if is_5am_ist_cutoff() or os.path.exists(STOP_FILE) or is_pre_cutoff_window():
+                            return
+                        await asyncio.sleep(5)
+                        slept += 5
+
+                    logging.info("⏰ [30-Min Periodic TC Recheck] Scanning for candidate rows...")
+                    try:
+                        await recheck_unprocessed_tc_failed_candidates(
+                            session=session,
+                            rows=pf_data,
+                            client=client,
+                            SHEET_ID=SHEET_ID,
+                            sheet_name=EXTRACTING_SHEET_NAME,
+                            start_row_num=start_row_num,
+                            sheet_write_queue=sheet_write_queue,
+                            domain_queue=domain_queue,
+                            active_waterfall_in_flight=active_waterfall_in_flight,
+                            batch_size=50
+                        )
+                    except Exception as e:
+                        logging.error(f"Error during 30-min TC recheck cycle: {e}")
+            except asyncio.CancelledError:
+                logging.debug("30-min periodic TC recheck task cancelled.")
+
+        tc_30min_recheck_task = asyncio.create_task(_run_periodic_tc_30min_recheck())
+
         # Launch decoupled Stage 1 (NIM Producer) and Stage 2 (Downstream Consumer) worker pools
         producer_tasks = [asyncio.create_task(nim_producer_worker()) for _ in range(num_nim_workers)]
         consumer_tasks = [asyncio.create_task(downstream_consumer_worker()) for _ in range(num_downstream_workers)]
@@ -5085,6 +5340,9 @@ async def Integrated_Extract_domains(
 
         close_task = asyncio.create_task(_close_queue_when_producers_done())
         await asyncio.gather(close_task, *consumer_tasks)
+
+        if not tc_30min_recheck_task.done():
+            tc_30min_recheck_task.cancel()
 
         # Ensure background sweep finishes before closing sheet write queue
         if not sweep_task.done():
