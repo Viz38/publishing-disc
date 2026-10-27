@@ -101,8 +101,9 @@ async def _daily_5am_ist_watchdog():
     """
     last_rotated_date = None
     last_cleared_date = None
+    last_auto_started_date = None
     FLUSH_FILE = os.path.join(BASE_DIR, ".flush_requested")
-    logger.info("🕒 Daily 11:30 PM IST Watchdog initialized (11:00 PM Pre-Cutoff Flush enabled).")
+    logger.info("🕒 Daily 11:30 PM IST Watchdog initialized (11:00 PM Pre-Cutoff Flush & Autonomous 11:35 PM Rollover enabled).")
     while True:
         try:
             now_ist = get_now_ist()
@@ -118,7 +119,7 @@ async def _daily_5am_ist_watchdog():
                     except Exception as fe:
                         logger.error(f"Error creating .flush_requested: {fe}")
 
-            # At 05:05 AM IST: Clear .flush_requested
+            # At 11:35 PM IST: Clear .flush_requested
             if (now_ist.hour == 23 and now_ist.minute >= 35) or now_ist.hour == 0:
                 if os.path.exists(FLUSH_FILE):
                     try:
@@ -195,6 +196,21 @@ async def _daily_5am_ist_watchdog():
                         logger.info(f"📦 11:30 PM IST Daily Cache Rotation complete. Archived to {archived}, fresh cache active.")
                     except Exception as re:
                         logger.error(f"Error during daily cache rotation: {re}")
+
+            # 4. Autonomous Nightly Rollover & Clear-and-Fetch Auto-Start (11:35 PM - 12:45 AM IST)
+            # Once 11:30 PM cutoff passes, if sheet is idle, auto-trigger clear-and-fetch autonomously
+            if last_auto_started_date != current_date_str:
+                is_rollover_window = (
+                    (now_ist.hour == 23 and now_ist.minute >= 35) or
+                    (now_ist.hour == 0 and now_ist.minute <= 45)
+                )
+                if is_rollover_window and state.get("status") == "idle" and not state.get("active_pid"):
+                    logger.info(
+                        f"🌟 [Autonomous Nightly Rollover] Auto-triggering clear-and-fetch for {current_date_str} "
+                        f"at {now_ist.strftime('%H:%M:%S')} IST..."
+                    )
+                    last_auto_started_date = current_date_str
+                    asyncio.create_task(run_clear_and_fetch_task(settings.CF_SHEET_ID))
 
             # Supervisor: check if active_pid died unexpectedly while state was running
             active_pid = state.get("active_pid")
@@ -570,7 +586,7 @@ def _get_status_response():
         "active_tc_keys": active_tc,
         "total_tc_keys": 30,
         "active_nim_keys": active_nim,
-        "total_nim_keys": 35,
+        "total_nim_keys": len([k for k in os.getenv("NIM_API_KEYS", "").split(",") if k.strip()]) or 19,
         "workers_per_phase": workers_phase,
         "cpu_percent": cpu_pct,
         "memory_percent": mem_pct,
