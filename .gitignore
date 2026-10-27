@@ -27,6 +27,8 @@ __pycache__/
 # Environment and sensitive keys
 .env*
 *.env
+*.bak
+.env.bak*
 !.env.example
 *.json
 *run_cache.json
