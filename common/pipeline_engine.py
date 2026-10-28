@@ -200,7 +200,18 @@ def update_progress_file(current: int, total: int, success: int, fail: int, phas
     live_scraped_count = scraped_count if scraped_count is not None else max(prev_prog.get('scraped_count', 0), live_tc_success)
     live_nim_count = nim_count if nim_count is not None else prev_prog.get('nim_count', 0)
     live_gemini_count = gemini_count if gemini_count is not None else prev_prog.get('gemini_count', 0)
-    live_tracxn_count = tracxn_count if tracxn_count is not None else max(prev_prog.get('tracxn_count', 0), current if current is not None else 0)
+
+    # If phase is a scanning/polling check, 'current' is the cursor of scanned rows, NOT completed movements!
+    is_scan_phase = any(k in (phase or "") for k in ("Review", "Ingestion", "Checking", "Waiting", "Polling"))
+    if is_scan_phase:
+        live_tracxn_count = tracxn_count if tracxn_count is not None else prev_prog.get('tracxn_count', 0)
+    else:
+        live_tracxn_count = tracxn_count if tracxn_count is not None else max(prev_prog.get('tracxn_count', 0), current if current is not None else 0)
+
+    # Cascading waterfall enforcement: Tracxn <= Gemini <= NIM
+    if live_nim_count > 0:
+        live_gemini_count = min(live_gemini_count, live_nim_count)
+        live_tracxn_count = min(live_tracxn_count, live_gemini_count)
 
     prog_data = {
         'current': live_tracxn_count,
@@ -5687,12 +5698,30 @@ async def Process_Review_Caller(client, mainheaders, SHEET_ID, EXTRACTING_SHEET_
     review_success = 0
     review_fail = 0
 
+    prev_prog = {}
+    if os.path.exists(PROGRESS_FILE):
+        try:
+            with open(PROGRESS_FILE, 'r') as f:
+                prev_prog = json.load(f)
+        except Exception:
+            pass
+    base_tracxn = prev_prog.get('tracxn_count', 0)
+    base_gemini = prev_prog.get('gemini_count', 0)
+    base_nim = prev_prog.get('nim_count', 0)
+    base_scraped = prev_prog.get('scraped_count', 0)
+    base_tc_success = prev_prog.get('tc_success', 0)
+
     update_progress_file(
         review_processed, total_review_domains, review_success, review_fail,
         phase="Phase 4: Review Write APIs",
         stage_details=f"Starting review processing of {total_review_domains} domains...",
         pending_tc=0,
-        mode=mode
+        mode=mode,
+        scraped_count=base_scraped,
+        tc_success=base_tc_success,
+        nim_count=base_nim,
+        gemini_count=base_gemini,
+        tracxn_count=base_tracxn + review_success
     )
 
     connector = aiohttp.TCPConnector(
@@ -5772,7 +5801,12 @@ async def Process_Review_Caller(client, mainheaders, SHEET_ID, EXTRACTING_SHEET_
                 phase="Phase 4: Review Write APIs",
                 stage_details=f"Batch {batch_index + 1}/{len(domains_batches)}: {review_processed}/{total_review_domains} domains checked",
                 pending_tc=0,
-                mode=mode
+                mode=mode,
+                scraped_count=base_scraped,
+                tc_success=base_tc_success,
+                nim_count=base_nim,
+                gemini_count=base_gemini,
+                tracxn_count=base_tracxn + review_success
             )
             logging.info(f"Completed review batch {batch_index + 1}/{len(domains_batches)} with {len(batch)} domains.")
             trim_memory()
@@ -5794,12 +5828,30 @@ async def Execute_Phase4_Ingestion_Write_APIs(client, mainheaders, SHEET_ID, EXT
     success = 0
     fail = 0
 
+    prev_prog = {}
+    if os.path.exists(PROGRESS_FILE):
+        try:
+            with open(PROGRESS_FILE, 'r') as f:
+                prev_prog = json.load(f)
+        except Exception:
+            pass
+    base_tracxn = prev_prog.get('tracxn_count', 0)
+    base_gemini = prev_prog.get('gemini_count', 0)
+    base_nim = prev_prog.get('nim_count', 0)
+    base_scraped = prev_prog.get('scraped_count', 0)
+    base_tc_success = prev_prog.get('tc_success', 0)
+
     update_progress_file(
         0, total, 0, 0,
         phase="Phase 4: Ingestion Write APIs",
         stage_details=f"Executing Tracxn Ingestion Write APIs for {total} rows...",
         pending_tc=0,
-        mode="phase4"
+        mode="phase4",
+        scraped_count=base_scraped,
+        tc_success=base_tc_success,
+        nim_count=base_nim,
+        gemini_count=base_gemini,
+        tracxn_count=base_tracxn
     )
 
     connector = aiohttp.TCPConnector(limit=100, limit_per_host=25, ttl_dns_cache=300)
@@ -5950,7 +6002,12 @@ async def Execute_Phase4_Ingestion_Write_APIs(client, mainheaders, SHEET_ID, EXT
                 phase="Phase 4: Ingestion Write APIs",
                 stage_details=f"Batch {b_idx + 1}/{len(batches)}: {processed}/{total} rows processed",
                 pending_tc=0,
-                mode="phase4"
+                mode="phase4",
+                scraped_count=base_scraped,
+                tc_success=base_tc_success,
+                nim_count=base_nim,
+                gemini_count=base_gemini,
+                tracxn_count=base_tracxn + success
             )
 
 # Async task wrapper
