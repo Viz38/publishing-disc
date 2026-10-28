@@ -5051,7 +5051,9 @@ async def Integrated_Extract_domains(
                             if is_wf_run and norm_d:
                                 active_waterfall_in_flight.discard(norm_d)
                     had_nim_at_start = (len(row) > nim_col_idx and safe_str(row[nim_col_idx]).strip().upper() in ("SUCCESS", "NO_CONTENT", "FAILED_NO_CONTENT"))
-                    if not had_nim_at_start:
+                    summary_st = safe_str(stage1_res.get("summary_status", "") if isinstance(stage1_res, dict) else "").strip().upper()
+                    has_nim_summary = bool(isinstance(stage1_res, dict) and stage1_res.get("summary") and len(safe_str(stage1_res.get("summary")).strip()) > 10)
+                    if not had_nim_at_start and (summary_st in ("SUCCESS", "NO_CONTENT", "FAILED_NO_CONTENT") or has_nim_summary):
                         nim_completed_count = min(total_domains, nim_completed_count + 1)
                     if isinstance(stage1_res, dict) and stage1_res.get("tc_status") in ("SUCCESS", "FAILED"):
                         had_tc_at_start = (len(row) > 23 and safe_str(row[23]).strip().upper() in ("SUCCESS", "FAILED")) or (len(row) > 29 and bool(safe_str(row[29]).strip()))
