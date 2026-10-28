@@ -838,7 +838,7 @@ async def Nvidia_API_ASYNC(promptMsg, token_rotator: NIMKeyManager = None, max_a
             {"role": "system", "content": system_instruction},
             {"role": "user", "content": str(promptMsg)}
         ],
-        "max_tokens": 450,
+        "max_tokens": 600,
         "temperature": 0.0,
         "stream": False
     }
@@ -847,7 +847,7 @@ async def Nvidia_API_ASYNC(promptMsg, token_rotator: NIMKeyManager = None, max_a
     original_user_content = str(promptMsg)
 
     ssl_ctx = False if _nim_use_unverified_ssl else get_nim_ssl_context()
-    timeout = aiohttp.ClientTimeout(total=40.0, sock_connect=5.0, sock_read=35.0)
+    timeout = aiohttp.ClientTimeout(total=55.0, sock_connect=10.0, sock_read=45.0)
 
     attempt = 0
     while attempt < max_attempts and (token_rotator is None or token_rotator.keys):
@@ -893,7 +893,7 @@ async def Nvidia_API_ASYNC(promptMsg, token_rotator: NIMKeyManager = None, max_a
                                 is_truncated = (finish_reason == "length") or (
                                     len(cleaned) > 20 and cleaned[-1] not in ('.', '!', '?', '"', "'", ')')
                                 )
-                                if is_truncated and payload.get("max_tokens", 450) < 1000:
+                                if is_truncated and payload.get("max_tokens", 600) < 1000:
                                     logging.warning(
                                         f"NIM summary potentially truncated (finish_reason={finish_reason}, ending='{cleaned[-15:]}'). "
                                         f"Triggering safety fallback with max_tokens: 1000..."
@@ -936,7 +936,7 @@ async def Nvidia_API_ASYNC(promptMsg, token_rotator: NIMKeyManager = None, max_a
                     elif resp.status == 400:
                         resp_text = await resp.text()
                         logging.warning(f"NIM 400 Bad Request: {resp_text[:120]}. Shortening context and retrying...")
-                        shorter = original_user_content[:15000] if len(original_user_content) > 15000 else original_user_content[:5000]
+                        shorter = original_user_content[:45000] if len(original_user_content) > 45000 else original_user_content[:15000]
                         payload["messages"][1]["content"] = shorter
                         await asyncio.sleep(0.5)
 
@@ -972,7 +972,7 @@ async def Nvidia_API_ASYNC(promptMsg, token_rotator: NIMKeyManager = None, max_a
                 await asyncio.sleep(backoff)
 
             except asyncio.TimeoutError:
-                logging.warning(f"NIM API timeout on key ...{api_key[-6:]} (>50s, attempt {attempt}/{max_attempts}). Applying brief 2s pause...")
+                logging.warning(f"NIM API timeout on key ...{api_key[-6:]} (>45s, attempt {attempt}/{max_attempts}). Applying brief 2s pause...")
                 if token_rotator and api_key:
                     token_rotator.mark_rate_limited(api_key, penalty_sec=2.0)
                 await asyncio.sleep(min(1.0, 0.2 + attempt * 0.2))
@@ -3063,8 +3063,8 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
     elif len(row) > 29 and safe_str(row[29]).strip():
         final_raw_data = safe_str(row[29]).strip()
 
-    if len(final_raw_data) > 15000:
-        final_raw_data = final_raw_data[:15000]
+    if len(final_raw_data) > 45000:
+        final_raw_data = final_raw_data[:45000]
 
     if not base_prompt_for_summery:
         base_prompt_for_summery = summery_base_prompt

@@ -489,7 +489,7 @@ class NIMKeyManager:
         self.max_in_flight_per_key: int = 2
         self._in_flight: Dict[str, int] = {}
         self._last_used: Dict[str, float] = {}
-        self._min_interval: float = 0.5  # seconds between calls on the SAME key
+        self._min_interval: float = 0.25  # seconds between calls on the SAME key
         self._lock = threading.Lock()
         self._async_lock: Optional[asyncio.Lock] = None
         self._async_condition: Optional[asyncio.Condition] = None
