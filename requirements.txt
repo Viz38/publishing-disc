@@ -1,0 +1,40 @@
+# Discovery Engine — Production Python Dependencies
+# Core Async HTTP & Web Framework
+aiohttp>=3.9.5
+fastapi>=0.110.0
+uvicorn[standard]>=0.28.0
+starlette>=0.36.0
+pydantic>=2.6.0
+pydantic-settings>=2.0.0
+
+# Google APIs & Spreadsheets
+gspread>=6.0.0
+gspread-asyncio>=2.0.0
+oauth2client>=4.1.3
+google-auth>=2.20.0
+google-auth-httplib2>=0.2.0
+google-auth-oauthlib>=1.2.0
+httplib2>=0.22.0
+
+# HTML Parsing & Web Scraping Fallback
+beautifulsoup4>=4.12.0
+soupsieve>=2.5.0
+lxml>=5.0.0
+requests>=2.31.0
+playwright>=1.40.0
+camoufox>=0.4.0
+scrapling>=0.4.0
+
+# Data Processing & Utilities
+pandas>=2.0.0
+numpy>=1.24.0
+openpyxl>=3.1.0
+psutil>=5.9.0
+pytz>=2023.3
+python-dotenv>=1.0.0
+pexpect>=4.8.0
+zstandard>=0.22.0
+pyyaml>=6.0.0
+websockets>=12.0.0
+tld>=0.13.0
+aiohappyeyeballs>=2.4.0
