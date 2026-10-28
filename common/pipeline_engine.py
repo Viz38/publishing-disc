@@ -2011,7 +2011,9 @@ async def get_api_result_async(payload=None, api_url="https://platform.tracxn.co
 
     try:
         for attempt in range(max_retries):
-            if token and str(token).strip() and token != Tracxn_API_Token:
+            if attempt > 0 and 'TRACXN_KEY_MANAGER' in globals() and TRACXN_KEY_MANAGER is not None:
+                tok = await TRACXN_KEY_MANAGER.acquire() if hasattr(TRACXN_KEY_MANAGER, "acquire") else TRACXN_KEY_MANAGER.get_token()
+            elif token and str(token).strip() and token != Tracxn_API_Token:
                 tok = str(token).strip()
             elif 'TRACXN_KEY_MANAGER' in globals() and TRACXN_KEY_MANAGER is not None:
                 tok = await TRACXN_KEY_MANAGER.acquire() if hasattr(TRACXN_KEY_MANAGER, "acquire") else TRACXN_KEY_MANAGER.get_token()
@@ -2032,34 +2034,39 @@ async def get_api_result_async(payload=None, api_url="https://platform.tracxn.co
             try:
                 if method.upper() == 'POST':
                     async with active_sess.post(api_url, json=payload, headers=headers) as response:
-                        if response.status in (401, 403, 429) and 'TRACXN_KEY_MANAGER' in globals():
+                        if response.status in (401, 403, 429, 502, 503, 504) and 'TRACXN_KEY_MANAGER' in globals():
                             TRACXN_KEY_MANAGER.handle_http_error(tok, response.status)
                             if attempt < max_retries - 1:
+                                await asyncio.sleep(1.0 * (2 ** attempt))
                                 continue
                         response.raise_for_status()
                         return await response.json()
                 elif method.upper() == 'PUT':
                     async with active_sess.put(api_url, json=payload, headers=headers) as response:
-                        if response.status in (401, 403, 429) and 'TRACXN_KEY_MANAGER' in globals():
+                        if response.status in (401, 403, 429, 502, 503, 504) and 'TRACXN_KEY_MANAGER' in globals():
                             TRACXN_KEY_MANAGER.handle_http_error(tok, response.status)
                             if attempt < max_retries - 1:
+                                await asyncio.sleep(1.0 * (2 ** attempt))
                                 continue
                         response.raise_for_status()
                         return await response.json()
                 else:
                     raise ValueError("Invalid HTTP method. Use 'POST' or 'PUT'.")
             except aiohttp.ClientResponseError as e:
-                if e.status in (401, 403, 429) and 'TRACXN_KEY_MANAGER' in globals():
+                if e.status in (401, 403, 429, 502, 503, 504) and 'TRACXN_KEY_MANAGER' in globals():
                     TRACXN_KEY_MANAGER.handle_http_error(tok, e.status)
                     if attempt < max_retries - 1:
+                        await asyncio.sleep(1.0 * (2 ** attempt))
                         continue
                 print(f"Error in getting API result (attempt {attempt+1}): {e}")
                 if attempt == max_retries - 1:
                     return {'error': str(e)}
             except aiohttp.ClientError as e:
                 print(f"Network error in getting API result (attempt {attempt+1}): {e}")
-                if attempt == max_retries - 1:
-                    return {'error': str(e)}
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(1.0 * (2 ** attempt))
+                    continue
+                return {'error': str(e)}
         return {'error': 'Max retries exceeded'}
     finally:
         if close_sess:
@@ -3787,8 +3794,10 @@ async def Integrated_Process_domain(
                 created_timestamp = time.time()
             home_body = ""
 
-            if existing_raw_data:
+            existing_raw_data = safe_str(rowData[29]).strip() if len(rowData) > 29 else ""
+            if existing_raw_data and len(existing_raw_data) >= 50 and existing_raw_data != "['Website is not working.']":
                 home_body = existing_raw_data
+                scrappingBeautySoup = existing_raw_data
                 status_code = ""
             elif tc_error_code or tc_error_reason:
                 # Per architectural rule: cases with terminal TC error code/reason in Col AG/AH
