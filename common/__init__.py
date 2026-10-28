@@ -11,6 +11,12 @@ from .waterfall_scraper import (
     is_permanent_network_error,
     is_parked_domain,
 )
+from .raw_data_cleaner import (
+    clean_tc_markdown,
+    strip_tc_header_nav,
+    clean_waterfall_html_dom,
+    clean_waterfall_text,
+)
 from .local_cache import (
     LocalSheetCache,
     ExecutionTracker,
@@ -45,6 +51,10 @@ __all__ = [
     "clean_html_to_text",
     "is_permanent_network_error",
     "is_parked_domain",
+    "clean_tc_markdown",
+    "strip_tc_header_nav",
+    "clean_waterfall_html_dom",
+    "clean_waterfall_text",
     "LocalSheetCache",
     "ExecutionTracker",
     "is_5am_ist_cutoff",

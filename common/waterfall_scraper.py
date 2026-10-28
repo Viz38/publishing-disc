@@ -5,6 +5,7 @@ from typing import List, Optional, Tuple
 from urllib.parse import urljoin, urlparse, urldefrag
 import aiohttp
 from bs4 import BeautifulSoup
+from common.raw_data_cleaner import clean_waterfall_html_dom, clean_waterfall_text
 
 logger = logging.getLogger(__name__)
 
@@ -41,13 +42,14 @@ def clean_html_to_text(html: str, base_url: str) -> Tuple[str, List[str]]:
     except Exception:
         return "", []
 
-    # Strip script, style, navigation, headers, footers, forms, and decorative SVGs
-    for tag in soup(["script", "style", "noscript", "header", "footer", "nav", "svg", "canvas", "form"]):
-        tag.decompose()
+    # Advanced DOM-level noise pruning (semantic tags + noise classes/IDs/modals/banners)
+    clean_waterfall_html_dom(soup)
 
     # Purge any NUL characters and clean whitespace
     text = soup.get_text(separator=" ", strip=True).replace("\x00", "")
     text = re.sub(r"\s+", " ", text).strip()
+    # Apply text post-filtering for UI artifacts and footer legal text
+    text = clean_waterfall_text(text)
 
     links: List[str] = []
     base_netloc = urlparse(base_url).netloc
@@ -335,24 +337,5 @@ class WaterfallScraper:
             logger.info(f"Domain {domain_clean} identified as parked domain.")
             return "", "PARKED_DOMAIN"
 
-        accumulated_text = main_text
-
-        # If homepage text is sparse (< 1000 chars), fetch up to 1 high-value subpage (about / company)
-        if len(main_text) < 1000 and inner_links:
-            sub_url = None
-            for link in inner_links:
-                path = urlparse(link).path.lower()
-                if any(k in path for k in ("about", "company", "who-we-are", "overview")):
-                    sub_url = link
-                    break
-            if sub_url:
-                sub_html, _, _ = await self._try_http(session, sub_url, timeout_sec=6.0)
-                if not sub_html:
-                    sub_html, _ = await self._try_scrapling(sub_url, timeout_sec=8.0)
-                if sub_html:
-                    sub_text, _ = clean_html_to_text(sub_html, sub_url)
-                    if sub_text:
-                        accumulated_text = f"{accumulated_text}\n\n{sub_text}".strip()
-
-        # Bounded cell text length safe for Google Sheets
-        return accumulated_text[: self.max_chars], method
+        # Strict homepage-only scraping invariant (no subpage crawling)
+        return main_text[: self.max_chars], method
