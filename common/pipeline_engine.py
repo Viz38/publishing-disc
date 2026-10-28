@@ -41,6 +41,7 @@ from common import (
     is_57_col_schema,
     is_valid_s3_url,
     bulk_sync_cache_to_sheet,
+    clean_tc_markdown,
 )
 
 import asyncio
@@ -3066,12 +3067,15 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
     if len(final_raw_data) > 45000:
         final_raw_data = final_raw_data[:45000]
 
+    # Apply dual-heuristic cleaning to strip markdown URL bloat, review carousels, cookie banners, and footers
+    clean_prompt_data = clean_tc_markdown(final_raw_data) if final_raw_data else ""
+
     if not base_prompt_for_summery:
         base_prompt_for_summery = summery_base_prompt
     else:
         base_prompt_for_summery = summery_base_prompt
 
-    input_data_summery = final_raw_data  # sheet.getRange(i+1,1).getValue();
+    input_data_summery = clean_prompt_data[:45000] if clean_prompt_data else final_raw_data
     output_data_summery = ""
 
 
@@ -3110,7 +3114,7 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
         logging.info(f"Dead domain content confirmed for {domain}. Marking summary status NO_CONTENT.")
     elif input_data_summery:
         # Check Exact Content SHA-256 Deduplication Cache (instant <1ms hit for parked/default pages)
-        raw_norm = final_raw_data.strip()
+        raw_norm = (clean_prompt_data or final_raw_data).strip()
         raw_hash = hashlib.sha256(raw_norm.encode("utf-8")).hexdigest()
         cached_summary = get_cached_nim_summary(raw_hash)
         if cached_summary:
