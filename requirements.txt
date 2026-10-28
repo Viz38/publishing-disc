@@ -38,3 +38,4 @@ pyyaml>=6.0.0
 websockets>=12.0.0
 tld>=0.13.0
 aiohappyeyeballs>=2.4.0
+
