@@ -557,6 +557,12 @@ def _get_status_response():
     if tracxn_count is not None and (gemini_count is None or tracxn_count > gemini_count):
         gemini_count = tracxn_count
 
+    # Enforce cascading waterfall ceiling: Tracxn <= Gemini <= NIM
+    if nim_count is not None and nim_count > 0:
+        gemini_count = min(gemini_count if gemini_count is not None else 0, nim_count)
+        tracxn_count = min(tracxn_count if tracxn_count is not None else 0, gemini_count)
+        completed_count = tracxn_count
+
     # Bounding: each stage count must not exceed total_val
     if total_val >= 1000:
         scraped_count = min(scraped_count if scraped_count is not None else 0, total_val)
