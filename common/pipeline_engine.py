@@ -49,6 +49,8 @@ import gspread_asyncio
 from oauth2client.service_account import ServiceAccountCredentials
 from bs4 import BeautifulSoup
 import logging
+import hashlib
+import threading
 import re
 import ssl
 import time
@@ -796,6 +798,24 @@ def sanitize_summary_output(raw_output: str) -> str:
 
 _nim_use_unverified_ssl = False
 
+# Exact Content SHA-256 Deduplication Cache for identical/parked pages
+_NIM_CONTENT_HASH_CACHE: Dict[str, str] = {}
+_NIM_CACHE_LOCK = threading.Lock()
+
+def get_cached_nim_summary(content_hash: str) -> Optional[str]:
+    with _NIM_CACHE_LOCK:
+        return _NIM_CONTENT_HASH_CACHE.get(content_hash)
+
+def store_cached_nim_summary(content_hash: str, summary: str, max_entries: int = 5000) -> None:
+    if not content_hash or not summary:
+        return
+    with _NIM_CACHE_LOCK:
+        if len(_NIM_CONTENT_HASH_CACHE) >= max_entries:
+            keys_to_remove = list(_NIM_CONTENT_HASH_CACHE.keys())[:500]
+            for k in keys_to_remove:
+                _NIM_CONTENT_HASH_CACHE.pop(k, None)
+        _NIM_CONTENT_HASH_CACHE[content_hash] = summary
+
 async def Nvidia_API_ASYNC(promptMsg, token_rotator: NIMKeyManager = None, max_attempts: int = None, session: aiohttp.ClientSession = None):
     global _nim_use_unverified_ssl
     if is_pre_cutoff_window() or is_5am_ist_cutoff():
@@ -818,7 +838,7 @@ async def Nvidia_API_ASYNC(promptMsg, token_rotator: NIMKeyManager = None, max_a
             {"role": "system", "content": system_instruction},
             {"role": "user", "content": str(promptMsg)}
         ],
-        "max_tokens": 1000,
+        "max_tokens": 450,
         "temperature": 0.0,
         "stream": False
     }
@@ -863,10 +883,25 @@ async def Nvidia_API_ASYNC(promptMsg, token_rotator: NIMKeyManager = None, max_a
                         data = await resp.json()
                         choices = data.get("choices", [])
                         if choices:
-                            msg = choices[0].get("message", {})
+                            choice = choices[0]
+                            finish_reason = choice.get("finish_reason", "stop")
+                            msg = choice.get("message", {})
                             content = msg.get("content") or msg.get("reasoning_content") or ""
                             cleaned = sanitize_summary_output(content)
                             if cleaned and "below is the website extraction" not in cleaned.lower():
+                                # Zero-Data-Loss Safety Gate: verify summary is complete and not truncated
+                                is_truncated = (finish_reason == "length") or (
+                                    len(cleaned) > 20 and cleaned[-1] not in ('.', '!', '?', '"', "'", ')')
+                                )
+                                if is_truncated and payload.get("max_tokens", 450) < 1000:
+                                    logging.warning(
+                                        f"NIM summary potentially truncated (finish_reason={finish_reason}, ending='{cleaned[-15:]}'). "
+                                        f"Triggering safety fallback with max_tokens: 1000..."
+                                    )
+                                    payload["max_tokens"] = 1000
+                                    attempt -= 1  # Safety upgrade does not burn a retry attempt
+                                    await asyncio.sleep(0.2)
+                                    continue
                                 return cleaned
                         # Empty/refused response -> retry with same temperature (always 0.0)
                         logging.warning(f"Empty/incomplete NIM response (attempt {attempt}/{max_attempts}), key ...{api_key[-6:]}")
@@ -886,12 +921,12 @@ async def Nvidia_API_ASYNC(promptMsg, token_rotator: NIMKeyManager = None, max_a
                     # 429 Rate Limited
                     elif resp.status == 429:
                         retry_after = resp.headers.get("Retry-After")
-                        cooldown = 15.0
+                        cooldown = 2.5
                         if retry_after:
                             try:
                                 cooldown = float(retry_after)
                             except ValueError:
-                                cooldown = 15.0
+                                cooldown = 2.5
                         if token_rotator:
                             token_rotator.mark_rate_limited(api_key, cooldown_seconds=cooldown)
                         logging.info(f"NIM 429 rate limit on key ...{api_key[-6:]} (cooldown: {cooldown}s). Rotating (attempt {attempt})...")
@@ -3074,50 +3109,60 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
         summary_status = "NO_CONTENT"
         logging.info(f"Dead domain content confirmed for {domain}. Marking summary status NO_CONTENT.")
     elif input_data_summery:
-        input_data_summery = Utility_Replace_Response(input_data_summery, base_prompt_for_summery, replacable_char)
-        input_data_summery = Utility_Replace_Response(domain, input_data_summery, replacable_char_Domain)
-
-        try:
-            # 1. Primary Attempt: NVIDIA API Call (4 retries with key rotation)
-            output_data_summery = await Nvidia_API_ASYNC(input_data_summery, token_rotator=token_rotator, max_attempts=4, session=session)
-            
-            # 2. Fallback Attempt: Gemini API Call if NVIDIA exhausted retries
-            if not output_data_summery:
-                logging.info(f"Nvidia API exhausted retries for {domain}. Falling back to Gemini API...")
-                
-                try:
-                    gemini_res = await Gemini_API_ASYNC(input_data_summery, session=session)
-                    
-                    # Extract Gemini metadata and output
-                    if isinstance(gemini_res, dict):
-                        summary_input_Token = gemini_res.get("input_Token", "")
-                        summary_thought_Token = gemini_res.get("thinking_Token", "")
-                        summary_cache_Token = gemini_res.get("cached_Token", "")
-                        summary_output_Token = gemini_res.get("output_Token", "")
-                        summary_total_Token = gemini_res.get("total_Token", "")
-                        summary_llm_model = gemini_res.get("model", "")
-                        output_data_summery = gemini_res.get("output", "")
-                    else:
-                        output_data_summery = ""
-
-                except Exception as e:
-                    logging.error(f"Gemini API (Summary Fallback) failed: {e}")
-                    output_data_summery = ""
-                    summary_input_Token = ""
-                    summary_thought_Token = ""
-                    summary_cache_Token = ""
-                    summary_output_Token = ""
-                    summary_total_Token = ""
-                    summary_llm_model = ""
-
-        except Exception as error:
-            logging.error(f"Issue during Summary extraction pipeline for domain {domain}: {error}")
-            output_data_summery = ""
-
-        if output_data_summery and output_data_summery.strip():
+        # Check Exact Content SHA-256 Deduplication Cache (instant <1ms hit for parked/default pages)
+        raw_norm = final_raw_data.strip()
+        raw_hash = hashlib.sha256(raw_norm.encode("utf-8")).hexdigest()
+        cached_summary = get_cached_nim_summary(raw_hash)
+        if cached_summary:
+            output_data_summery = cached_summary
             summary_status = "SUCCESS"
+            logging.info(f"⚡ [NIM SHA-256 Hit] Reused cached summary for {domain} (hash ...{raw_hash[-8:]}) in <1ms.")
         else:
-            summary_status = "FAILED"
+            input_data_summery = Utility_Replace_Response(input_data_summery, base_prompt_for_summery, replacable_char)
+            input_data_summery = Utility_Replace_Response(domain, input_data_summery, replacable_char_Domain)
+
+            try:
+                # 1. Primary Attempt: NVIDIA API Call (4 retries with key rotation)
+                output_data_summery = await Nvidia_API_ASYNC(input_data_summery, token_rotator=token_rotator, max_attempts=4, session=session)
+                
+                # 2. Fallback Attempt: Gemini API Call if NVIDIA exhausted retries
+                if not output_data_summery:
+                    logging.info(f"Nvidia API exhausted retries for {domain}. Falling back to Gemini API...")
+                    
+                    try:
+                        gemini_res = await Gemini_API_ASYNC(input_data_summery, session=session)
+                        
+                        # Extract Gemini metadata and output
+                        if isinstance(gemini_res, dict):
+                            summary_input_Token = gemini_res.get("input_Token", "")
+                            summary_thought_Token = gemini_res.get("thinking_Token", "")
+                            summary_cache_Token = gemini_res.get("cached_Token", "")
+                            summary_output_Token = gemini_res.get("output_Token", "")
+                            summary_total_Token = gemini_res.get("total_Token", "")
+                            summary_llm_model = gemini_res.get("model", "")
+                            output_data_summery = gemini_res.get("output", "")
+                        else:
+                            output_data_summery = ""
+
+                    except Exception as e:
+                        logging.error(f"Gemini API (Summary Fallback) failed: {e}")
+                        output_data_summery = ""
+                        summary_input_Token = ""
+                        summary_thought_Token = ""
+                        summary_cache_Token = ""
+                        summary_output_Token = ""
+                        summary_total_Token = ""
+                        summary_llm_model = ""
+
+            except Exception as error:
+                logging.error(f"Issue during Summary extraction pipeline for domain {domain}: {error}")
+                output_data_summery = ""
+
+            if output_data_summery and output_data_summery.strip():
+                summary_status = "SUCCESS"
+                store_cached_nim_summary(raw_hash, output_data_summery)
+            else:
+                summary_status = "FAILED"
 
     if mode == "phase2":
         output_data = [
@@ -4888,10 +4933,10 @@ async def Integrated_Extract_domains(
         writer_task = asyncio.create_task(sheet_writer_worker())
 
         # Decoupled SEDA Two-Stage Architecture
-        # Stage 1: Fast Dedicated NIM Summarizer Producer Pool (leases keys at maximum 35-40 RPM rate)
+        # Stage 1: Fast Dedicated NIM Summarizer Producer Pool (2 in-flight requests per sharded key)
         # Stage 2: Paced Gemini Predictions & Tracxn Movements Consumer Pool (consumes precomputed summaries)
         sharded_key_count = token_rotator.get_total_keys() if token_rotator else 17
-        default_nim_workers = max(20, sharded_key_count)
+        default_nim_workers = max(2, sharded_key_count * 2)
         num_nim_workers = min(int(os.getenv("MAX_NIM_WORKERS", str(default_nim_workers))), max(1, len(pf_data)))
         num_downstream_workers = min(MAX_WORKERS, max(1, len(pf_data)))
         nim_semaphore = asyncio.Semaphore(num_nim_workers)

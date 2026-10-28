@@ -540,14 +540,14 @@ class NIMKeyManager:
     def total_tokens(self) -> int:
         return self.get_total_keys()
 
-    def mark_rate_limited(self, key: str, penalty_sec: float = 3.0, cooldown_seconds: Optional[float] = None) -> None:
+    def mark_rate_limited(self, key: str, penalty_sec: float = 2.5, cooldown_seconds: Optional[float] = None) -> None:
         sec = cooldown_seconds if cooldown_seconds is not None else penalty_sec
         if key and key not in self.invalid_keys:
             with self._lock:
                 self._penalties[key] = time.time() + sec
             logger.warning(f"NIM key ...{key[-6:]} penalized for {sec:.1f}s")
 
-    def penalize_key(self, key: str, cooldown_seconds: float = 3.0) -> None:
+    def penalize_key(self, key: str, cooldown_seconds: float = 2.5) -> None:
         self.mark_rate_limited(key, penalty_sec=cooldown_seconds)
 
     def mark_invalid(self, key: str) -> None:
