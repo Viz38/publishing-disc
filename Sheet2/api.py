@@ -481,8 +481,11 @@ def _get_status_response():
         sharded = get_sharded_nim_keys(shard_idx, total_sheets=4, keys=nim_keys)
         active_nim = len(sharded) if sharded else 8
     
-    if "Phase 1" in curr_phase or "Crawl" in curr_phase or state["status"] in ("running", "stopping"):
-        workers_phase = "16 workers (14 domain + 1 TC sweep + 1 writer)"
+    active_workers_count = prog.get("active_workers", 48 if state["status"] in ("running", "stopping") else 0)
+    nim_w = prog.get("nim_workers", 16)
+    down_w = prog.get("downstream_workers", 32)
+    if state["status"] in ("running", "stopping"):
+        workers_phase = f"{active_workers_count} workers ({nim_w} NIM + {down_w} Gemini/Tracxn)"
     elif "Review" in curr_phase or "Phase 3" in curr_phase:
         workers_phase = "14 review workers"
     elif "Phase 4" in curr_phase or "Ingestion" in curr_phase:
@@ -551,7 +554,7 @@ def _get_status_response():
         else:
             scraped_count = tc_success if tc_success is not None else (success_val if success_val is not None else 0)
 
-    completed_count = tracxn_count if tracxn_count is not None else current_val
+    completed_count = prog.get("fully_completed", tracxn_count if tracxn_count is not None else current_val)
 
     # Any fully completed tracxn domain must have completed Gemini predictions
     if tracxn_count is not None and (gemini_count is None or tracxn_count > gemini_count):
@@ -561,7 +564,7 @@ def _get_status_response():
     if nim_count is not None and nim_count > 0:
         gemini_count = min(gemini_count if gemini_count is not None else 0, nim_count)
         tracxn_count = min(tracxn_count if tracxn_count is not None else 0, gemini_count)
-        completed_count = tracxn_count
+        completed_count = min(completed_count, tracxn_count)
 
     # Bounding: each stage count must not exceed total_val
     if total_val >= 1000:
@@ -570,7 +573,7 @@ def _get_status_response():
         nim_count = min(nim_count if nim_count is not None else 0, total_val)
         gemini_count = min(gemini_count if gemini_count is not None else 0, total_val)
         tracxn_count = min(tracxn_count if tracxn_count is not None else 0, total_val)
-        completed_count = tracxn_count
+        completed_count = min(completed_count, total_val)
 
     return {
         "status": current_status,
@@ -585,15 +588,18 @@ def _get_status_response():
         "nim_count": nim_count,
         "gemini_count": gemini_count,
         "tracxn_count": completed_count,
+        "fully_completed": completed_count,
+        "pf_completed": prog.get("pf_completed", completed_count),
         "phase": curr_phase,
         "stage_details": stage_details,
         "pending_tc": prog.get("pending_tc", 0),
         "pipeline_mode": prog.get("mode", ""),
         "active_tc_keys": active_tc,
-        "total_tc_keys": 30,
+        "total_tc_keys": prog.get("total_tc_keys", 13),
         "active_nim_keys": active_nim,
-        "total_nim_keys": len([k for k in os.getenv("NIM_API_KEYS", "").split(",") if k.strip()]) or 19,
+        "total_nim_keys": len([k for k in os.getenv("NIM_API_KEYS", "").split(",") if k.strip()]) or 37,
         "workers_per_phase": workers_phase,
+        "active_workers": active_workers_count,
         "cpu_percent": cpu_pct,
         "memory_percent": mem_pct,
         "device_health": dev_health,
