@@ -427,11 +427,33 @@ CHECK_STRINGS = ["403 Forbidden", "Not Acceptable", "Coming Soon", "Javascript E
 CHECK_EXACT = "Website is not working."
 
 
-# valid_dates = [datetime.now().strftime("%Y-%m-%d"), (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")]
-valid_dates = [
-    datetime.datetime.now().strftime("%Y-%m-%d"), 
-    (datetime.datetime.now() - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
-]
+class GeminiCacheError(RuntimeError):
+    """Raised when a cached Gemini request fails (expired cache, 403, 404, or unresolvable error)."""
+    pass
+
+def calculate_dynamic_downstream_workers(num_nim_workers: int, queue_size: int = 0, max_allowed: int = 50) -> int:
+    """
+    Dynamically sizes Gemini downstream consumer workers to match or exceed NIM production.
+    - Each NIM summary takes ~2s while Gemini downstream takes ~4s (IF + Feed calls).
+    - Concurrency must be at least 2x NIM workers to match throughput.
+    - If a backlog is detected (queue_size > 20), burst to max_allowed to drain rapidly.
+    """
+    if queue_size > 20:
+        return max_allowed
+    target = max(num_nim_workers * 2, 30)
+    return min(max_allowed, target)
+
+def get_valid_dates():
+    """Dynamically returns valid dates [today, yesterday, tomorrow] to handle midnight transitions."""
+    now = datetime.datetime.now()
+    return [
+        now.strftime("%Y-%m-%d"), 
+        (now - datetime.timedelta(days=1)).strftime("%Y-%m-%d"),
+        (now + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+    ]
+
+# valid_dates list kept for backward compatibility; dynamically refreshed via get_valid_dates()
+valid_dates = get_valid_dates()
 
 def safe_str(val):
     """Utility helper to safely handle None values when doing string operations."""
@@ -1146,7 +1168,7 @@ async def Gemini_API_ASYNC(promptMsg, Gemini_Token=GEMINI_TOKEN, timeout_limit=6
                 pass
     
 
-async def Gemini_API_WITH_CACHE(user_input_msg, Gemini_Token, cache_name, timeout_limit=60, session: aiohttp.ClientSession = None):
+async def Gemini_API_WITH_CACHE(user_input_msg, Gemini_Token, cache_name, timeout_limit=60, session: aiohttp.ClientSession = None, max_retries: int = 3):
     # Model must match the one used to create the cache
     model_id = "gemini-3.1-flash-lite"
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent?key={Gemini_Token}"
@@ -1173,8 +1195,6 @@ async def Gemini_API_WITH_CACHE(user_input_msg, Gemini_Token, cache_name, timeou
     }
 
     headers = {"Content-Type": "application/json"}
-
-    # Define how long to wait for the API to complete
     timeout = aiohttp.ClientTimeout(total=timeout_limit)
     
     close_sess = False
@@ -1183,27 +1203,49 @@ async def Gemini_API_WITH_CACHE(user_input_msg, Gemini_Token, cache_name, timeou
         active_sess = aiohttp.ClientSession(timeout=timeout)
         close_sess = True
     try:
-        try:
-            # The 'await' here ensures the process holds until completion
-            async with active_sess.post(url, headers=headers, json=formData, timeout=timeout) as response:
-                if response.status == 200:
-                    json_res = await response.json()
+        for attempt in range(1, max_retries + 1):
+            try:
+                async with active_sess.post(url, headers=headers, json=formData, timeout=timeout) as response:
+                    if response.status == 200:
+                        json_res = await response.json()
+                        candidates = json_res.get("candidates", [{}])
+                        output_text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "") if candidates else ""
+                        if not output_text:
+                            raise GeminiCacheError(f"Empty candidate text returned from Gemini Cache: {cache_name}")
 
-                    resultMap["output"]    = json_res.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
-                    resultMap["input_Token"]    = json_res.get("usageMetadata", {}).get("promptTokenCount", "")
-                    resultMap["thinking_Token"]    = json_res.get("usageMetadata", {}).get("thoughtsTokenCount", "")
-                    resultMap["cached_Token"]    = json_res.get("usageMetadata", {}).get("cachedContentTokenCount", "")
-                    resultMap["output_Token"]    = json_res.get("usageMetadata", {}).get("candidatesTokenCount", "")
-                    resultMap["total_Token"]    = json_res.get("usageMetadata", {}).get("totalTokenCount", "")
-                    resultMap["model"]    = json_res.get("modelVersion", "")
-
-                    return resultMap
-                else:
-                    print(f"? Call Error: {await response.text()}")
-                    return resultMap
-        except Exception as e:
-            print(f"Gemini_API_WITH_CACHE error: {e}")
-            return resultMap
+                        resultMap["output"] = output_text
+                        resultMap["input_Token"] = json_res.get("usageMetadata", {}).get("promptTokenCount", "")
+                        resultMap["thinking_Token"] = json_res.get("usageMetadata", {}).get("thoughtsTokenCount", "")
+                        resultMap["cached_Token"] = json_res.get("usageMetadata", {}).get("cachedContentTokenCount", "")
+                        resultMap["output_Token"] = json_res.get("usageMetadata", {}).get("candidatesTokenCount", "")
+                        resultMap["total_Token"] = json_res.get("usageMetadata", {}).get("totalTokenCount", "")
+                        resultMap["model"] = json_res.get("modelVersion", "")
+                        return resultMap
+                    
+                    elif response.status in (429, 500, 502, 503, 504):
+                        err_text = await response.text()
+                        if attempt < max_retries:
+                            backoff = min(8.0, 1.5 * (2 ** (attempt - 1)))
+                            logging.warning(f"⚠️ Gemini Cached Call HTTP {response.status} (attempt {attempt}/{max_retries}). Retrying in {backoff:.1f}s...")
+                            await asyncio.sleep(backoff)
+                            continue
+                        raise GeminiCacheError(f"Gemini Cache transient error exhausted {max_retries} retries: HTTP {response.status} - {err_text[:200]}")
+                    
+                    else:
+                        # 400, 403 (expired/permission), 404 (not found) -> terminal for this cache ID
+                        err_text = await response.text()
+                        raise GeminiCacheError(f"Gemini Cache Call Failed: HTTP {response.status} - {err_text[:200]}")
+            except GeminiCacheError:
+                raise
+            except (aiohttp.ClientError, asyncio.TimeoutError) as net_err:
+                if attempt < max_retries:
+                    backoff = min(6.0, 1.0 * (2 ** (attempt - 1)))
+                    logging.warning(f"⚠️ Gemini Cached Call network error ({net_err}). Retrying in {backoff:.1f}s (attempt {attempt}/{max_retries})...")
+                    await asyncio.sleep(backoff)
+                    continue
+                raise GeminiCacheError(f"Gemini Cache network error after {max_retries} attempts: {net_err}")
+            except Exception as ex:
+                raise GeminiCacheError(f"Gemini Cache unexpected error: {ex}")
     finally:
         if close_sess and active_sess:
             await active_sess.close()
@@ -3250,12 +3292,24 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
                     # output_data_if = await Gemini_API_WITH_CACHE Gemini_API_ASYNC(input_data_for_if)
                     logging.debug(f"IF Prediction cache check for {domain}: token_match={GEMINI_TOKEN == token_IF_Prediction}")
 
-                    if GEMINI_TOKEN == token_IF_Prediction and clean_date(date_IF_Prediction) in valid_dates and clean_date(exp_date_IF_Prediction) and status_IF_Prediction == "Sucess":
+                    current_valid_dates = get_valid_dates()
+                    use_cache = (
+                        GEMINI_TOKEN == token_IF_Prediction 
+                        and clean_date(date_IF_Prediction) in current_valid_dates 
+                        and status_IF_Prediction == "Sucess"
+                        and cache_id_IF_Prediction
+                    )
+                    if use_cache:
                         try:
                             output_data_if = await Gemini_API_WITH_CACHE(output_data_summery, GEMINI_TOKEN, cache_id_IF_Prediction, session=session)
-                        except Exception:
+                        except Exception as e_cache:
+                            logging.warning(f"⚠️ IF Prediction Cache failed ({e_cache}). Seamlessly falling back to direct Gemini_API_ASYNC for {domain}...")
                             output_data_if = await Gemini_API_ASYNC(input_data_for_if, GEMINI_TOKEN, session=session)
                     else:
+                        output_data_if = await Gemini_API_ASYNC(input_data_for_if, GEMINI_TOKEN, session=session)
+
+                    if isinstance(output_data_if, dict) and not output_data_if.get("output"):
+                        logging.warning(f"⚠️ IF Prediction output empty. Retrying direct Gemini_API_ASYNC for {domain}...")
                         output_data_if = await Gemini_API_ASYNC(input_data_for_if, GEMINI_TOKEN, session=session)
 
                     # output_data_if = await Gemini_API_WITH_CACHE(output_data_summery,GEMINI_TOKEN,cache_id_IF_Prediction)
@@ -3511,16 +3565,25 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
         try:
             try:
                 # output_data_feed = Gemini_API(input_data_for_feed)
-                if GEMINI_TOKEN == token_for_feed_cache_id and clean_date(date_prompt_for_feed_cache_id) in valid_dates and  status_for_feed_cache_id == "Sucess" :
-                    try :
+                current_valid_dates = get_valid_dates()
+                use_feed_cache = (
+                    GEMINI_TOKEN == token_for_feed_cache_id 
+                    and clean_date(date_prompt_for_feed_cache_id) in current_valid_dates 
+                    and status_for_feed_cache_id == "Sucess"
+                    and base_prompt_for_feed_cache_id
+                )
+                if use_feed_cache:
+                    try:
                         output_data_feed = await Gemini_API_WITH_CACHE(input_sumry_for_feed, GEMINI_TOKEN, base_prompt_for_feed_cache_id, session=session)
-                    except :
-                        print("**** LLM Feed entered in Normal Call, As Error Found in Cache ****")
-                        output_data_feed = await Gemini_API_ASYNC(input_data_for_feed,GEMINI_TOKEN)
+                    except Exception as e_fcache:
+                        logging.warning(f"⚠️ Feed Prediction Cache failed ({e_fcache}). Seamlessly falling back to direct Gemini_API_ASYNC for {domain}...")
+                        output_data_feed = await Gemini_API_ASYNC(input_data_for_feed, GEMINI_TOKEN, session=session)
+                else:
+                    output_data_feed = await Gemini_API_ASYNC(input_data_for_feed, GEMINI_TOKEN, session=session)
 
-                else :
-                    print("**** LLM Feed entered in Normal Call, As some mismatch ****")
-                    output_data_feed = await Gemini_API_ASYNC(input_data_for_feed,GEMINI_TOKEN)
+                if isinstance(output_data_feed, dict) and not output_data_feed.get("output"):
+                    logging.warning(f"⚠️ Feed Prediction output empty. Retrying direct Gemini_API_ASYNC for {domain}...")
+                    output_data_feed = await Gemini_API_ASYNC(input_data_for_feed, GEMINI_TOKEN, session=session)
 
                 if isinstance(output_data_feed, dict):
                     output_data_feed_input_Token = output_data_feed.get("input_Token","")
@@ -4949,11 +5012,20 @@ async def Integrated_Extract_domains(
 
         # Decoupled SEDA Two-Stage Architecture
         # Stage 1: Fast Dedicated NIM Summarizer Producer Pool (2 in-flight requests per sharded key)
-        # Stage 2: Paced Gemini Predictions & Tracxn Movements Consumer Pool (consumes precomputed summaries)
+        # Stage 2: High-Throughput Gemini Predictions & Tracxn Movements Consumer Pool
         sharded_key_count = token_rotator.get_total_keys() if token_rotator else 17
         default_nim_workers = max(2, sharded_key_count * 2)
         num_nim_workers = min(int(os.getenv("MAX_NIM_WORKERS", str(default_nim_workers))), max(1, len(pf_data)))
-        num_downstream_workers = min(MAX_WORKERS, max(1, len(pf_data)))
+        
+        # Dynamic Gemini Downstream Concurrency:
+        # Each NIM summary takes ~2s while Gemini downstream takes ~4s (IF + Feed calls).
+        # Downstream concurrency dynamically scales to 2x NIM workers to match throughput when NIM keys change.
+        max_gemini_allowed = int(os.getenv("MAX_GEMINI_WORKERS", "50"))
+        num_downstream_workers = calculate_dynamic_downstream_workers(
+            num_nim_workers=num_nim_workers,
+            queue_size=0,
+            max_allowed=min(max_gemini_allowed, max(1, len(pf_data)))
+        )
         nim_semaphore = asyncio.Semaphore(num_nim_workers)
         downstream_semaphore = asyncio.Semaphore(num_downstream_workers)
         active_waterfall_in_flight = set()
@@ -5400,6 +5472,75 @@ async def Integrated_Extract_domains(
 
         tc_30min_recheck_task = asyncio.create_task(_run_periodic_tc_30min_recheck())
 
+        # Concurrent Background 12:00 AM - 1:00 AM IST 5-Minute Cache ID Refresh Watcher
+        async def _run_periodic_cache_id_refresh_watcher():
+            nonlocal cache_id_IF_Prediction, token_IF_Prediction, date_IF_Prediction, status_IF_Prediction, exp_date_IF_Prediction
+            nonlocal config_funnel_name_Feed_Cached_prompt, config_funnel_name_Feed_Cached_API_Token
+            nonlocal config_funnel_name_Feed_Cached_Model, config_funnel_name_Feed_Cached_Gen_Date
+            nonlocal config_funnel_name_Feed_Cached_Final_Status
+
+            CHECK_INTERVAL_SEC = 300  # 5 minutes
+            logging.info("🕒 [Cache Poller] Gemini Cache ID Refresh Watcher initialized (12:00-1:00 AM IST schedule).")
+            last_known_cache_id = cache_id_IF_Prediction
+            g_client = get_gspread_client_General() or client
+
+            try:
+                while True:
+                    if is_5am_ist_cutoff() or os.path.exists(STOP_FILE):
+                        break
+
+                    slept = 0
+                    while slept < CHECK_INTERVAL_SEC:
+                        if is_5am_ist_cutoff() or os.path.exists(STOP_FILE):
+                            return
+                        await asyncio.sleep(5)
+                        slept += 5
+
+                    now_ist = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=5, minutes=30)))
+                    is_window = (now_ist.hour == 0)
+                    today_str = now_ist.strftime("%Y-%m-%d")
+
+                    is_stale = (clean_date(date_IF_Prediction) != today_str)
+
+                    if is_window or is_stale:
+                        logging.info(f"🔍 [Cache Poller] Checking Config Sheet for updated Gemini Cache IDs (IST: {now_ist.strftime('%H:%M:%S')})...")
+                        try:
+                            new_cfg = await asyncio.to_thread(load_or_refresh_run_config, g_client, True)
+                            if new_cfg:
+                                new_cache_id = new_cfg.get("cache_id_IF_Prediction")
+                                new_date = new_cfg.get("date_IF_Prediction")
+                                new_status = new_cfg.get("status_IF_Prediction")
+
+                                if new_cache_id and new_cache_id != last_known_cache_id and new_status == "Sucess":
+                                    logging.info(
+                                        f"🎉 [Cache Poller] NEW Gemini Cache ID detected and hot-reloaded! "
+                                        f"Old: {last_known_cache_id} -> New: {new_cache_id} (Date: {new_date})"
+                                    )
+                                    cache_id_IF_Prediction = new_cache_id
+                                    token_IF_Prediction = new_cfg.get("token_IF_Prediction")
+                                    date_IF_Prediction = new_date
+                                    status_IF_Prediction = new_status
+                                    exp_date_IF_Prediction = new_cfg.get("exp_date_IF_Prediction")
+                                    last_known_cache_id = new_cache_id
+
+                                    fp = new_cfg.get("funnel_prompts", {})
+                                    if fp.get("Feed_cache_Id"):
+                                        config_funnel_name_Feed_Cached_prompt = fp.get("Feed_cache_Id", {})
+                                        config_funnel_name_Feed_Cached_API_Token = fp.get("Feed_cache_Info_API_Token", {})
+                                        config_funnel_name_Feed_Cached_Model = fp.get("Feed_cache_Info_Model", {})
+                                        config_funnel_name_Feed_Cached_Gen_Date = fp.get("Feed_cache_Info_Gen_Date", {})
+                                        config_funnel_name_Feed_Cached_Final_Status = fp.get("Feed_cache_Info_Final_Status", {})
+                                else:
+                                    logging.info(f"⏳ [Cache Poller] Config checked: No newer cache keys yet (current: {last_known_cache_id}). Next check in 5 min.")
+                        except Exception as ex_p:
+                            logging.warning(f"⚠️ [Cache Poller] Transient error polling Config Sheet: {ex_p}. Will retry in 5 min.")
+            except asyncio.CancelledError:
+                logging.debug("Cache ID refresh watcher task cancelled.")
+            except Exception as e_w:
+                logging.error(f"Unexpected error in Cache ID refresh watcher: {e_w}")
+
+        cache_id_watcher_task = asyncio.create_task(_run_periodic_cache_id_refresh_watcher())
+
         # Launch decoupled Stage 1 (NIM Producer) and Stage 2 (Downstream Consumer) worker pools
         producer_tasks = [asyncio.create_task(nim_producer_worker()) for _ in range(num_nim_workers)]
         consumer_tasks = [asyncio.create_task(downstream_consumer_worker()) for _ in range(num_downstream_workers)]
@@ -5414,6 +5555,8 @@ async def Integrated_Extract_domains(
 
         if not tc_30min_recheck_task.done():
             tc_30min_recheck_task.cancel()
+        if not cache_id_watcher_task.done():
+            cache_id_watcher_task.cancel()
 
         # Ensure background sweep finishes before closing sheet write queue
         if not sweep_task.done():
