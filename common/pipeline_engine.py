@@ -184,7 +184,7 @@ try:
 except Exception:
     pass
 
-def update_progress_file(current: int, total: int, success: int, fail: int, phase: str = "", stage_details: str = "", pending_tc: int = 0, mode: str = "", scraped_count: int = None, nim_count: int = None, gemini_count: int = None, tracxn_count: int = None, tc_success: int = None):
+def update_progress_file(current: int, total: int, success: int, fail: int, phase: str = "", stage_details: str = "", pending_tc: int = 0, mode: str = "", scraped_count: int = None, nim_count: int = None, gemini_count: int = None, tracxn_count: int = None, tc_success: int = None, active_workers: int = None, nim_workers: int = None, downstream_workers: int = None, fully_completed: int = None, pf_completed: int = None):
     prev_prog = {}
     if os.path.exists(PROGRESS_FILE):
         try:
@@ -213,8 +213,15 @@ def update_progress_file(current: int, total: int, success: int, fail: int, phas
         live_gemini_count = min(live_gemini_count, live_nim_count)
         live_tracxn_count = min(live_tracxn_count, live_gemini_count)
 
+    live_fully_completed = fully_completed if fully_completed is not None else (tracxn_count if tracxn_count is not None else prev_prog.get('fully_completed', live_tracxn_count))
+    live_pf_completed = pf_completed if pf_completed is not None else prev_prog.get('pf_completed', 0)
+
+    live_active_workers = active_workers if active_workers is not None else prev_prog.get('active_workers', 48)
+    live_nim_workers = nim_workers if nim_workers is not None else prev_prog.get('nim_workers', 16)
+    live_downstream_workers = downstream_workers if downstream_workers is not None else prev_prog.get('downstream_workers', 32)
+
     prog_data = {
-        'current': live_tracxn_count,
+        'current': live_fully_completed,
         'total': total,
         'success': live_tc_success,
         'fail': fail,
@@ -227,10 +234,15 @@ def update_progress_file(current: int, total: int, success: int, fail: int, phas
         'nim_count': live_nim_count,
         'gemini_count': live_gemini_count,
         'tracxn_count': live_tracxn_count,
-        'active_tc_keys': TRACXN_KEY_MANAGER.get_active_tokens_count() if 'TRACXN_KEY_MANAGER' in globals() else prev_prog.get('active_tc_keys', 30),
-        'total_tc_keys': len(getattr(TRACXN_KEY_MANAGER, 'tokens', [])) if 'TRACXN_KEY_MANAGER' in globals() else prev_prog.get('total_tc_keys', 30),
+        'fully_completed': live_fully_completed,
+        'pf_completed': live_pf_completed,
+        'active_tc_keys': TRACXN_KEY_MANAGER.get_active_tokens_count() if 'TRACXN_KEY_MANAGER' in globals() else prev_prog.get('active_tc_keys', 11),
+        'total_tc_keys': len(getattr(TRACXN_KEY_MANAGER, 'tokens', [])) if 'TRACXN_KEY_MANAGER' in globals() else prev_prog.get('total_tc_keys', 13),
         'active_nim_keys': NIM_KEY_MANAGER.get_active_keys_count() if ('NIM_KEY_MANAGER' in globals() and hasattr(NIM_KEY_MANAGER, 'get_active_keys_count')) else (len(getattr(NIM_KEY_MANAGER, 'keys', [])) if 'NIM_KEY_MANAGER' in globals() else prev_prog.get('active_nim_keys', 8)),
-        'total_nim_keys': len(getattr(NIM_KEY_MANAGER, 'keys', [])) if 'NIM_KEY_MANAGER' in globals() else prev_prog.get('total_nim_keys', 8)
+        'total_nim_keys': len(getattr(NIM_KEY_MANAGER, 'keys', [])) if 'NIM_KEY_MANAGER' in globals() else prev_prog.get('total_nim_keys', 8),
+        'active_workers': live_active_workers,
+        'nim_workers': live_nim_workers,
+        'downstream_workers': live_downstream_workers
     }
     tmp_path = f"{PROGRESS_FILE}.tmp.{os.getpid()}"
     try:
@@ -265,6 +277,50 @@ try:
 except Exception:
     pass
 
+def is_row_tracxn_movement_completed(row: list) -> bool:
+    """
+    Returns True ONLY if all required Tracxn movements for the domain are fully executed:
+    1. If a feed is present (Col AR / idx 43): BOTH CF movement (Col AX) AND PF movement (Col AZ) must be completed.
+    2. If a terminal IF is present (Col AL / idx 37): CF movement (Col AX) must be completed.
+    3. Excludes scraper/dead domain terminal exits (strictly measures confirmed Tracxn platform movements).
+    """
+    if not row or not row[0] or not str(row[0]).strip():
+        return False
+
+    valid_statuses = {
+        "DONE", "YES", "TRUE", "MOVED", "MOVED_OUT",
+        "SNOOZED", "MARKED_IRRELEVANT", "MARKED_FOR_LATER", "ESCALATED", "SKIPPED_UNASSIGNABLE"
+    }
+
+    def _is_valid_timestamp(s: str) -> bool:
+        s = str(s).strip()
+        if len(s) >= 8 and (":" in s or "/" in s or "-" in s) and s.upper() not in valid_statuses and not s.startswith("http"):
+            return True
+        return False
+
+    cf_done = (len(row) > 49 and str(row[49]).strip().upper() in valid_statuses) or (len(row) > 50 and _is_valid_timestamp(str(row[50])))
+    pf_done = (len(row) > 51 and str(row[51]).strip().upper() in valid_statuses) or (len(row) > 52 and _is_valid_timestamp(str(row[52])))
+
+    feed_val = str(row[43]).strip() if len(row) > 43 else ""
+    if_val = str(row[37]).strip().upper() if len(row) > 37 else ""
+
+    # If domain has a feed number, both CF->IF and IF->PF must be completed
+    if feed_val:
+        return cf_done and pf_done
+
+    # Terminal IF classification (irrelevance, escalation, snooze): CF->IF is sufficient
+    if any(term in if_val for term in ("22", "23", "IRRELEVANT", "ESCALATED", "SNOOZED", "MARKED")):
+        return cf_done
+
+    if cf_done and pf_done:
+        return True
+
+    if cf_done and not feed_val and if_val:
+        return True
+
+    return False
+
+
 def is_row_fully_completed(row: list) -> bool:
     """
     Returns True if full end-to-end processing INCLUDING Tracxn movement is completed.
@@ -297,33 +353,7 @@ def is_row_fully_completed(row: list) -> bool:
             return False
         return True
 
-    def _is_valid_timestamp(s: str) -> bool:
-        s = s.strip()
-        if len(s) >= 8 and (":" in s or "/" in s or "-" in s) and s.upper() not in valid_statuses and not s.startswith("http"):
-            return True
-        return False
-
-    cf_done = (len(row) > 49 and str(row[49]).strip().upper() in valid_statuses) or (len(row) > 50 and _is_valid_timestamp(str(row[50])))
-    pf_done = (len(row) > 51 and str(row[51]).strip().upper() in valid_statuses) or (len(row) > 52 and _is_valid_timestamp(str(row[52])))
-
-    feed_val = str(row[43]).strip() if len(row) > 43 else ""
-    if_val = str(row[37]).strip().upper() if len(row) > 37 else ""
-
-    # If domain has a feed number, both CF->IF and IF->PF must be completed
-    if feed_val:
-        return cf_done and pf_done
-
-    # Terminal IF classification (irrelevance, escalation, snooze): CF->IF is sufficient
-    if any(term in if_val for term in ("22", "23", "IRRELEVANT", "ESCALATED", "SNOOZED", "MARKED")):
-        return cf_done
-
-    if cf_done and pf_done:
-        return True
-
-    if cf_done and not feed_val and if_val:
-        return True
-
-    return False
+    return is_row_tracxn_movement_completed(row)
 
 
 def is_eligible_for_tc_30min_recheck(row: list, active_waterfall_in_flight: Optional[set] = None) -> bool:
@@ -4866,7 +4896,8 @@ async def Integrated_Extract_domains(
     pre_gemini_feed = sum(1 for r in pf_data if len(r) > 43 and safe_str(r[43]).strip())
     pre_gemini_completed = max(pre_gemini_if, pre_gemini_feed)
 
-    pre_completed = sum(1 for r in pf_data if is_row_fully_completed(r))
+    pre_completed = sum(1 for r in pf_data if is_row_tracxn_movement_completed(r))
+    pre_pf_completed = sum(1 for r in pf_data if (len(r) > 51 and safe_str(r[51]).strip().upper() in ("DONE", "YES", "TRUE", "MOVED", "MOVED_OUT")) or (len(r) > 52 and len(safe_str(r[52]).strip()) >= 8))
 
     processed = 0
     success_count = pre_tc_scraped
@@ -4875,6 +4906,7 @@ async def Integrated_Extract_domains(
     nim_completed_count = pre_nim_completed
     gemini_completed_count = pre_gemini_completed
     tracxn_completed_count = pre_completed
+    pf_completed_count = pre_pf_completed
     phase_title = f"Phase 1: Initial Crawl & Predictions ({mode})" if mode == "full" else f"Mode: {mode.upper()}"
     update_progress_file(
         tracxn_completed_count, total_domains, success_count, fail_count,
@@ -4885,7 +4917,9 @@ async def Integrated_Extract_domains(
         tc_success=pre_tc_scraped,
         nim_count=nim_completed_count,
         gemini_count=gemini_completed_count,
-        tracxn_count=tracxn_completed_count
+        tracxn_count=tracxn_completed_count,
+        fully_completed=tracxn_completed_count,
+        pf_completed=pf_completed_count
     )
 
     semaphore = asyncio.Semaphore(MAX_WORKERS)
@@ -5026,9 +5060,29 @@ async def Integrated_Extract_domains(
             queue_size=0,
             max_allowed=min(max_gemini_allowed, max(1, len(pf_data)))
         )
+        total_sheet_workers = num_nim_workers + num_downstream_workers + 1
         nim_semaphore = asyncio.Semaphore(num_nim_workers)
         downstream_semaphore = asyncio.Semaphore(num_downstream_workers)
         active_waterfall_in_flight = set()
+
+        # Update progress immediately with live dynamic worker counts
+        update_progress_file(
+            tracxn_completed_count, total_domains, success_count, fail_count,
+            phase=phase_title,
+            stage_details=f"Pipelined: {nim_completed_count}/{total_domains} summarized | {tracxn_completed_count}/{total_domains} fully completed ({tc_completed_count} resolved)",
+            pending_tc=len(pending_tech_crawler_jobs),
+            mode=mode,
+            scraped_count=tc_completed_count,
+            tc_success=success_count,
+            nim_count=nim_completed_count,
+            gemini_count=gemini_completed_count,
+            tracxn_count=tracxn_completed_count,
+            active_workers=total_sheet_workers,
+            nim_workers=num_nim_workers,
+            downstream_workers=num_downstream_workers,
+            fully_completed=tracxn_completed_count,
+            pf_completed=pf_completed_count
+        )
 
         domain_queue = asyncio.Queue()
         # Fast-Track Prioritization:
@@ -5215,7 +5269,10 @@ async def Integrated_Extract_domains(
                             tc_success=success_count,
                             nim_count=nim_completed_count,
                             gemini_count=gemini_completed_count,
-                            tracxn_count=tracxn_completed_count
+                            tracxn_count=tracxn_completed_count,
+                            active_workers=total_sheet_workers,
+                            nim_workers=num_nim_workers,
+                            downstream_workers=num_downstream_workers
                         )
                     await summarized_queue.put((idx, row, stage1_res, False))
                 except Exception as ex:
@@ -5226,7 +5283,7 @@ async def Integrated_Extract_domains(
 
         # Stage 2: Paced Gemini Predictions & Tracxn Movements Consumer
         async def downstream_consumer_worker():
-            nonlocal processed, success_count, fail_count, gemini_completed_count, tracxn_completed_count
+            nonlocal processed, success_count, fail_count, gemini_completed_count, tracxn_completed_count, pf_completed_count
             while True:
                 if is_5am_ist_cutoff() or os.path.exists(STOP_FILE) or (is_pre_cutoff_window() and summarized_queue.empty()):
                     break
@@ -5393,7 +5450,16 @@ async def Integrated_Extract_domains(
                                     had_gem_at_start = bool(safe_str(row[37]).strip() or safe_str(row[43]).strip())
                                     if not had_gem_at_start:
                                         gemini_completed_count = min(nim_completed_count, gemini_completed_count + 1)
-                                tracxn_completed_count = min(total_domains, tracxn_completed_count + 1)
+
+                                # Option B: Verify if all required Tracxn movements are 100% completed end-to-end
+                                updated_row = list(row)
+                                s_idx = actual_start_col - 1
+                                updated_row[s_idx : s_idx + len(final_write_data)] = final_write_data
+                                if is_row_tracxn_movement_completed(updated_row):
+                                    if not is_row_tracxn_movement_completed(row):
+                                        tracxn_completed_count = min(total_domains, tracxn_completed_count + 1)
+                                        if len(updated_row) > 51 and safe_str(updated_row[51]).strip().upper() in ("DONE", "YES", "TRUE", "MOVED", "MOVED_OUT"):
+                                            pf_completed_count = min(total_domains, pf_completed_count + 1)
 
                 except Exception as d_err:
                     logging.error(f"Error in downstream consumer for {row[0] if row else 'unknown'} at row {row_number}: {d_err}")
@@ -5411,7 +5477,12 @@ async def Integrated_Extract_domains(
                             tc_success=success_count,
                             nim_count=nim_completed_count,
                             gemini_count=gemini_completed_count,
-                            tracxn_count=tracxn_completed_count
+                            tracxn_count=tracxn_completed_count,
+                            active_workers=total_sheet_workers,
+                            nim_workers=num_nim_workers,
+                            downstream_workers=num_downstream_workers,
+                            fully_completed=tracxn_completed_count,
+                            pf_completed=pf_completed_count
                         )
                         trim_memory()
                     summarized_queue.task_done()
