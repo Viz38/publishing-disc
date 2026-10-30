@@ -182,6 +182,11 @@ async def _daily_5am_ist_watchdog():
                             )
                             if cleared:
                                 logger.info(f"🧹 [11:30 PM Cutoff] Sheet {target_sheet_id} cleared (kept rows 1 & 2).")
+                                async with state_lock:
+                                    state["status"] = "idle"
+                                    state["is_stopping"] = False
+                                    state["active_pid"] = None
+                                    state["current_task"] = None
                             else:
                                 logger.info(f"ℹ️ [11:30 PM Cutoff] Sheet cleanup skipped: {reason}")
                         last_cleared_date = current_date_str
@@ -198,13 +203,13 @@ async def _daily_5am_ist_watchdog():
                         logger.error(f"Error during daily cache rotation: {re}")
 
             # 4. Autonomous Nightly Rollover & Clear-and-Fetch Auto-Start (11:35 PM - 12:45 AM IST)
-            # Once 11:30 PM cutoff passes, if sheet is idle, auto-trigger clear-and-fetch autonomously
+            # Once 11:30 PM cutoff passes, auto-trigger clear-and-fetch autonomously if not running
             if last_auto_started_date != current_date_str:
                 is_rollover_window = (
                     (now_ist.hour == 23 and now_ist.minute >= 35) or
                     (now_ist.hour == 0 and now_ist.minute <= 45)
                 )
-                if is_rollover_window and state.get("status") == "idle" and not state.get("active_pid"):
+                if is_rollover_window and state.get("status") in ("idle", "succeeded", "stopped") and not state.get("active_pid"):
                     logger.info(
                         f"🌟 [Autonomous Nightly Rollover] Auto-triggering clear-and-fetch for {current_date_str} "
                         f"at {now_ist.strftime('%H:%M:%S')} IST..."
