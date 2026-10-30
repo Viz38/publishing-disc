@@ -270,6 +270,16 @@ class TracxnDomainIngestor:
             raw_payload = p_row[10] if len(p_row) > 10 and p_row[10] else (p_row[3] if len(p_row) > 3 else "")
             filter_group_id = p_row[4] if len(p_row) > 4 else ""
             
+            custom_payload_template = None
+            if raw_payload and raw_payload.strip():
+                try:
+                    parsed_p = json.loads(raw_payload.strip())
+                    if isinstance(parsed_p, dict):
+                        custom_payload_template = parsed_p
+                        logger.info(f"[{s_name}] Using dynamic sheet payload from tab for '{filter_name}' ({len(raw_payload)} chars)")
+                except Exception as pe:
+                    logger.warning(f"[{s_name}] Could not parse JSON payload from sheet for '{filter_name}': {pe}")
+
             try:
                 budget = int(p_row[5]) if len(p_row) > 5 and str(p_row[5]).strip() else 0
             except ValueError:
@@ -299,17 +309,26 @@ class TracxnDomainIngestor:
                 f_name = funnel["name"]
                 f_id = funnel["id"]
 
-                query_payload = {
-                    "sort": [{"sortField": "funnelStatusUpdatedDate", "order": "ASC"}],
-                    "filter": {
-                        "funnelId": [f_id],
-                        "funnelFilterId": [filter_id]
-                    },
-                    "from": 0,
-                    "size": 100,
-                    "datatype": "companies",
-                    "dataset": "funnelassignment"
-                }
+                if custom_payload_template:
+                    query_payload = json.loads(json.dumps(custom_payload_template))
+                    if "filter" not in query_payload:
+                        query_payload["filter"] = {}
+                    if "funnelId" not in query_payload["filter"] and f_id:
+                        query_payload["filter"]["funnelId"] = [f_id]
+                    payload_str = raw_payload.strip()
+                else:
+                    query_payload = {
+                        "sort": [{"sortField": "funnelStatusUpdatedDate", "order": "ASC"}],
+                        "filter": {
+                            "funnelId": [f_id],
+                            "funnelFilterId": [filter_id]
+                        },
+                        "from": 0,
+                        "size": 100,
+                        "datatype": "companies",
+                        "dataset": "funnelassignment"
+                    }
+                    payload_str = json.dumps(query_payload)
 
                 # If assigned budget is already satisfied from previous funnels,
                 # do a lightweight coverage query (size=1) solely to update metadata
@@ -324,7 +343,6 @@ class TracxnDomainIngestor:
 
                 from_offset = 0
                 funnel_coverage = 0
-                payload_str = json.dumps(query_payload)
 
                 while domain_added_count < budget:
                     page_size = 100
