@@ -167,6 +167,20 @@ def fetch_domains_for_sheet(sheet_id: str, target_count: int = 15000, key_manage
         remaining_needed = target_count - len(new_rows_57)
         effective_budget = min(budget, remaining_needed)
 
+        raw_payload_str = (
+            p_row[10].strip() if len(p_row) > 10 and p_row[10] and p_row[10].strip()
+            else (p_row[3].strip() if len(p_row) > 3 and p_row[3] and p_row[3].strip() else "")
+        )
+        custom_payload_template = None
+        if raw_payload_str:
+            try:
+                parsed_p = json.loads(raw_payload_str)
+                if isinstance(parsed_p, dict):
+                    custom_payload_template = parsed_p
+                    logger.info(f"Using dynamic sheet payload from tab for '{filter_name}' ({len(raw_payload_str)} chars)")
+            except Exception as pe:
+                logger.warning(f"Could not parse JSON payload from sheet for '{filter_name}': {pe}")
+
         funnel_selection = p_row[7] if len(p_row) > 7 else "All"
         active_funnels = FUNNELS if "All" in funnel_selection or not funnel_selection else [
             f for f in FUNNELS if f["name"] == funnel_selection or f["id"] == funnel_selection
@@ -182,17 +196,25 @@ def fetch_domains_for_sheet(sheet_id: str, target_count: int = 15000, key_manage
             f_name = funnel["name"]
             f_id = funnel["id"]
 
-            query_payload = {
-                "sort": [{"sortField": "funnelStatusUpdatedDate", "order": "ASC"}],
-                "filter": {"funnelId": [f_id], "funnelFilterId": [filter_id]},
-                "from": 0,
-                "size": 100,
-                "datatype": "companies",
-                "dataset": "funnelassignment"
-            }
+            if custom_payload_template:
+                query_payload = json.loads(json.dumps(custom_payload_template))
+                if "filter" not in query_payload:
+                    query_payload["filter"] = {}
+                if "funnelId" not in query_payload["filter"] and f_id:
+                    query_payload["filter"]["funnelId"] = [f_id]
+                payload_str = raw_payload_str
+            else:
+                query_payload = {
+                    "sort": [{"sortField": "funnelStatusUpdatedDate", "order": "ASC"}],
+                    "filter": {"funnelId": [f_id], "funnelFilterId": [filter_id]},
+                    "from": 0,
+                    "size": 100,
+                    "datatype": "companies",
+                    "dataset": "funnelassignment"
+                }
+                payload_str = json.dumps(query_payload)
 
             from_offset = 0
-            payload_str = json.dumps(query_payload)
 
             while domain_added_count < effective_budget and len(new_rows_57) < target_count:
                 page_size = 100
