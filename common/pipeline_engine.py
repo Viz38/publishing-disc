@@ -1361,13 +1361,53 @@ async def Delete_All_Caches(cache_data, token):
 
 
 def Utility_Replace_Response(addableData, basePrompt, replacableChar):
-    
-    outputQuery = ""
+    """
+    Substitutes addableData into basePrompt by replacing replacableChar.
+    Supports:
+      - Single string token (e.g., "[Domain_Extraction]")
+      - Multi-token candidate iterables (e.g., ["[Domain_Extraction]", "YYYY", "[Extract_Summary]"])
+      - Automatic context-aware fallback families:
+          * Domain family: [replacableChar, "XXXX", "[Extract_Domain]", "[Domain]", "xxxx"]
+          * Summary family: [replacableChar, "YYYY", "[Domain_Extraction]", "[Extract_Summary]", "yyyy"]
+      - Graceful fallback: appends addableData if no replacement tokens were found in basePrompt.
+    """
+    if not basePrompt:
+        return str(addableData or "")
+    if addableData is None:
+        addableData = ""
+    addable_str = str(addableData)
 
-    if addableData != "" and basePrompt != "" and replacableChar != "":
-        outputQuery = basePrompt.replace(replacableChar, addableData)
-    else:
-        outputQuery = f"{basePrompt}\n\n{addableData}"
+    candidates = []
+    if isinstance(replacableChar, (list, tuple, set)):
+        candidates.extend([str(c) for c in replacableChar if c])
+    elif replacableChar:
+        candidates.append(str(replacableChar))
+
+    # Automatic context-aware fallback token families
+    domain_family = ("XXXX", "[Extract_Domain]", "[Domain]", "xxxx")
+    summary_family = ("YYYY", "[Domain_Extraction]", "[Extract_Summary]", "yyyy")
+
+    has_domain_hint = any(c in domain_family for c in candidates)
+    has_summary_hint = any(c in summary_family for c in candidates)
+
+    if has_domain_hint:
+        for fb in domain_family:
+            if fb not in candidates:
+                candidates.append(fb)
+    elif has_summary_hint:
+        for fb in summary_family:
+            if fb not in candidates:
+                candidates.append(fb)
+
+    replaced = False
+    outputQuery = basePrompt
+    for cand in candidates:
+        if cand and cand in outputQuery:
+            outputQuery = outputQuery.replace(cand, addable_str)
+            replaced = True
+
+    if not replaced:
+        outputQuery = f"{basePrompt}\n\n{addable_str}"
 
     return outputQuery
 
@@ -3326,7 +3366,7 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
                     use_cache = (
                         GEMINI_TOKEN == token_IF_Prediction 
                         and clean_date(date_IF_Prediction) in current_valid_dates 
-                        and status_IF_Prediction == "Sucess"
+                        and status_IF_Prediction in ("Sucess", "Success")
                         and cache_id_IF_Prediction
                     )
                     if use_cache:
@@ -3582,8 +3622,10 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
             # base_prompt_for_feed = config_funnel_id_prompt[output_data_if_id][5]
 
         input_sumry_for_feed = output_data_summery
-        input_data_for_feed = Utility_Replace_Response(input_sumry_for_feed, base_prompt_for_feed, replacable_char)
-        input_data_for_feed = Utility_Replace_Response(domain, input_data_for_feed, replacable_char_Domain)
+        summary_candidate_tokens = [replacable_char, "YYYY", "[Domain_Extraction]", "[Extract_Summary]"]
+        domain_candidate_tokens = [replacable_char_Domain, "XXXX", "[Extract_Domain]", "[Domain]"]
+        input_data_for_feed = Utility_Replace_Response(input_sumry_for_feed, base_prompt_for_feed, summary_candidate_tokens)
+        input_data_for_feed = Utility_Replace_Response(domain, input_data_for_feed, domain_candidate_tokens)
 
         input_sumry_for_feed = "Domain URL : " + domain + "\n" + "\n" + "Company Description: " + "\n" + input_sumry_for_feed
 
@@ -3599,7 +3641,7 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
                 use_feed_cache = (
                     GEMINI_TOKEN == token_for_feed_cache_id 
                     and clean_date(date_prompt_for_feed_cache_id) in current_valid_dates 
-                    and status_for_feed_cache_id == "Sucess"
+                    and status_for_feed_cache_id in ("Sucess", "Success")
                     and base_prompt_for_feed_cache_id
                 )
                 if use_feed_cache:
@@ -3688,6 +3730,17 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
             final_feed_id = config_feed_num_funnel_map[key_feed][3]
             final_pub_funnel_name = config_feed_num_funnel_map[key_feed][5]
             final_pub_funnel_id = config_feed_num_funnel_map[key_feed][6] if len(config_feed_num_funnel_map[key_feed]) > 6 and config_feed_num_funnel_map[key_feed][6] is not None else ""
+        else:
+            # Punctuation/digit extraction fallback (e.g., "3." -> "3", "3) Foundations" -> "3")
+            feed_num_match = re.search(r"\b(\d+)\b", output_data_feed)
+            if feed_num_match:
+                extracted_num = feed_num_match.group(1)
+                num_key_feed = f"{output_data_if_name}$${extracted_num}"
+                if num_key_feed in config_feed_num_funnel_map:
+                    final_feed_name = config_feed_num_funnel_map[num_key_feed][2]
+                    final_feed_id = config_feed_num_funnel_map[num_key_feed][3]
+                    final_pub_funnel_name = config_feed_num_funnel_map[num_key_feed][5]
+                    final_pub_funnel_id = config_feed_num_funnel_map[num_key_feed][6] if len(config_feed_num_funnel_map[num_key_feed]) > 6 and config_feed_num_funnel_map[num_key_feed][6] is not None else ""
 
         # logging.info("Output of Feed  :" + final_feed_name)
         # logging.info("Output of Publish Funnel  :" + final_pub_funnel_name)
@@ -5582,7 +5635,7 @@ async def Integrated_Extract_domains(
                                 new_date = new_cfg.get("date_IF_Prediction")
                                 new_status = new_cfg.get("status_IF_Prediction")
 
-                                if new_cache_id and new_cache_id != last_known_cache_id and new_status == "Sucess":
+                                if new_cache_id and new_cache_id != last_known_cache_id and new_status in ("Sucess", "Success"):
                                     logging.info(
                                         f"🎉 [Cache Poller] NEW Gemini Cache ID detected and hot-reloaded! "
                                         f"Old: {last_known_cache_id} -> New: {new_cache_id} (Date: {new_date})"
@@ -6274,6 +6327,17 @@ async def _run_pipeline_core(start_row: int = None, mode: str = None, sheet_id: 
 
         # Initialize Once-Per-Run Local Config Cache (downloads config once from Google Sheets)
         run_cfg = load_or_refresh_run_config(gc, force_refresh=True)
+
+        # Bind runtime multi-token replacement configs
+        global replacable_char, replacable_char_Domain
+        if run_cfg.get("basic_config"):
+            cfg_rc = run_cfg["basic_config"].get("Replacable_Charecter")
+            cfg_rc_dom = run_cfg["basic_config"].get("Replacable_Charecter_Domain")
+            if cfg_rc:
+                replacable_char = cfg_rc
+            if cfg_rc_dom:
+                replacable_char_Domain = cfg_rc_dom
+            logging.info(f"Loaded multi-token configs: replacable_char='{replacable_char}', replacable_char_Domain='{replacable_char_Domain}'")
 
         cache_id_IF_Prediction = run_cfg.get("cache_id_IF_Prediction")
         token_IF_Prediction = run_cfg.get("token_IF_Prediction")
