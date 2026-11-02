@@ -124,7 +124,26 @@ class TracxnDomainIngestor:
                     from_offset += page_size
                     if from_offset >= total_coverage:
                         break
-                elif resp.status_code in (401, 403):
+                elif resp.status_code == 403:
+                    is_unauth = False
+                    try:
+                        err_data = resp.json()
+                        if err_data.get("errorCode") == 403000000 or "unauthorized" in str(err_data.get("message", "")).lower():
+                            is_unauth = True
+                    except Exception:
+                        if "unauthorized" in resp.text.lower():
+                            is_unauth = True
+
+                    if is_unauth and page_payload.get("dataset") != "search":
+                        logger.info(f"Tracxn 403000000 unauthorized dataset error on '{page_payload.get('dataset')}'. Falling back to 'search' without penalizing token.")
+                        payload["dataset"] = "search"
+                        page_payload["dataset"] = "search"
+                        continue
+
+                    self.key_manager.handle_http_error(token, resp.status_code)
+                    logger.warning(f"Tracxn token invalid/expired (status {resp.status_code}). Rotating token...")
+                    continue
+                elif resp.status_code == 401:
                     self.key_manager.handle_http_error(token, resp.status_code)
                     logger.warning(f"Tracxn token invalid/expired (status {resp.status_code}). Rotating token...")
                     continue
@@ -393,7 +412,26 @@ class TracxnDomainIngestor:
                             from_offset += page_size
                             if from_offset >= funnel_coverage:
                                 break
-                        elif resp.status_code in (401, 403):
+                        elif resp.status_code == 403:
+                            is_unauth = False
+                            try:
+                                err_data = resp.json()
+                                if err_data.get("errorCode") == 403000000 or "unauthorized" in str(err_data.get("message", "")).lower():
+                                    is_unauth = True
+                            except Exception:
+                                if "unauthorized" in resp.text.lower():
+                                    is_unauth = True
+
+                            if is_unauth and page_payload.get("dataset") != "search":
+                                logger.info(f"Tracxn 403000000 unauthorized dataset error on '{page_payload.get('dataset')}'. Falling back to 'search' without penalizing token.")
+                                query_payload["dataset"] = "search"
+                                page_payload["dataset"] = "search"
+                                continue
+
+                            self.key_manager.handle_http_error(token, resp.status_code)
+                            logger.warning(f"Tracxn token invalid/expired (status {resp.status_code}). Rotating token...")
+                            continue
+                        elif resp.status_code == 401:
                             self.key_manager.handle_http_error(token, resp.status_code)
                             logger.warning(f"Tracxn token invalid/expired (status {resp.status_code}). Rotating token...")
                             continue

@@ -264,7 +264,26 @@ def fetch_domains_for_sheet(sheet_id: str, target_count: int = 15000, key_manage
                         from_offset += page_size
                         if total_cov and from_offset >= total_cov:
                             break
-                    elif resp.status_code in (401, 403):
+                    elif resp.status_code == 403:
+                        is_unauth = False
+                        try:
+                            err_data = resp.json()
+                            if err_data.get("errorCode") == 403000000 or "unauthorized" in str(err_data.get("message", "")).lower():
+                                is_unauth = True
+                        except Exception:
+                            if "unauthorized" in resp.text.lower():
+                                is_unauth = True
+
+                        if is_unauth and page_payload.get("dataset") != "search":
+                            logger.info(f"Tracxn 403000000 unauthorized dataset error on '{page_payload.get('dataset')}'. Falling back to 'search' without penalizing token.")
+                            query_payload["dataset"] = "search"
+                            page_payload["dataset"] = "search"
+                            continue
+
+                        km.handle_http_error(token, resp.status_code)
+                        logger.warning(f"Tracxn token invalid/expired (status {resp.status_code}). Rotating token...")
+                        continue
+                    elif resp.status_code == 401:
                         km.handle_http_error(token, resp.status_code)
                         logger.warning(f"Tracxn token invalid/expired (status {resp.status_code}). Rotating token...")
                         continue
