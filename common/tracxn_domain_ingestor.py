@@ -299,14 +299,19 @@ class TracxnDomainIngestor:
                 except Exception as pe:
                     logger.warning(f"[{s_name}] Could not parse JSON payload from sheet for '{filter_name}': {pe}")
 
-            try:
-                budget = int(p_row[5]) if len(p_row) > 5 and str(p_row[5]).strip() else 0
-            except ValueError:
-                budget = 0
+            budget_str = p_row[5].strip() if len(p_row) > 5 else ""
+            if budget_str:
+                try:
+                    budget = int(budget_str)
+                except ValueError:
+                    budget = 0
 
-            if budget <= 0:
-                logger.info(f"[{s_name}] Skipping payload '{filter_name}' (budget is 0 or empty)")
-                continue
+                if budget <= 0:
+                    logger.info(f"[{s_name}] Skipping payload '{filter_name}' (explicit budget 0)")
+                    continue
+            else:
+                budget = float("inf")
+                logger.info(f"[{s_name}] No budget count specified for payload '{filter_name}'. Clearing all available domains.")
 
             funnel_selection = p_row[7] if len(p_row) > 7 else "All"
 

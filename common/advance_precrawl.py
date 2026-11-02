@@ -155,17 +155,18 @@ def fetch_domains_for_sheet(sheet_id: str, target_count: int = 15000, key_manage
         filter_id = p_row[2] if len(p_row) > 2 else ""
         filter_group_id = p_row[4] if len(p_row) > 4 else ""
 
-        try:
-            budget = int(p_row[5]) if len(p_row) > 5 and str(p_row[5]).strip() else 0
-        except ValueError:
-            budget = 0
-
-        if budget <= 0:
-            continue
-
-        # Adjust budget to not exceed total target_count
-        remaining_needed = target_count - len(new_rows_57)
-        effective_budget = min(budget, remaining_needed)
+        budget_str = p_row[5].strip() if len(p_row) > 5 else ""
+        if budget_str:
+            try:
+                budget = int(budget_str)
+            except ValueError:
+                budget = 0
+            if budget <= 0:
+                continue
+            effective_budget = budget
+        else:
+            effective_budget = float("inf")
+            logger.info(f"No budget count specified for payload '{filter_name}'. Clearing all available domains.")
 
         raw_payload_str = (
             p_row[10].strip() if len(p_row) > 10 and p_row[10] and p_row[10].strip()
@@ -212,7 +213,7 @@ def fetch_domains_for_sheet(sheet_id: str, target_count: int = 15000, key_manage
 
             from_offset = 0
 
-            while domain_added_count < effective_budget and len(new_rows_57) < target_count:
+            while domain_added_count < effective_budget:
                 page_size = 100
                 page_payload = dict(query_payload)
                 page_payload["from"] = from_offset
