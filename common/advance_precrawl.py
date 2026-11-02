@@ -138,6 +138,19 @@ def fetch_domains_for_sheet(sheet_id: str, target_count: int = 15000, key_manage
     payload_ws = sh.worksheet("CF_IF Engine - Input Payload")
     payload_rows = payload_ws.get_all_values()
 
+    # Load currently active domains from CF_IF_Engine_Database to ensure tomorrow's pre-crawl excludes them
+    existing_sheet_domains = set()
+    try:
+        db_ws = sh.worksheet("CF_IF_Engine_Database")
+        col_a_vals = db_ws.col_values(1)
+        for d in col_a_vals[2:]:
+            d_clean = d.strip().lower()
+            if d_clean:
+                existing_sheet_domains.add(d_clean)
+        logger.info(f"Loaded {len(existing_sheet_domains)} active domains from sheet to exclude from tomorrow's advance pre-crawl")
+    except Exception as ee:
+        logger.warning(f"Could not load active sheet domains for exclusion: {ee}")
+
     new_rows_57 = []
     domain_seen = set()
     added_time_str = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
@@ -241,7 +254,7 @@ def fetch_domains_for_sheet(sheet_id: str, target_count: int = 15000, key_manage
 
                         for item in page_items:
                             dom = item.get("domain", "").strip().lower()
-                            if dom and dom not in domain_seen:
+                            if dom and dom not in domain_seen and dom not in existing_sheet_domains:
                                 domain_seen.add(dom)
                                 row_57 = parse_company_to_57col(
                                     company=item,
