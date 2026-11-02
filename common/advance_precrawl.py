@@ -138,18 +138,28 @@ def fetch_domains_for_sheet(sheet_id: str, target_count: int = 15000, key_manage
     payload_ws = sh.worksheet("CF_IF Engine - Input Payload")
     payload_rows = payload_ws.get_all_values()
 
-    # Load currently active domains from CF_IF_Engine_Database to ensure tomorrow's pre-crawl excludes them
-    existing_sheet_domains = set()
-    try:
-        db_ws = sh.worksheet("CF_IF_Engine_Database")
-        col_a_vals = db_ws.col_values(1)
-        for d in col_a_vals[2:]:
-            d_clean = d.strip().lower()
-            if d_clean:
-                existing_sheet_domains.add(d_clean)
-        logger.info(f"Loaded {len(existing_sheet_domains)} active domains from sheet to exclude from tomorrow's advance pre-crawl")
-    except Exception as ee:
-        logger.warning(f"Could not load active sheet domains for exclusion: {ee}")
+    # Load currently active domains from ALL production sheets and daily processed registry
+    # to guarantee tomorrow's pre-crawl excludes all active domains across the fleet
+    from common.fleet_deduplicator import DailyProcessedRegistry, TARGET_SHEETS as FLEET_TARGET_SHEETS
+    registry = DailyProcessedRegistry()
+    existing_sheet_domains = registry.get_daily_processed()
+    logger.info(f"Loaded {len(existing_sheet_domains)} domains from daily processed registry to exclude")
+
+    for s_target in FLEET_TARGET_SHEETS:
+        try:
+            target_sh = gc.open_by_key(s_target["id"])
+            try:
+                target_db_ws = target_sh.worksheet("CF_IF_Engine_Database")
+            except Exception:
+                target_db_ws = target_sh.get_worksheet(0)
+            col_a_vals = target_db_ws.col_values(1)
+            for d in col_a_vals[2:]:
+                d_clean = d.strip().lower()
+                if d_clean:
+                    existing_sheet_domains.add(d_clean)
+        except Exception as ee:
+            logger.warning(f"Could not load active domains from {s_target['name']} for exclusion: {ee}")
+    logger.info(f"Total {len(existing_sheet_domains)} active fleet + daily domains excluded from tomorrow's advance pre-crawl")
 
     new_rows_57 = []
     domain_seen = set()

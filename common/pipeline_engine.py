@@ -5191,6 +5191,7 @@ async def Integrated_Extract_domains(
         # Large decoupled queue (maxsize 10000) allows producers to continuously process all domains without blocking on consumer
         summarized_queue = asyncio.Queue(maxsize=10000)
         sweep_task = None
+        batch_processed_domains = set()
 
         # Stage 1: Dedicated NIM Summarizer Producer
         async def nim_producer_worker():
@@ -5216,10 +5217,19 @@ async def Integrated_Extract_domains(
 
                 idx, row = item
                 row_number = start_row_num + idx
-                if not row or not row[0]:
+                domain_str = safe_str(row[0]).strip().lower() if row and len(row) > 0 and row[0] else ""
+                if not domain_str:
                     await summarized_queue.put((idx, row, None, True))
                     domain_queue.task_done()
                     continue
+
+                # Pre-TC Gate: Intra-batch deduplication guard prevents duplicate TC Job ID creation
+                if domain_str in batch_processed_domains:
+                    logging.info(f"Skipping duplicate domain '{domain_str}' at Row {row_number} (already encountered in batch)")
+                    await summarized_queue.put((idx, row, None, True))
+                    domain_queue.task_done()
+                    continue
+                batch_processed_domains.add(domain_str)
 
                 if is_row_fully_completed(row):
                     await summarized_queue.put((idx, row, None, True))

@@ -1,6 +1,27 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-02] Cross-Sheet Fleet Deduplication & Pre-TC Gate Guarantee
+Files changed:
+- common/fleet_deduplicator.py (New module)
+- common/tracxn_domain_ingestor.py
+- common/advance_precrawl.py
+- common/pipeline_engine.py
+- Sheet1/api.py
+- Sheet2/api.py
+- Sheet3/api.py
+- Sheet4/api.py
+Reason:
+1. Strict Unique Domain Ingestion: During domain fetch in `tracxn_domain_ingestor.py` and `advance_precrawl.py`, incoming domains are checked against today's daily registry and active domains across all other fleet sheets to strictly prevent fetching duplicates into any sheet.
+2. Cross-Sheet Deduplication Cleaning: Implemented `common/fleet_deduplicator.py` to scan Col A (Row 3+) across all 4 production sheets in priority order (Sheet 1 > 2 > 3 > 4). Purges duplicate rows and rows processed earlier today.
+3. No-Backfill Policy Enforced: Strictly satisfies user directive to keep whatever unique rows remain without fetching replacement domains to compensate for purged duplicates.
+4. Pre-TC Gate Guarantee: Cleaning occurs strictly BEFORE Tech Crawler Job ID creation (`generate_job_id`), preventing wasted crawler API tokens, proxy compute, NIM summarization, Gemini inference, and Tracxn write APIs on double-processed domains.
+5. In-Memory Pipeline Deduplication Guard: `common/pipeline_engine.py` verifies intra-batch domain uniqueness in the streaming producer worker, automatically skipping duplicate or purged blank rows.
+6. Deduplication Endpoints: Added `POST /discovery/deduplicate` across all engine supervisor instances.
+Related tests:
+- Temp_Test/unit/test_fleet_deduplicator.py (3/3 unit tests PASSED)
+- Live cross-sheet deduplication executed: successfully purged 2 duplicate rows in Sheet 3 (Row 4644 `actualpetfoods.com` and Row 9700 `itspollsee.org`) with 0 duplicates remaining across Sheets 1-3.
+
 ## [2026-11-02] Advance Pre-Crawl Active Domain Exclusion Guarantee
 Files changed:
 - common/advance_precrawl.py

@@ -273,8 +273,36 @@ class TracxnDomainIngestor:
                 logger.info(f"[{s_name}] Database cleared successfully.")
 
         # 3. Process each payload row
+        # Strictly enforce unique domain ingestion: load today's daily processed registry
+        # and active domains in other fleet sheets before fetching to avoid double processing
+        from common.fleet_deduplicator import (
+            DailyProcessedRegistry,
+            TARGET_SHEETS as FLEET_TARGET_SHEETS,
+            clean_and_deduplicate_all_sheets
+        )
+        registry = DailyProcessedRegistry()
+        daily_seen = registry.get_daily_processed()
+        logger.info(f"[{s_name}] Loaded {len(daily_seen)} domains from daily processed registry to exclude.")
+
+        cross_sheet_seen = set()
+        for other_s in FLEET_TARGET_SHEETS:
+            if other_s["id"] != s_id:
+                try:
+                    other_sh = retry_call(lambda: self.gc.open_by_key(other_s["id"]))
+                    try:
+                        other_ws = other_sh.worksheet("CF_IF_Engine_Database")
+                    except Exception:
+                        other_ws = other_sh.get_worksheet(0)
+                    col_a = other_ws.col_values(1)
+                    for d in col_a[2:]:
+                        if d and d.strip():
+                            cross_sheet_seen.add(d.strip().lower())
+                except Exception as ex:
+                    logger.warning(f"[{s_name}] Could not load domains from {other_s['name']} for cross-sheet exclusion: {ex}")
+        logger.info(f"[{s_name}] Loaded {len(cross_sheet_seen)} active domains from other fleet sheets to exclude.")
+
         new_rows_57 = []
-        domain_seen = set()
+        domain_seen = set(daily_seen) | cross_sheet_seen
         added_time_str = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
 
         # Row 0 & 1 are headers, payload data starts at row index 2 (Row 3/4)
@@ -492,6 +520,16 @@ class TracxnDomainIngestor:
                 time.sleep(1.5)
 
             logger.info(f"[{s_name}] ✅ Ingestion complete! Added {total_new} domains to {db_ws.title}.")
+
+            # 5. Post-Ingestion Cross-Sheet Cleaning & Deduplication Operation
+            # Strictly executed BEFORE any Tech Crawler Job ID is generated
+            try:
+                logger.info(f"[{s_name}] Running cross-sheet deduplication cleaning across all 4 production sheets...")
+                dedup_report = clean_and_deduplicate_all_sheets(gc=self.gc, dry_run=False)
+                logger.info(f"[{s_name}] Post-ingestion deduplication complete: purged {dedup_report.get('total_duplicates_found', 0)} duplicates across fleet.")
+            except Exception as de:
+                logger.error(f"[{s_name}] Error during post-ingestion cross-sheet deduplication: {de}")
+
             return total_new
         else:
             logger.info(f"[{s_name}] No new domains returned for active payloads.")
