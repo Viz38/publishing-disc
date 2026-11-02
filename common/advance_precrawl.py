@@ -198,10 +198,6 @@ def fetch_domains_for_sheet(sheet_id: str, target_count: int = 15000, key_manage
 
             if custom_payload_template:
                 query_payload = json.loads(json.dumps(custom_payload_template))
-                if "filter" not in query_payload:
-                    query_payload["filter"] = {}
-                if "funnelId" not in query_payload["filter"] and f_id:
-                    query_payload["filter"]["funnelId"] = [f_id]
                 payload_str = raw_payload_str
             else:
                 query_payload = {
@@ -300,6 +296,9 @@ def fetch_domains_for_sheet(sheet_id: str, target_count: int = 15000, key_manage
                     logger.warning(f"Error fetching Tracxn domains: {e}")
                     time.sleep(2)
                     continue
+
+            if custom_payload_template and "funnelId" not in custom_payload_template.get("filter", {}):
+                break
 
     logger.info(f"Fetched {len(new_rows_57)} unique domains for sheet {sheet_id}")
     return new_rows_57

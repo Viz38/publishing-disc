@@ -330,10 +330,6 @@ class TracxnDomainIngestor:
 
                 if custom_payload_template:
                     query_payload = json.loads(json.dumps(custom_payload_template))
-                    if "filter" not in query_payload:
-                        query_payload["filter"] = {}
-                    if "funnelId" not in query_payload["filter"] and f_id:
-                        query_payload["filter"]["funnelId"] = [f_id]
                     payload_str = raw_payload.strip()
                 else:
                     query_payload = {
@@ -453,6 +449,9 @@ class TracxnDomainIngestor:
                     cf_coverage = funnel_coverage
                 else:
                     backlog_coverage = funnel_coverage
+
+                if custom_payload_template and "funnelId" not in custom_payload_template.get("filter", {}):
+                    break
 
             # Update coverage in payload tab: Col 15 (O), Col 16 (P), Col 17 (Q)
             # 1-indexed row: idx + 1
