@@ -94,6 +94,7 @@ class TracxnDomainIngestor:
         results = []
         total_coverage = 0
         from_offset = start_offset
+        exc_retries = 0
 
         while len(results) < max_results:
             page_payload = dict(payload)
@@ -157,7 +158,15 @@ class TracxnDomainIngestor:
                     logger.warning(f"Tracxn error status {resp.status_code}: {resp.text[:200]}")
                     break
             except Exception as e:
-                logger.error(f"Tracxn request exception: {e}")
+                exc_retries += 1
+                logger.error(f"Tracxn request exception (attempt {exc_retries}/3): {e}")
+                if "timeout" in str(e).lower() and payload.get("dataset") != "search":
+                    logger.info("Tracxn timeout hit; falling back to dataset='search'...")
+                    payload["dataset"] = "search"
+                    page_payload["dataset"] = "search"
+                if exc_retries >= 3:
+                    logger.warning(f"Exceeded 3 retry attempts on Tracxn API. Breaking.")
+                    break
                 time.sleep(2)
                 continue
 
@@ -391,6 +400,7 @@ class TracxnDomainIngestor:
 
                 from_offset = 0
                 funnel_coverage = 0
+                exc_retries = 0
 
                 while domain_added_count < budget:
                     page_size = 100
@@ -474,7 +484,15 @@ class TracxnDomainIngestor:
                             logger.warning(f"Tracxn error status {resp.status_code}: {resp.text[:200]}")
                             break
                     except Exception as e:
-                        logger.error(f"Tracxn request exception: {e}")
+                        exc_retries += 1
+                        logger.error(f"Tracxn request exception (attempt {exc_retries}/3): {e}")
+                        if "timeout" in str(e).lower() and query_payload.get("dataset") != "search":
+                            logger.info("Tracxn timeout hit; falling back to dataset='search'...")
+                            query_payload["dataset"] = "search"
+                            page_payload["dataset"] = "search"
+                        if exc_retries >= 3:
+                            logger.warning(f"Exceeded 3 retry attempts on payload '{filter_name}'. Skipping to next payload.")
+                            break
                         time.sleep(2)
                         continue
 
