@@ -2424,22 +2424,30 @@ async def _resolve_tracxn_async_token(token=None) -> str:
     return token or Tracxn_API_Token
 
 def WriteAPI_Domain_Funnel(domainProfileId, source_funnelID, filterGroupId, filterId, dest_Funnel, status, comments, token=None):
-    if not domainProfileId or not source_funnelID or not dest_Funnel or not status:
+    effective_source_funnel = str(source_funnelID or "").strip()
+    if not effective_source_funnel or effective_source_funnel == "-":
+        effective_source_funnel = getattr(TRACXN_CLIENT, "CENTRAL_FUNNEL_ID", "5dc559138787070a80be21ba") if 'TRACXN_CLIENT' in globals() and TRACXN_CLIENT is not None else "5dc559138787070a80be21ba"
+    if not domainProfileId or not effective_source_funnel or not dest_Funnel or not status:
         return 'FALSE'
     tok = _resolve_tracxn_sync_token(token)
     ret = 'NO'
     if status in ('SNOOZED', 'MARKED_IRRELEVANT', 'MARKED_FOR_LATER', 'ESCALATED'):
-        Domain_Funnel_Assign(domainProfileId, source_funnelID, filterGroupId, filterId, comments, tok)
+        Domain_Funnel_Assign(domainProfileId, effective_source_funnel, filterGroupId, filterId, comments, tok)
         time.sleep(0.5)
-        ret = Change_Domain_Funnel_Status(domainProfileId, source_funnelID, filterGroupId, filterId, status, comments, tok)
+        ret = Change_Domain_Funnel_Status(domainProfileId, effective_source_funnel, filterGroupId, filterId, status, comments, tok)
     elif status == 'MOVED_OUT':
-        Domain_Funnel_Assign(domainProfileId, source_funnelID, filterGroupId, filterId, comments, tok)
+        Domain_Funnel_Assign(domainProfileId, effective_source_funnel, filterGroupId, filterId, comments, tok)
         time.sleep(0.5)
-        ret = Change_Domain_Funnel_Moved_Out(domainProfileId, source_funnelID, filterGroupId, filterId, dest_Funnel, comments, tok)
+        ret = Change_Domain_Funnel_Moved_Out(domainProfileId, effective_source_funnel, filterGroupId, filterId, dest_Funnel, comments, tok)
     return 'TRUE' if ret == 'YES' else 'FALSE'
 
 async def WriteAPI_Domain_Funnel_async(domainProfileId, source_funnelID, filterGroupId, filterId, dest_Funnel, status, comments, token=None, session: aiohttp.ClientSession = None):
-    if not domainProfileId or not source_funnelID or not dest_Funnel or not status:
+    cf_central_fid = getattr(TRACXN_CLIENT, "CENTRAL_FUNNEL_ID", "5dc559138787070a80be21ba") if 'TRACXN_CLIENT' in globals() and TRACXN_CLIENT is not None else "5dc559138787070a80be21ba"
+    effective_source_funnel = str(source_funnelID or "").strip()
+    if not effective_source_funnel or effective_source_funnel == "-":
+        effective_source_funnel = cf_central_fid
+
+    if not domainProfileId or not effective_source_funnel or not dest_Funnel or not status:
         return 'FALSE'
 
     close_sess = False
@@ -2454,44 +2462,70 @@ async def WriteAPI_Domain_Funnel_async(domainProfileId, source_funnelID, filterG
             # Bind single user token across all actions for this domain to preserve assignment identity
             tok = await TRACXN_CLIENT._acquire_token(tok)
             if status == 'MOVED_OUT':
+                # Check if effective_source_funnel is Backlog or external while dest is an Industry Funnel
+                if effective_source_funnel != cf_central_fid and dest_Funnel != cf_central_fid:
+                    pre_move_res = await TRACXN_CLIENT.ensure_domain_in_central_funnel_async(
+                        active_sess, domainProfileId, current_funnel_id=effective_source_funnel,
+                        filter_group_id=filterGroupId, filter_id=filterId, comments="Pre-move to Central Funnel", token=tok
+                    )
+                    if pre_move_res in ("YES", "ALREADY_MOVED"):
+                        effective_source_funnel = cf_central_fid
+
                 # Safely unsnoozes (if snoozed), force-assigns, and moves under the SAME user token
                 move_res = await TRACXN_CLIENT.unsnooze_and_move_domain(
-                    active_sess, domainProfileId, source_funnelID, filterGroupId, filterId, dest_Funnel, comments, token=tok, is_snoozed=True
+                    active_sess, domainProfileId, effective_source_funnel, filterGroupId, filterId, dest_Funnel, comments, token=tok, is_snoozed=True
                 )
+                if move_res in ("YES", "ALREADY_MOVED"):
+                    return 'TRUE'
+
+                # If movement failed or returned UNASSIGNABLE, check if domain was outside Central Funnel and attempt recovery
+                if move_res in ("UNASSIGNABLE", "NO") and effective_source_funnel == cf_central_fid and dest_Funnel != cf_central_fid:
+                    logging.info(f"Move from CF to {dest_Funnel} failed for {domainProfileId} ({move_res}). Attempting CF pre-placement recovery...")
+                    pre_cf_res = await TRACXN_CLIENT.ensure_domain_in_central_funnel_async(
+                        active_sess, domainProfileId, current_funnel_id=None,
+                        filter_group_id=filterGroupId, filter_id=filterId, comments="Recovery pre-move to Central Funnel", token=tok
+                    )
+                    if pre_cf_res in ("YES", "ALREADY_MOVED"):
+                        retry_res = await TRACXN_CLIENT.unsnooze_and_move_domain(
+                            active_sess, domainProfileId, cf_central_fid, filterGroupId, filterId, dest_Funnel, comments, token=tok, is_snoozed=True
+                        )
+                        if retry_res in ("YES", "ALREADY_MOVED"):
+                            return 'TRUE'
+
                 if move_res == "UNASSIGNABLE":
                     return 'SKIPPED_UNASSIGNABLE'
-                return 'TRUE' if move_res in ("YES", "ALREADY_MOVED") else 'FALSE'
+                return 'FALSE'
             else:
                 assign_res = await TRACXN_CLIENT.force_assign_domain(
-                    active_sess, domainProfileId, source_funnelID, filterGroupId, filterId, comments, token=tok
+                    active_sess, domainProfileId, effective_source_funnel, filterGroupId, filterId, comments, token=tok
                 )
                 if assign_res == "UNASSIGNABLE":
                     return 'SKIPPED_UNASSIGNABLE'
                 ret = "NO"
                 if status == 'SNOOZED':
                     ret = await TRACXN_CLIENT.snooze_domain(
-                        active_sess, domainProfileId, source_funnelID, filterGroupId, filterId, comments, token=tok
+                        active_sess, domainProfileId, effective_source_funnel, filterGroupId, filterId, comments, token=tok
                     )
                 elif status == 'ESCALATED':
                     ret = await TRACXN_CLIENT.escalate_domain(
-                        active_sess, domainProfileId, source_funnelID, filterGroupId, filterId, comments, token=tok
+                        active_sess, domainProfileId, effective_source_funnel, filterGroupId, filterId, comments, token=tok
                     )
                 elif status == 'MARKED_FOR_LATER':
                     ret = await TRACXN_CLIENT.mark_domain_for_later(
-                        active_sess, domainProfileId, source_funnelID, filterGroupId, filterId, comments, token=tok
+                        active_sess, domainProfileId, effective_source_funnel, filterGroupId, filterId, comments, token=tok
                     )
                 elif status == 'MARKED_IRRELEVANT':
                     ret = await TRACXN_CLIENT.mark_domain_irrelevant(
-                        active_sess, domainProfileId, source_funnelID, filterGroupId, filterId, comments, token=tok
+                        active_sess, domainProfileId, effective_source_funnel, filterGroupId, filterId, comments, token=tok
                     )
                 return 'TRUE' if ret == 'YES' else 'FALSE'
         else:
-            await Domain_Funnel_Assign_async(domainProfileId, source_funnelID, filterGroupId, filterId, comments, tok, session=active_sess)
+            await Domain_Funnel_Assign_async(domainProfileId, effective_source_funnel, filterGroupId, filterId, comments, tok, session=active_sess)
             await asyncio.sleep(0.5)
             if status in ('SNOOZED', 'MARKED_IRRELEVANT', 'MARKED_FOR_LATER', 'ESCALATED'):
-                ret = await Change_Domain_Funnel_Status_async(domainProfileId, source_funnelID, filterGroupId, filterId, status, comments, tok, session=active_sess)
+                ret = await Change_Domain_Funnel_Status_async(domainProfileId, effective_source_funnel, filterGroupId, filterId, status, comments, tok, session=active_sess)
             elif status == 'MOVED_OUT':
-                ret = await Change_Domain_Funnel_Moved_Out_async(domainProfileId, source_funnelID, filterGroupId, filterId, dest_Funnel, comments, tok, session=active_sess)
+                ret = await Change_Domain_Funnel_Moved_Out_async(domainProfileId, effective_source_funnel, filterGroupId, filterId, dest_Funnel, comments, tok, session=active_sess)
             else:
                 ret = "NO"
             return 'TRUE' if ret == 'YES' else 'FALSE'
@@ -3747,7 +3781,10 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
 
 # ***************************** Write API (Placeholder - implement your actual API calls) ******************************
     domain = row[0]
+    cf_central_fid = getattr(TRACXN_CLIENT, "CENTRAL_FUNNEL_ID", "5dc559138787070a80be21ba") if 'TRACXN_CLIENT' in globals() and TRACXN_CLIENT is not None else "5dc559138787070a80be21ba"
     source_funnel_id = row[2]
+    if not source_funnel_id or safe_str(source_funnel_id).strip() in ("", "-"):
+        source_funnel_id = cf_central_fid
     industry_funnel_id = output_data_if_id
     cf_if_action = "MOVED_OUT"
     publish_funnel_id = final_pub_funnel_id
@@ -6151,7 +6188,10 @@ async def Execute_Phase4_Ingestion_Write_APIs(client, mainheaders, SHEET_ID, EXT
                     domain_profile_id = row[10] if len(row) > 10 else ""
                     filter_group_id = row[4] if len(row) > 4 else ""
                     filter_id = row[6] if len(row) > 6 else ""
+                    cf_central_fid = getattr(TRACXN_CLIENT, "CENTRAL_FUNNEL_ID", "5dc559138787070a80be21ba") if 'TRACXN_CLIENT' in globals() and TRACXN_CLIENT is not None else "5dc559138787070a80be21ba"
                     source_funnel_id = row[2] if len(row) > 2 else ""
+                    if not source_funnel_id or safe_str(source_funnel_id).strip() in ("", "-"):
+                        source_funnel_id = cf_central_fid
 
                     output_data_if = row[37] if len(row) > 37 else ""
                     industry_funnel_id = row[39] if len(row) > 39 else ""

@@ -22,6 +22,11 @@ class TracxnClient:
     UNSNOOZE_URL = f"{BASE_URL}/data/funnel-action/unsnooze"
     CHANGE_STATUS_URL = f"{BASE_URL}/data/funnel-action/change-status"
     DOMAINS_API_URL = f"{BASE_URL}/api/2.2/domains"
+    FUNNEL_TRANSACTIONS_URL = f"{BASE_URL}/api/3.1/funneltransactions"
+
+    # Well-known funnel IDs
+    CENTRAL_FUNNEL_ID = "5dc559138787070a80be21ba"
+    BACKLOG_FUNNEL_ID = "64197f01a6dcff6572453ead"
 
     def __init__(self, token: Optional[str] = None, token_rotator: Optional[Any] = None):
         self.static_token = token
@@ -307,6 +312,77 @@ class TracxnClient:
         if move_res in ("YES", "ALREADY_MOVED"):
             return "YES"
         return move_res
+
+    async def get_domain_funnel_transaction_async(
+        self,
+        session: aiohttp.ClientSession,
+        domain: str,
+        token: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Queries Tracxn funneltransactions endpoint to inspect domain funnel placement."""
+        tok = await self._acquire_token(token)
+        payload = {
+            "filter": {
+                "domainName": [domain],
+                "not": {"domainStatus": ["ASSIGNED"]},
+            },
+            "dataset": "internal",
+            "sort": [
+                {"order": "DESC", "sortField": "domainName"},
+                {"order": "DESC", "sortField": "lastUpdateDate"},
+            ],
+            "size": 100,
+        }
+        headers = self._headers(tok)
+        try:
+            async with session.post(
+                self.FUNNEL_TRANSACTIONS_URL, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=15)
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    return data.get("result", [])
+                else:
+                    text = await resp.text()
+                    logger.warning(f"funneltransactions query failed ({resp.status}): {text[:100]}")
+                    return []
+        except Exception as e:
+            logger.error(f"Error querying funneltransactions for {domain}: {e}")
+            return []
+
+    async def ensure_domain_in_central_funnel_async(
+        self,
+        session: aiohttp.ClientSession,
+        domain_profile_id: str,
+        current_funnel_id: Optional[str] = None,
+        filter_group_id: Any = None,
+        filter_id: Any = None,
+        comments: str = "Pre-move to Central Funnel",
+        token: Optional[str] = None,
+    ) -> str:
+        """
+        Ensures the domain is present in Central Funnel (5dc559138787070a80be21ba).
+        If already in Central Funnel, returns 'YES' immediately (fast path).
+        If in Backlog or an external funnel, unsnoozes and moves it into Central Funnel.
+        """
+        cur_fid = str(current_funnel_id or "").strip()
+        if cur_fid == self.CENTRAL_FUNNEL_ID:
+            return "YES"
+
+        tok = await self._acquire_token(token)
+        src_funnel = cur_fid if cur_fid else self.BACKLOG_FUNNEL_ID
+        logger.info(f"Pre-moving domain {domain_profile_id} from {src_funnel} to Central Funnel ({self.CENTRAL_FUNNEL_ID})")
+        res = await self.unsnooze_and_move_domain(
+            session,
+            domain_profile_id,
+            src_funnel,
+            filter_group_id,
+            filter_id,
+            self.CENTRAL_FUNNEL_ID,
+            comments,
+            token=tok,
+            is_snoozed=True,
+        )
+        return res
 
     async def sync_domain_hashtags(
         self,

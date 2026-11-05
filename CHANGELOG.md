@@ -1,6 +1,136 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-05] Automated Central Funnel Check and Pre-Movement Recovery for External Batches
+Files changed:
+- common/tracxn_client.py (Added `CENTRAL_FUNNEL_ID`, `BACKLOG_FUNNEL_ID`, `FUNNEL_TRANSACTIONS_URL`, `get_domain_funnel_transaction_async`, and `ensure_domain_in_central_funnel_async`)
+- common/pipeline_engine.py (Added automatic fallback defaulting empty/missing `source_funnel_id` to Central Funnel, pre-move from Backlog to CF, and 422 recovery logic in `WriteAPI_Domain_Funnel` and `WriteAPI_Domain_Funnel_async`)
+Reason:
+1. Legacy Parity for Central Funnel Verification: Restored the pre-movement Central Funnel verification logic previously implemented in legacy Apps Script (`15.gs` and `23.gs`).
+2. Safe Handling of External & Backlog Batches: When processing ad-hoc or external domain batches (where Col C `Source Funnel ID` is missing, blank, or `"-"`), the engine safely defaults to Central Funnel (`5dc559138787070a80be21ba`). For domains residing in Backlog (`64197f01a6dcff6572453ead`) or external funnels, the client pre-moves them into Central Funnel before attempting Industry Funnel movement.
+3. Automated HTTP 422 Recovery: If a move from Central Funnel to an Industry Funnel fails with `UNASSIGNABLE` or 422 (domain outside CF), the engine automatically triggers `ensure_domain_in_central_funnel_async` to place the lead into Central Funnel and retries the move before marking as unassignable.
+4. Zero-Overhead Fast-Path for Standard Runs: Standard daily leads that already reside in Central Funnel bypass the pre-move check, preserving maximum pipeline throughput.
+Related tests:
+- Temp_Test/unit/test_unit_cf_precheck.py (6 passed: constants, transaction query, CF idempotency, Backlog pre-move, empty source fallback, and 422 pre-placement recovery)
+
+## [2026-11-05] Upload of Nov 4 Completed Batch (31,424 Rows) to Dedicated "4Nov" Tab
+Files changed:
+- Temp_Test/extract_nov4_completed.py (Optimized remote cache extraction and transfer pipeline from Desktop-5080 and Desktop-5321)
+- Temp_Test/upload_nov4_logs_to_sheet.py (Production streaming script with master 58-column formatting, frozen header, auto-fit widths, and batch rate-limiting)
+- Target Sheet: https://docs.google.com/spreadsheets/d/16ezMIEhq6uuHjzHOvNo8bTNB47KX3a6IaA5TuUlvUKU/edit#gid=448706855 (Tab: '4Nov')
+Reason:
+1. Target Tab Deployment: Uploaded all 31,424 fully completed domains from the November 4th fleet run into worksheet '4Nov' of spreadsheet `16ezMIEhq6uuHjzHOvNo8bTNB47KX3a6IaA5TuUlvUKU` ('Discovery Engine - Logs - 3 Nov + 4 Nov') using Primary Service Account `sheet-access@grounding-487108.iam.gserviceaccount.com`.
+2. Master 58-Column Schema & Formatting: Formatted Row 1 with official master 58-column headers (frozen, bold, `#E6EEFA` background). Set Col AD (`Raw Data`, index 29) to `{RAW_Data_Appended}` to prevent cell character overflow, and labeled Col BF (index 57) with exact batch source (`SMCP Set`: 18,083 rows, `Daily Set`: 13,341 rows) derived from partition metadata.
+3. Complete Domain Resolution: Processed across all 4 stages: CF->IF Moved (29,589), IF->PF Moved (27,781), Terminal Classification Exits (1,810), and Dead/No-Content Domains (25).
+4. Visual Styling & Width Optimization: Auto-fitted all 58 column dimensions across Cols A–BF to comfortably accommodate header titles without clipping.
+Related tests:
+- Temp_Test/upload_nov4_logs_to_sheet.py (31,424 data rows streamed in 63 batches of 500, verified 31,435 total rows in sheet with exact boundary alignment)
+
+
+
+## [2026-11-04] Upload of Nov 3 Completed Ranjith Batch (49,000 Rows) to Dedicated Logs Sheet
+Files changed:
+- Temp_Test/upload_nov3_logs_to_sheet.py (Production uploader script with exclusion logic, rate-limit backoff, frozen header, and auto-fit column widths)
+- Target Sheet: https://docs.google.com/spreadsheets/d/16ezMIEhq6uuHjzHOvNo8bTNB47KX3a6IaA5TuUlvUKU/edit#gid=0 (Discovery Engine - Logs - 3 Nov)
+Reason:
+1. Target Sheet Deployment: Streamed 49,000 net new fully completed domains from the Nov 3 pre-scraped Ranjith batch into dedicated spreadsheet `16ezMIEhq6uuHjzHOvNo8bTNB47KX3a6IaA5TuUlvUKU` ('Discovery Engine - Logs - 3 Nov') using Primary Service Account `sheet-access@grounding-487108.iam.gserviceaccount.com`.
+2. Strict Cross-Sheet Deduplication: Screened all 56,791 completed domains against `1mByRsYiCNoWjD6jzZtYsSdg0dTyocwlNzesAZ58YGuE` (26,232 domains across Nov 2 & Nov 3). Excluded all 7,791 overlapping domains to guarantee 100% deduplication across sheets, yielding exactly 49,000 net new unique rows.
+3. Master 58-Column Schema & Formatting: Formatted Row 1 with official master 58-column headers (frozen, bold, `#E6EEFA` background). Set Col AD (`Raw Data`, index 29) to `{RAW_Data_Appended}` to prevent cell character overflow, and labeled Col BF (index 57) as `Ranjith Set`.
+4. Visual Styling & Width Optimization: Adjusted all 58 column dimensions (Cols A–BF) to comfortably fit full header labels with zero clipping.
+Related tests:
+- Temp_Test/upload_nov3_logs_to_sheet.py (49,000 data rows streamed in 98 batches of 500, verified 49,011 total rows in sheet with exact boundary alignment)
+
+
+
+## [2026-11-03] Full Pre-Crawl Job Generation & 4-Way Fleet Staging for 43,424 Domains (Tomorrow Set)
+Files changed:
+- Sheet1/next_day_pre_crawl.csv (10,856 pre-crawled domains for Sheet 1 on Desktop-5080)
+- Sheet2/next_day_pre_crawl.csv (10,856 pre-crawled domains for Sheet 2 on Desktop-5080)
+- Sheet3/next_day_pre_crawl.csv (10,856 pre-crawled domains for Sheet 3 on Desktop-5321)
+- Sheet4/next_day_pre_crawl.csv (10,856 pre-crawled domains for Sheet 4 on Desktop-5321)
+- Temp_Test/generate_all_precrawl_jobs.py (High-speed concurrent TC Job ID generator)
+- Temp_Test/distribute_precrawl_to_fleet.py (Remote transport & line-count verification pipeline)
+- Temp_Test/adjust_crontab_to_midnight.py (Shifted crontab to 12:05 AM on Desktop-5080 and Desktop-5321)
+Reason:
+1. End-to-End TC Job ID Generation: Generated 21,099 brand-new Tech Crawler `bu-daily` render Job IDs across the 11-key Tracxn pool (100% success rate, 0 failures, ~14.5 dom/sec). Restored 22,325 pre-existing Job IDs from the daily uncompleted set.
+2. Complete 43,424 Domain Pre-Crawl Coverage: Every single domain across the 43,424 batch now has an active, valid Tech Crawler Job ID (`bu-daily_render_...`), Col U (`DONE`), and Col X (`PROCESSING`). Tech Crawler cloud infrastructure is actively scraping and rendering all pages in advance of the 12:00 AM trigger.
+3. Fleet Distribution & Exact Verification: Uploaded and verified all 4 `next_day_pre_crawl.csv` files directly to `~/Desktop/publishing-disc/Sheet*/` on Desktop-5080 (10,856 rows each) and Desktop-5321 (10,856 rows each).
+4. Automated 12:00 AM Lifecycle & Crontab Protection: Shifted `run_daily_precrawl.sh` on both production hosts to 12:05 AM (`5 0 * * *`). This guarantees `next_day_pre_crawl.csv` will be consumed cleanly by `load_precrawl_to_sheet` at 12:00 AM without premature overwrite, after which the 12:05 AM cron generates the next day's advance pre-crawl for the day after tomorrow.
+Related tests:
+- Temp_Test/distribute_precrawl_to_fleet.py (Verified 10,856 lines across Sheet 1, Sheet 2, Sheet 3, and Sheet 4)
+
+
+## [2026-11-03] Prepared SMCP Database (23.8K) & Replaced Daily Set Staging & Deployment Tooling
+Files changed:
+- Temp_Test/prepare_smcp_and_rollover_batch.py (Batch harvester, deduplicator, 57-col formatter, and 4-way partitioner)
+- Temp_Test/deploy_smcp_and_rollover_fleet.py (Strict safety deployment script; pending user confirmation)
+- Staging artifacts: Temp_Test/partition_sheet1.json to partition_sheet4.json (10,856 rows each, 43,424 total)
+Reason:
+1. Merged Ingestion Scope: Ingested 23,808 rows from the new SMCP Database sheet (`12UAiZoG0KFfeGiQ5-evoY5zt418jQ4G2T9sHgVT6gnE`) using service account `sheet-access@grounding-487108.iam.gserviceaccount.com`. Combined with the daily uncompleted domains (22,325 domains) that were running this morning before being replaced by the 57k Ranjith batch.
+2. Complete Deduplication: Screened against `completed_domains_since_nov2.csv` (26,232 domains) to guarantee zero reprocessing of already-completed domains. Identified 990 overlapping domains and merged them.
+3. Master 57-Column Schema: Formatted all 43,424 unique domains into the official 57-column master schema with profile IDs, platform URLs, and initialized status fields.
+4. Balanced 4-Way Fleet Partitioning: Generated 4 equal staging partitions (10,856 domains each) ready for deployment to Sheets 1–4 across Desktop-5080 and Desktop-5321 upon user confirmation.
+Related tests:
+- Temp_Test/prepare_smcp_and_rollover_batch.py (0 malformed rows, 43,424 total validated rows)
+
+
+## [2026-11-03] Upload of Completed Domains (26,232 Rows) to Dedicated Google Sheet
+Files changed:
+- Temp_Test/upload_to_google_sheet.py (Production uploader script with rate-limiting, freeze, formatting & auto-fit widths)
+- Target Sheet: https://docs.google.com/spreadsheets/d/1mByRsYiCNoWjD6jzZtYsSdg0dTyocwlNzesAZ58YGuE/edit#gid=0 (Discovery Processed 2+3 Nov)
+Reason:
+1. Full Dataset Migration: Uploaded all 26,232 successfully completed domains from `completed_domains_since_nov2.csv` using service account `sheet-access@grounding-487108.iam.gserviceaccount.com`.
+2. Master 58-Column Schema & Formatting: Populated official 58-column headers on Row 1 (bold, styled background, frozen), with Col AD (`Raw Data`, index 29) set to `{RAW_Data_Appended}` to eliminate API payload bloat, and Col BF (index 57) labeled `Source` (`Ranjith Set` vs `Daily Set`).
+3. Column Width Auto-Fit: Scaled column widths across all 58 columns (A through BF) to comfortably accommodate full header contents with zero clipping.
+Related tests:
+- Temp_Test/upload_to_google_sheet.py (26,232 data rows written, verified Row 26,233 exact match)
+
+
+## [2026-11-03] Full Completed Domains CSV Generation (26,232 Domains Since Nov 2 12:00 AM)
+Files changed:
+- completed_domains_since_nov2.csv (Generated master 57-column + Source dataset, 471.8 MB)
+- Temp_Test/extract_remote_data.py (Remote data extractor for Desktop-5080 and Desktop-5321)
+- Temp_Test/download_completed_data.py (Compressed transport pipeline)
+- Temp_Test/generate_final_completed_csv.py (Final CSV builder & Ranjith Set / Daily Set tagger)
+- Temp_Test/analyze_completed_csv.py (Validation and categorical analytics)
+Reason:
+1. Harvested All Resolved Domains Since 12:00 AM Nov 2: Extracted 26,232 unique successfully completed domains across all 4 production sheet caches (`Sheet1` - `Sheet4`) on Desktop-5080 and Desktop-5321.
+2. Master 57-Column Schema Adherence: Applied exact 57 column structure (Cols A-BE) with raw scraped data in Col AD (capped at 49k chars), NIM summaries (Col AJ), Gemini predictions (Col AL/AR), and Tracxn Write API movement statuses/timestamps (Cols AX-BE).
+3. 58th Column "Source" Assignment: Cross-referenced against the 67,837 domains from the 3 raw Google Sheets. Classified 8,597 domains as "Ranjith Set" (processed during yesterday evening's pre-scraped run) and 17,635 domains as "Daily Set" (processed during Nov 2 daytime and Nov 3 overnight daily runs).
+4. Full Production Validation: Confirmed 100% column consistency (exactly 58 columns on every row) with 21,909 CF->IF movements, 20,921 IF->PF movements, and 4,232 terminal review exits.
+Related tests:
+- Temp_Test/analyze_completed_csv.py (0 malformed rows, 100% schema compliance)
+
+
+## [2026-11-03] Fleet Unprocessed Rollover Execution (11,529 Domains Rebalanced & Launched)
+Files changed:
+- Temp_Test/tomorrow_rollover_unprocessed.py (Rollover executor & immediate launcher)
+Reason:
+1. Automated Unprocessed Domain Rollover: Scanned all 4 production sheets from Row 3 downwards. Harvested 11,529 unique domains that had usable raw scraped data (Col AD) but were not yet resolved.
+2. Balanced 4-Way Fleet Partitioning: Partitioned into 4 equal sets (~2,882 domains per sheet: Sheet 1=2883, Sheet 2=2882, Sheet 3=2882, Sheet 4=2882).
+3. Zero-Delay TC Bypass: Preserved raw scraped text in Col AD and set Col X = "SUCCESS", ensuring all 4 engines completely bypass Tech Crawler. Preserved partial NIM summaries and Gemini predictions so only unresolved stages are computed.
+4. Sheet Resizing & Auto-Launch: Resized all 4 sheets down to compact 2,892-2,893 row footprints and launched all 4 engines with 296 active async workers.
+Related tests:
+- Temp_Test/check_fleet_status.py
+- Live verification: All 4 engines active and processing (Sheet 1: 77 workers, Sheet 2: 73 workers, Sheet 3: 73 workers, Sheet 4: 73 workers).
+
+
+## [2026-11-02] Fleet Pre-Scraped Batch Re-Distribution & Tomorrow Rollover Tooling
+Files changed:
+- Temp_Test/process_pre_scraped_fleet.py (One-time fleet loader & distribution)
+- Temp_Test/process_unscraped_for_sheet4.py (6K Pending list processor & TC Job generator)
+- Temp_Test/tomorrow_rollover_unprocessed.py (Tomorrow's failed/unprocessed domain harvester & distributor)
+- Temp_Test/auto_start_on_write_finish.py (Multi-sheet streaming watcher & auto-launcher)
+Reason:
+1. Fleet Equal Distribution of Pre-Scraped Domains: Ingested 67,837 unique pre-scraped domains from 3 source sheets (`103rJwtjWFAhVxr9kk1DzlId_IovzOtUTMKN38W-vvaI`, `1zb57pQtgccTCrX3HsWT9dK6a_CfuoiHXmMq7GRdaySE`, `1xwlhCqMUfyRl90G_pqSu2dFyjXgjHRCqVHfm4ckZN00`). Enriched missing platform metadata via Tracxn API (60,977 domains matched), structured into the 57-column master schema with Col X = "SUCCESS" and Col AD = raw scraped data (capped at 49k chars), partitioned equally (~16,959 rows each), and streamed to Sheets 1, 2, 3, and 4.
+2. TC Bypass & Instant AI Processing: All 4 engines (Sheets 1-4 across Desktop-5080 and Desktop-5321) successfully launched with 296 active async workers, completely bypassing Tech Crawler and running directly into Phase 2 (NIM Summarization) + Phase 3 (Gemini Predictions) + Phase 4 (Tracxn Movement APIs).
+3. Tomorrow's Rollover Script: Developed `Temp_Test/tomorrow_rollover_unprocessed.py` to harvest any failed or unprocessed domains with raw data from all 4 sheets, merge them with new batches, and distribute them equally across tomorrow's 4 sheets.
+4. Pre-Crawl for Tomorrow's Sheet 4: Processed 6,080 unique unscraped domains from `'6K Pending - Malik 45k list'`, enriched Tracxn metadata, generated asynchronous Tech Crawler Job IDs (6,080 / 6,080 OK), saved to `Sheet4/next_day_pre_crawl.csv`, and synced to Desktop-5321.
+Related tests:
+- Temp_Test/check_fleet_status.py
+- Live verification: All 4 sheets actively running in production (Sheet 1: 77 workers, Sheet 2: 73 workers, Sheet 3: 73 workers, Sheet 4: 73 workers).
+
+
 ## [2026-11-02] Cross-Sheet Fleet Deduplication & Pre-TC Gate Guarantee
 Files changed:
 - common/fleet_deduplicator.py (New module)
