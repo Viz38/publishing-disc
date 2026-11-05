@@ -1,6 +1,19 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-06] Local CSV Pre-Crawl Engine Input Fallback & Circuit Breaker Decoupling
+Files changed:
+- common/gsheet_circuit_breaker.py
+- common/pipeline_engine.py
+Reason:
+1. Fast-Path Pre-Crawl CSV Loading: When `.csv_only_mode` is active (e.g. when Google Sheets becomes read-only or hits `DOCUMENT_TOO_LARGE_TO_EDIT`), `read_sheet_data()` automatically loads today's staged domains directly from local `next_day_pre_crawl.csv` instead of re-reading stale/leftover rows from Google Sheets.
+2. Thread-Safe GSheet Bypass: `should_skip_gsheet()` actively checks `is_csv_only_mode(self.sheet_dir)` to safely bypass Google Sheets writes and record updates to `pending_gsheet_sync.csv` and local cache.
+3. Decoupled Pipeline Execution: Enables engines to execute full discovery waterfall (Tech Crawler, NIM 70B, Gemini IF/Feed predictions, and Tracxn Write APIs) even when Google Sheets document size limits block sheet modifications.
+Related tests:
+- Temp_Test/test_csv_only_mode_precrawl.py (Unit test PASSED)
+- Temp_Test/test_read_sheet_data_csv.py (Unit test PASSED)
+
+
 ## [2026-11-05] Direct Inter-Desktop REST Relay Orchestrator & Periodic Job ID Persistence
 Files changed:
 - common/fleet_orchestrator.py (REST-driven sequential relay across nodes, direct host loopback resolution for TRACXN-DS-508 & TRACXN-DS-532, and automatic exclusions propagation)

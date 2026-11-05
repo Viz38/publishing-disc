@@ -37,6 +37,8 @@ from common import (
     SystemHealthMonitor,
     GSheetCircuitBreaker,
     is_doc_too_large_error,
+    is_csv_only_mode,
+    set_csv_only_mode,
     is_nim_dead_domain,
     is_57_col_schema,
     is_valid_s3_url,
@@ -120,7 +122,7 @@ def configure_engine(sheet_num: int = 1, sheet_dir: str = None, sheet_id: str = 
     EXEC_STATE_FILE = os.path.join(BASE_DIR, ".execution_state.json")
     EXEC_TRACKER = ExecutionTracker(EXEC_STATE_FILE)
     LOCAL_CACHE = LocalSheetCache(os.path.join(BASE_DIR, "discovery_cache.csv"))
-    GSHEET_CIRCUIT_BREAKER = GSheetCircuitBreaker(name=f"Sheet{sheet_num}")
+    GSHEET_CIRCUIT_BREAKER = GSheetCircuitBreaker(name=f"Sheet{sheet_num}", sheet_dir=_SHEET_DIR)
     PENDING_SYNC_FILE = os.path.join(BASE_DIR, "pending_gsheet_sync.csv")
     os.makedirs(LOGS_DIR, exist_ok=True)
 
@@ -633,6 +635,25 @@ def open_sheet_with_fallback(client, sheet_id: str):
 
 async def read_sheet_data(client, SHEET_ID, sheet_name, start_row=3, start_col=1):
     logging.info(f"Opening sheet {SHEET_ID} [{sheet_name}] to load rows starting from row {start_row}...")
+
+    # Fast-path: If CSV-only mode is active and local pre-crawl CSV exists, load directly from CSV
+    if _SHEET_DIR and is_csv_only_mode(_SHEET_DIR):
+        precrawl_csv = os.path.join(_SHEET_DIR, "next_day_pre_crawl.csv")
+        if os.path.exists(precrawl_csv) and os.path.getsize(precrawl_csv) > 0:
+            import csv
+            logging.info(f"📂 [CSV-Only Mode] Active for {_SHEET_DIR}. Loading input rows directly from {precrawl_csv}...")
+            with open(precrawl_csv, "r", encoding="utf-8", errors="replace") as f:
+                rows = list(csv.reader(f))
+            padded_rows = []
+            for r in rows:
+                if r and any(c.strip() for c in r):
+                    if len(r) < 57:
+                        r = r + [""] * (57 - len(r))
+                    padded_rows.append(r[:57])
+            offset = max(0, start_row - 3)
+            sliced = padded_rows[offset:]
+            logging.info(f"📂 [CSV-Only Mode] Loaded {len(padded_rows)} total rows from local CSV. Sliced {len(sliced)} rows starting from row {start_row}.")
+            return sliced
     is_pipe = is_pipeline_sheet(SHEET_ID)
     primary_mgr = await get_gspread_client()
     backup_mgr = await get_gspread_client_backup()

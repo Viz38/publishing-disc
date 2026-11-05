@@ -88,7 +88,12 @@ class GSheetCircuitBreaker:
             return self._tripped
 
     def should_skip_gsheet(self) -> bool:
-        return self.is_tripped()
+        with self._lock:
+            if self._tripped:
+                return True
+        if self.sheet_dir and is_csv_only_mode(self.sheet_dir):
+            return True
+        return False
 
     def trip(self, reason: str = "") -> None:
         with self._lock:
