@@ -928,12 +928,17 @@ async def get_sheet_staged_domains():
         "domains": list(domains)
     }
 
+class FleetFetchAndStageRequest(BaseModel):
+    exclusions: Optional[List[str]] = None
+
 @app.post("/fleet/fetch-and-stage", dependencies=[Depends(verify_token)])
-async def fetch_and_stage_route():
+async def fetch_and_stage_route(req: Optional[FleetFetchAndStageRequest] = None):
     folder_name = os.path.basename(BASE_DIR)
     sheet_num = int(folder_name.replace("Sheet", "") if "Sheet" in folder_name else 1)
     from common.fleet_orchestrator import fetch_and_stage_sheet, get_peer_staged_domains, initialize_fleet_exclusion_pool
     exclusions = initialize_fleet_exclusion_pool()
+    if req and req.exclusions:
+        exclusions.update(d.strip().lower() for d in req.exclusions if d)
     preceding_sheets = [s for s in [1, 2, 3, 4] if s < sheet_num]
     if preceding_sheets:
         peer_doms = await get_peer_staged_domains(preceding_sheets)

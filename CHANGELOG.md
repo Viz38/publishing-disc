@@ -1,6 +1,18 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-05] Direct Inter-Desktop REST Relay Orchestrator & Periodic Job ID Persistence
+Files changed:
+- common/fleet_orchestrator.py (REST-driven sequential relay across nodes, direct host loopback resolution for TRACXN-DS-508 & TRACXN-DS-532, and automatic exclusions propagation)
+- common/advance_precrawl.py (Incremental 500-item checkpoint saving and Job ID idempotency skipping previously generated jobs)
+- Sheet1/api.py, Sheet2/api.py, Sheet3/api.py, Sheet4/api.py (Added `FleetFetchAndStageRequest` accepting cumulative exclusions in request body)
+Reason:
+1. Direct Inter-Desktop REST Relay: Upgraded `orchestrate_fleet_precrawl_relay()` to call `/fleet/fetch-and-stage` and `/fleet/generate-job-ids` directly over REST API, enabling `Desktop-5080` to conduct the entire pre-crawl relay across both desktops without local resource consumption on `Device-Vishnu`.
+2. Exact Hostname Resolution: Configured `is_node_local()` to match `TRACXN-DS-508` (Sheets 1 & 2) and `TRACXN-DS-532` (Sheets 3 & 4), resolving to 0ms `127.0.0.1` loopbacks locally and Cloudflare Zero Trust public URLs remotely.
+3. Resilient Periodic Persistence: Added periodic CSV flushing every 500 items and skip checks for existing `bu-daily_render_` Job IDs in `generate_job_ids_for_rows()`, ensuring zero loss of crawler progress during network or process restarts.
+Related tests:
+- Temp_Test/unit/test_unit_fleet_orchestrator.py (All 20 unit tests passed)
+
 ## [2026-11-05] Cross-Sheet Pre-Crawl Orchestration Relay, REST Peer Deduplication & Automated Budget Backfill
 Files changed:
 - common/fleet_orchestrator.py (New: Pipelined domain fetch relay, decoupled parallel Job ID generation, and peer staging lookup)

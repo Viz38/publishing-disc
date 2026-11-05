@@ -374,10 +374,11 @@ def fetch_domains_for_sheet(
     logger.info(f"Fetched {len(new_rows_57)} unique domains for sheet {sheet_id}")
     return new_rows_57
 
-async def generate_job_ids_for_rows(rows: List[List[str]], concurrency: int = 25) -> List[List[str]]:
+async def generate_job_ids_for_rows(rows: List[List[str]], concurrency: int = 25, save_folder: Optional[str] = None) -> List[List[str]]:
     """
     Submits domains to Tracxn Tech Crawler API concurrently to create Job IDs.
     Populates Col 20 ('DONE'), Col 21 (Job ID), Col 22 (Timestamp), Col 23 ('PROCESSING').
+    Skips rows where a valid Job ID is already present, and periodically persists progress if save_folder is passed.
     """
     token_manager = TracxnKeyManager()
     tc_client = TechCrawlerClient(token_rotator=token_manager)
@@ -387,6 +388,7 @@ async def generate_job_ids_for_rows(rows: List[List[str]], concurrency: int = 25
 
     created_count = 0
     failed_count = 0
+    skipped_count = 0
     total = len(rows)
 
     queue: asyncio.Queue = asyncio.Queue()
@@ -395,7 +397,7 @@ async def generate_job_ids_for_rows(rows: List[List[str]], concurrency: int = 25
 
     async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
         async def _worker():
-            nonlocal created_count, failed_count
+            nonlocal created_count, failed_count, skipped_count
             while True:
                 try:
                     item = queue.get_nowait()
@@ -405,6 +407,12 @@ async def generate_job_ids_for_rows(rows: List[List[str]], concurrency: int = 25
                 idx, r = item
                 domain = r[0].strip() if r and r[0] else ""
                 if domain:
+                    # Skip if already populated with a valid Tech Crawler Job ID
+                    if len(r) > 21 and r[21] and r[21].startswith("bu-daily_render_"):
+                        skipped_count += 1
+                        queue.task_done()
+                        continue
+
                     await asyncio.sleep(0.04)  # Small pacing
                     try:
                         job_id = await tc_client.generate_job_id(session, domain)
@@ -425,9 +433,13 @@ async def generate_job_ids_for_rows(rows: List[List[str]], concurrency: int = 25
                         logger.debug(f"Error generating job ID for {domain}: {e}")
                         failed_count += 1
 
-                    done = created_count + failed_count
+                    done = created_count + failed_count + skipped_count
                     if done % 500 == 0 or done == total:
-                        logger.info(f"Tech Crawler Job ID Generation Progress: {done}/{total} ({created_count} OK, {failed_count} FAIL)")
+                        logger.info(f"Tech Crawler Job ID Generation Progress: {done}/{total} ({created_count} OK, {failed_count} FAIL, {skipped_count} ALREADY PRESENT)")
+                        if save_folder and done % 500 == 0:
+                            save_precrawl_to_csv(save_folder, rows)
+
+                queue.task_done()
 
                 queue.task_done()
 

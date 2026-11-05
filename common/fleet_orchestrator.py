@@ -41,13 +41,15 @@ AUTH_HEADERS = {
     "Content-Type": "application/json"
 }
 
+def is_node_local(sheet_num: int) -> bool:
+    hostname = socket.gethostname().lower()
+    return ("508" in hostname and sheet_num in (1, 2)) or ("532" in hostname and sheet_num in (3, 4))
+
 def get_node_url(sheet_num: int) -> str:
     node = FLEET_NODES.get(sheet_num)
     if not node:
         raise ValueError(f"Unknown sheet num: {sheet_num}")
-    hostname = socket.gethostname().lower()
-    # If on local host, use localhost loopback to prevent external network hops
-    if ("5080" in hostname and sheet_num in (1, 2)) or ("5321" in hostname and sheet_num in (3, 4)):
+    if is_node_local(sheet_num):
         return f"http://127.0.0.1:{node['port']}"
     return f"https://{node['host']}"
 
@@ -59,36 +61,37 @@ async def get_peer_staged_domains(peer_sheet_nums: Optional[List[int]] = None, c
     targets = peer_sheet_nums or [1, 2, 3, 4]
     combined_domains = set()
 
-    # 1. Local filesystem check
+    # 1. Local filesystem check (only for sheets local to this machine)
     if check_local_disk:
         for num in targets:
-            folder = FLEET_NODES.get(num, {}).get("folder")
-            if folder:
-                staged_json = os.path.join(BASE_DIR, folder, "staged_domains.json")
-                if os.path.exists(staged_json):
-                    try:
-                        with open(staged_json, "r", encoding="utf-8") as f:
-                            data = json.load(f)
-                            if isinstance(data, list):
-                                for d in data:
-                                    if d and isinstance(d, str):
-                                        combined_domains.add(d.strip().lower())
-                    except Exception as e:
-                        logger.debug(f"Could not read local {staged_json}: {e}")
+            if is_node_local(num):
+                folder = FLEET_NODES.get(num, {}).get("folder")
+                if folder:
+                    staged_json = os.path.join(BASE_DIR, folder, "staged_domains.json")
+                    if os.path.exists(staged_json):
+                        try:
+                            with open(staged_json, "r", encoding="utf-8") as f:
+                                data = json.load(f)
+                                if isinstance(data, list):
+                                    for d in data:
+                                        if d and isinstance(d, str):
+                                            combined_domains.add(d.strip().lower())
+                        except Exception as e:
+                            logger.debug(f"Could not read local {staged_json}: {e}")
 
-                precrawl_csv = os.path.join(BASE_DIR, folder, "next_day_pre_crawl.csv")
-                if os.path.exists(precrawl_csv):
-                    try:
-                        import csv
-                        with open(precrawl_csv, "r", encoding="utf-8") as cf:
-                            for row in csv.reader(cf):
-                                if row and row[0].strip():
-                                    combined_domains.add(row[0].strip().lower())
-                    except Exception as e:
-                        logger.debug(f"Could not read local {precrawl_csv}: {e}")
+                    precrawl_csv = os.path.join(BASE_DIR, folder, "next_day_pre_crawl.csv")
+                    if os.path.exists(precrawl_csv):
+                        try:
+                            import csv
+                            with open(precrawl_csv, "r", encoding="utf-8") as cf:
+                                for row in csv.reader(cf):
+                                    if row and row[0].strip():
+                                        combined_domains.add(row[0].strip().lower())
+                        except Exception as e:
+                            logger.debug(f"Could not read local {precrawl_csv}: {e}")
 
     # 2. REST API queries
-    async with httpx.AsyncClient(timeout=10.0, verify=False) as client:
+    async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
         for num in targets:
             url = f"{get_node_url(num)}/fleet/staged-domains"
             try:
@@ -164,7 +167,7 @@ async def dispatch_job_generation_task(sheet_num: int, rows: Optional[List[List[
                 return
 
             logger.info(f"Starting Tech Crawler Job ID generation for {len(target_rows)} rows on {name}...")
-            rows_with_jobs = await generate_job_ids_for_rows(target_rows, concurrency=25)
+            rows_with_jobs = await generate_job_ids_for_rows(target_rows, concurrency=25, save_folder=folder)
             save_precrawl_to_csv(folder, rows_with_jobs)
             logger.info(f"🏆 [Job ID Generation] Complete for {name}: {len(rows_with_jobs)} domains saved with Job IDs.")
         except Exception as e:
@@ -178,11 +181,11 @@ async def orchestrate_fleet_precrawl_relay() -> Dict[str, Any]:
     """
     Master fleet orchestrator:
     1. Initializes fleet exclusion pool (daily processed registry + live Google Sheets).
-    2. Sequentially executes domain fetch relay (Sheet 1 -> 2 -> 3 -> 4), immediately passing
-       claimed domains to subsequent sheets.
+    2. Sequentially executes domain fetch relay (Sheet 1 -> 2 -> 3 -> 4) across nodes via REST API,
+       immediately passing claimed domains to subsequent sheets.
     3. As soon as any sheet completes domain fetch, immediately dispatches its TC Job ID generation
-       in the background without blocking the relay!
-    4. Audits zero cross-sheet duplicate overlap.
+       in the background on that specific host without blocking the relay!
+    4. Audits zero cross-sheet duplicate overlap across all 4 production sheets.
     """
     logger.info("==================================================================")
     logger.info("🌟 Starting Pipelined Fleet Advance Pre-Crawl Relay")
@@ -201,26 +204,77 @@ async def orchestrate_fleet_precrawl_relay() -> Dict[str, Any]:
         "duplicates_across_sheets": 0
     }
 
-    for sheet_num in [1, 2, 3, 4]:
-        node = FLEET_NODES[sheet_num]
-        s_name = node["name"]
+    async with httpx.AsyncClient(timeout=300.0, verify=False) as client:
+        for sheet_num in [1, 2, 3, 4]:
+            node = FLEET_NODES[sheet_num]
+            s_name = node["name"]
+            node_url = get_node_url(sheet_num)
 
-        # 1. Fetch domains using current cumulative exclusions
-        rows = await fetch_and_stage_sheet(sheet_num, exclusions)
-        doms = [r[0].strip().lower() for r in rows if r and r[0]]
-        sheet_domains[sheet_num] = doms
+            # 1. Trigger domain fetch on that node
+            logger.info(f"▶ [Relay Step] Triggering domain fetch on {s_name} ({node_url})...")
+            fetch_url = f"{node_url}/fleet/fetch-and-stage"
+            t0 = time.time()
+            staged_count = 0
+            api_success = False
+            payload = {"exclusions": list(exclusions)}
+            try:
+                fetch_resp = await client.post(fetch_url, json=payload, headers=AUTH_HEADERS)
+                if fetch_resp.status_code == 200:
+                    fetch_data = fetch_resp.json()
+                    staged_count = fetch_data.get("domains_staged", 0)
+                    api_success = True
+                    logger.info(f"✅ {s_name} successfully staged {staged_count} domains via API in {time.time() - t0:.1f}s.")
+                else:
+                    logger.warning(f"⚠️ {s_name} API returned status {fetch_resp.status_code}. Falling back to direct fetch.")
+            except Exception as e:
+                logger.warning(f"⚠️ Could not reach {s_name} via {fetch_url} ({e}). Falling back to direct fetch.")
 
-        # 2. Add to exclusions immediately for next sheet
-        exclusions.update(doms)
+            if not api_success:
+                # Direct in-process fetch fallback (used in unit tests or offline recovery)
+                rows = await fetch_and_stage_sheet(sheet_num, exclusions)
+                staged_count = len(rows)
 
-        # 3. Immediately dispatch background TC job generation for this sheet
-        await dispatch_job_generation_task(sheet_num, rows)
+            # 2. Immediately dispatch background TC job generation on that node
+            gen_url = f"{node_url}/fleet/generate-job-ids"
+            gen_dispatched = False
+            try:
+                gen_resp = await client.post(gen_url, headers=AUTH_HEADERS)
+                if gen_resp.status_code == 200:
+                    gen_dispatched = True
+                    logger.info(f"🚀 Dispatched background TC Job ID generation via API on {s_name}.")
+            except Exception as e:
+                logger.warning(f"Could not dispatch Job ID generation via API on {s_name} ({e})")
 
-        report["sheets"][sheet_num] = {
-            "name": s_name,
-            "domains_claimed": len(doms),
-            "unique_domains": len(set(doms))
-        }
+            if not gen_dispatched:
+                await dispatch_job_generation_task(sheet_num, rows if not api_success else None)
+
+            # 3. Retrieve staged domains to update cumulative exclusions and audit deduplication
+            domains_url = f"{node_url}/fleet/staged-domains"
+            doms = []
+            if api_success:
+                try:
+                    dom_resp = await client.get(domains_url, headers=AUTH_HEADERS)
+                    if dom_resp.status_code == 200:
+                        doms = dom_resp.json().get("domains", [])
+                except Exception as e:
+                    logger.debug(f"Could not get staged domains from {s_name} via API: {e}")
+
+            if not doms and not api_success and rows:
+                doms = [r[0].strip().lower() for r in rows if r and r[0]]
+            elif not doms:
+                # Fallback to local disk check
+                doms_set = await get_peer_staged_domains([sheet_num], check_local_disk=True)
+                doms = list(doms_set)
+
+            clean_doms = [d.strip().lower() for d in doms if d]
+            sheet_domains[sheet_num] = clean_doms
+            exclusions.update(clean_doms)
+
+            report["sheets"][sheet_num] = {
+                "name": s_name,
+                "domains_claimed": len(clean_doms),
+                "unique_domains": len(set(clean_doms))
+            }
 
     # Verify cross-sheet duplicates
     total_dups = 0
