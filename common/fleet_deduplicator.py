@@ -222,17 +222,18 @@ def load_all_active_fleet_domains(gc=None) -> Dict[int, List[Tuple[int, str]]]:
     return fleet_data
 
 
-def clean_and_deduplicate_all_sheets(gc=None, dry_run: bool = False) -> Dict[str, Any]:
+from common.advance_precrawl import get_gspread_client, fetch_domains_for_sheet
+
+def clean_and_deduplicate_all_sheets(gc=None, dry_run: bool = False, backfill: bool = True) -> Dict[str, Any]:
     """
     Full cross-sheet cleaning operation across all 4 sheets.
     1. Reads active domains across Sheets 1-4.
     2. Identifies all duplicates (respecting priority Sheet 1 > 2 > 3 > 4) and daily registry.
     3. Purges duplicate rows from Google Sheets (blanks Col A so engine bypasses them).
-    4. Enforces the user's No-Backfill rule: keeps remaining unique domains.
+    4. Automated Budget Backfill: Re-fetches replacement domains for purged rows so budget is 100% fulfilled.
     5. Returns audit report.
     """
     if gc is None:
-        from common.advance_precrawl import get_gspread_client
         gc = get_gspread_client()
 
     registry = DailyProcessedRegistry()
@@ -299,6 +300,31 @@ def clean_and_deduplicate_all_sheets(gc=None, dry_run: bool = False) -> Dict[str
                     retry_gspread_call(lambda: ws.batch_clear(sub_ranges))
 
                 logger.info(f"[{s_cfg['name']}] Successfully purged {len(s_dups)} duplicate rows in sheet.")
+
+                # Automated Budget Backfill
+                if backfill and len(s_dups) > 0:
+                    missing_count = len(s_dups)
+                    logger.info(f"[{s_cfg['name']}] Refetching {missing_count} fresh replacement domains to maintain full budget...")
+                    exclusions = set(daily_seen) | set(all_valid_unique_domains)
+                    try:
+                        replacement_rows = fetch_domains_for_sheet(
+                            sheet_id=s_id,
+                            target_count=missing_count,
+                            shared_exclusion_set=exclusions
+                        )
+                        if replacement_rows:
+                            cleared_rows = sorted([r for r, _, _ in s_dups])
+                            for idx, rep_row in enumerate(replacement_rows):
+                                if idx < len(cleared_rows):
+                                    target_r = cleared_rows[idx]
+                                    retry_gspread_call(lambda: ws.update(range_name=f"A{target_r}:BE{target_r}", values=[rep_row], value_input_option="USER_ENTERED"))
+                                    dom_clean = rep_row[0].strip().lower()
+                                    all_valid_unique_domains.append(dom_clean)
+                                    exclusions.add(dom_clean)
+                            logger.info(f"[{s_cfg['name']}] Successfully backfilled {len(replacement_rows)}/{missing_count} replacement domains.")
+                            report["sheet_details"][s_num]["backfilled_count"] = len(replacement_rows)
+                    except Exception as bfe:
+                        logger.error(f"[{s_cfg['name']}] Error during budget backfill refetch: {bfe}")
             except Exception as e:
                 logger.error(f"[{s_cfg['name']}] Failed to purge duplicate rows in sheet: {e}")
 

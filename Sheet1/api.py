@@ -896,6 +896,74 @@ async def co_process_nim_summarize(req: FleetSummarizeRequest):
         })
     return {"status": "ok", "results": results}
 
+@app.get("/fleet/staged-domains", dependencies=[Depends(verify_token)])
+async def get_sheet_staged_domains():
+    folder_name = os.path.basename(BASE_DIR)
+    domains = set()
+    staged_json = os.path.join(BASE_DIR, "staged_domains.json")
+    if os.path.exists(staged_json):
+        try:
+            with open(staged_json, "r", encoding="utf-8") as f:
+                d_list = json.load(f)
+                if isinstance(d_list, list):
+                    domains.update(d.strip().lower() for d in d_list if d)
+        except Exception:
+            pass
+
+    precrawl_csv = os.path.join(BASE_DIR, "next_day_pre_crawl.csv")
+    if os.path.exists(precrawl_csv):
+        try:
+            import csv
+            with open(precrawl_csv, "r", encoding="utf-8") as cf:
+                for row in csv.reader(cf):
+                    if row and row[0].strip():
+                        domains.add(row[0].strip().lower())
+        except Exception:
+            pass
+
+    return {
+        "status": "ok",
+        "sheet": folder_name,
+        "count": len(domains),
+        "domains": list(domains)
+    }
+
+@app.post("/fleet/fetch-and-stage", dependencies=[Depends(verify_token)])
+async def fetch_and_stage_route():
+    folder_name = os.path.basename(BASE_DIR)
+    sheet_num = int(folder_name.replace("Sheet", "") if "Sheet" in folder_name else 1)
+    from common.fleet_orchestrator import fetch_and_stage_sheet, get_peer_staged_domains, initialize_fleet_exclusion_pool
+    exclusions = initialize_fleet_exclusion_pool()
+    preceding_sheets = [s for s in [1, 2, 3, 4] if s < sheet_num]
+    if preceding_sheets:
+        peer_doms = await get_peer_staged_domains(preceding_sheets)
+        exclusions.update(peer_doms)
+
+    rows = await fetch_and_stage_sheet(sheet_num, exclusions)
+    return {
+        "status": "ok",
+        "sheet": folder_name,
+        "domains_staged": len(rows)
+    }
+
+@app.post("/fleet/generate-job-ids", dependencies=[Depends(verify_token)])
+async def generate_job_ids_route():
+    folder_name = os.path.basename(BASE_DIR)
+    sheet_num = int(folder_name.replace("Sheet", "") if "Sheet" in folder_name else 1)
+    from common.fleet_orchestrator import dispatch_job_generation_task
+    await dispatch_job_generation_task(sheet_num)
+    return {
+        "status": "ok",
+        "sheet": folder_name,
+        "message": "Background Tech Crawler Job ID generation dispatched"
+    }
+
+@app.post("/fleet/orchestrate-precrawl", dependencies=[Depends(verify_token)])
+async def orchestrate_precrawl_route():
+    from common.fleet_orchestrator import orchestrate_fleet_precrawl_relay
+    report = await orchestrate_fleet_precrawl_relay()
+    return report
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=settings.DISCOVERY_PORT)

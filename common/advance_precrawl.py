@@ -6,7 +6,7 @@ import time
 import asyncio
 import logging
 import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Set
 import aiohttp
 import requests
 import gspread
@@ -131,19 +131,22 @@ def parse_company_to_57col(
     row[20] = "DONE"
     return row
 
-def fetch_domains_for_sheet(sheet_id: str, target_count: int = 15000, key_manager: Optional[TracxnKeyManager] = None) -> List[List[str]]:
-    km = key_manager or TracxnKeyManager()
-    gc = get_gspread_client()
-    sh = gc.open_by_key(sheet_id)
-    payload_ws = sh.worksheet("CF_IF Engine - Input Payload")
-    payload_rows = payload_ws.get_all_values()
-
-    # Load currently active domains from ALL production sheets and daily processed registry
-    # to guarantee tomorrow's pre-crawl excludes all active domains across the fleet
+def initialize_fleet_exclusion_pool(gc=None) -> Set[str]:
     from common.fleet_deduplicator import DailyProcessedRegistry, TARGET_SHEETS as FLEET_TARGET_SHEETS
-    registry = DailyProcessedRegistry()
-    existing_sheet_domains = registry.get_daily_processed()
-    logger.info(f"Loaded {len(existing_sheet_domains)} domains from daily processed registry to exclude")
+    pool = set()
+    try:
+        registry = DailyProcessedRegistry()
+        pool.update(registry.get_daily_processed())
+        logger.info(f"Loaded {len(pool)} domains from daily processed registry to exclude")
+    except Exception as re:
+        logger.warning(f"Could not load daily processed registry: {re}")
+
+    if gc is None:
+        try:
+            gc = get_gspread_client()
+        except Exception as ge:
+            logger.warning(f"Could not get gspread client for fleet exclusion: {ge}")
+            return pool
 
     for s_target in FLEET_TARGET_SHEETS:
         try:
@@ -156,17 +159,54 @@ def fetch_domains_for_sheet(sheet_id: str, target_count: int = 15000, key_manage
             for d in col_a_vals[2:]:
                 d_clean = d.strip().lower()
                 if d_clean:
-                    existing_sheet_domains.add(d_clean)
+                    pool.add(d_clean)
         except Exception as ee:
             logger.warning(f"Could not load active domains from {s_target['name']} for exclusion: {ee}")
-    logger.info(f"Total {len(existing_sheet_domains)} active fleet + daily domains excluded from tomorrow's advance pre-crawl")
+
+    logger.info(f"Total {len(pool)} active fleet + daily domains in exclusion pool")
+    return pool
+
+def fetch_domains_for_sheet(
+    sheet_id: str,
+    target_count: Optional[int] = None,
+    key_manager: Optional[TracxnKeyManager] = None,
+    shared_exclusion_set: Optional[Set[str]] = None
+) -> List[List[str]]:
+    km = key_manager or TracxnKeyManager()
+    gc = get_gspread_client()
+    sh = gc.open_by_key(sheet_id)
+    payload_ws = sh.worksheet("CF_IF Engine - Input Payload")
+    payload_rows = payload_ws.get_all_values()
+
+    # Calculate total budget from payload tab if target_count is default or None
+    total_payload_budget = 0
+    for idx in range(2, len(payload_rows)):
+        p_row = payload_rows[idx]
+        if not p_row or not p_row[0]:
+            continue
+        b_str = p_row[5].strip() if len(p_row) > 5 else ""
+        if b_str and b_str.isdigit():
+            total_payload_budget += int(b_str)
+
+    if target_count is None or target_count == 15000:
+        effective_target_count = total_payload_budget if total_payload_budget > 0 else (target_count or 15000)
+    else:
+        effective_target_count = target_count
+
+    logger.info(f"Target count for sheet {sheet_id}: {effective_target_count} domains (Payload defined total: {total_payload_budget})")
+
+    # If shared_exclusion_set is provided, use it directly (it gets updated in place as domains are accepted)
+    if shared_exclusion_set is not None:
+        existing_sheet_domains = shared_exclusion_set
+    else:
+        existing_sheet_domains = initialize_fleet_exclusion_pool(gc)
 
     new_rows_57 = []
     domain_seen = set()
     added_time_str = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
 
     for idx in range(2, len(payload_rows)):
-        if len(new_rows_57) >= target_count:
+        if len(new_rows_57) >= effective_target_count:
             break
 
         p_row = payload_rows[idx]
@@ -214,7 +254,7 @@ def fetch_domains_for_sheet(sheet_id: str, target_count: int = 15000, key_manage
 
         domain_added_count = 0
         for funnel in active_funnels:
-            if domain_added_count >= effective_budget or len(new_rows_57) >= target_count:
+            if domain_added_count >= effective_budget or len(new_rows_57) >= effective_target_count:
                 break
 
             f_name = funnel["name"]
@@ -266,6 +306,7 @@ def fetch_domains_for_sheet(sheet_id: str, target_count: int = 15000, key_manage
                             dom = item.get("domain", "").strip().lower()
                             if dom and dom not in domain_seen and dom not in existing_sheet_domains:
                                 domain_seen.add(dom)
+                                existing_sheet_domains.add(dom)
                                 row_57 = parse_company_to_57col(
                                     company=item,
                                     filter_group_name=filter_group_name,
@@ -280,12 +321,14 @@ def fetch_domains_for_sheet(sheet_id: str, target_count: int = 15000, key_manage
                                 new_rows_57.append(row_57)
                                 domain_added_count += 1
                                 if domain_added_count % 1000 == 0:
-                                    logger.info(f"  --> Fetched {domain_added_count}/{effective_budget} domains for '{filter_name}' ({len(new_rows_57)} total for sheet)...")
-                                if len(new_rows_57) >= target_count:
+                                    logger.info(f"  --> Fetched {domain_added_count}/{effective_budget} domains for '{filter_name}' ({len(new_rows_57)}/{effective_target_count} total for sheet)...")
+                                if len(new_rows_57) >= effective_target_count:
                                     break
-                        if len(new_rows_57) >= target_count:
+                        if len(new_rows_57) >= effective_target_count:
                             break
                         from_offset += page_size
+                        if from_offset > 0 and from_offset % 2000 == 0 and domain_added_count < effective_budget:
+                            logger.info(f"  [Offset {from_offset}] '{filter_name}': {domain_added_count}/{effective_budget} domains accepted so far (skipping already-allocated domains)...")
                         if total_cov and from_offset >= total_cov:
                             break
                     elif resp.status_code == 403:
@@ -451,20 +494,20 @@ def save_precrawl_to_csv(folder: str, rows: List[List[str]]) -> str:
     logger.info(f"💾 Saved {len(rows)} pre-crawled domains to {out_path} ({os.path.getsize(out_path) / 1024:.1f} KB)")
     return out_path
 
-async def run_precrawl_for_sheet(target: Dict[str, Any], budget: int = 15000):
+async def run_precrawl_for_sheet(target: Dict[str, Any], budget: Optional[int] = None, shared_exclusion_set: Optional[Set[str]] = None):
     num = target["num"]
     sheet_id = target["id"]
     folder = target["folder"]
     name = target["name"]
 
     logger.info(f"\n=======================================================")
-    logger.info(f"🚀 Advance Pre-Crawl: {name} (Budget: {budget})")
+    logger.info(f"🚀 Advance Pre-Crawl: {name} (Requested Budget: {budget or 'Dynamic'})")
     logger.info(f"=======================================================")
 
     t0 = time.time()
     # 1. Fetch domains
-    logger.info(f"1. Fetching {budget} domains from Tracxn API...")
-    rows = await asyncio.to_thread(fetch_domains_for_sheet, sheet_id, budget)
+    logger.info(f"1. Fetching domains from Tracxn API...")
+    rows = await asyncio.to_thread(fetch_domains_for_sheet, sheet_id, budget, None, shared_exclusion_set)
 
     if not rows:
         logger.warning(f"No domains fetched for {name}!")
@@ -481,17 +524,20 @@ async def run_precrawl_for_sheet(target: Dict[str, Any], budget: int = 15000):
     logger.info(f"🎉 Pre-Crawl for {name} finished in {elapsed/60:.2f} mins ({len(rows_with_jobs)} domains saved).\n")
     return len(rows_with_jobs)
 
-async def run_full_advance_precrawl(budget_per_sheet: int = 15000):
+async def run_full_advance_precrawl(budget_per_sheet: Optional[int] = None):
     logger.info("==================================================================")
-    logger.info(f"🌟 Starting Fleet Advance Pre-Crawl for Tomorrow ({budget_per_sheet * len(TARGET_SHEETS)} total domains)")
+    logger.info(f"🌟 Starting Fleet Advance Pre-Crawl for Tomorrow (Shared Cross-Sheet Exclusion)")
     logger.info("==================================================================")
 
     # First clean old storage (> 7 days)
     clean_old_storage(BASE_DIR, retention_days=7)
 
+    # Initialize shared fleet exclusion pool once across all sheets
+    shared_exclusion_pool = initialize_fleet_exclusion_pool()
+
     total_generated = 0
     for target in TARGET_SHEETS:
-        cnt = await run_precrawl_for_sheet(target, budget=budget_per_sheet)
+        cnt = await run_precrawl_for_sheet(target, budget=budget_per_sheet, shared_exclusion_set=shared_exclusion_pool)
         total_generated += cnt
 
     logger.info(f"\n🏆 ALL SHEETS ADVANCE PRE-CRAWL COMPLETE! Total: {total_generated} domains prepared with Job IDs.")
@@ -567,7 +613,7 @@ def load_precrawl_to_sheet(sheet_id: str, folder: str, chunk_size: int = 500) ->
     return total_rows
 
 if __name__ == "__main__":
-    budget = 15000
+    budget = None
     sheet_num = None
     if len(sys.argv) > 1 and sys.argv[1].isdigit():
         budget = int(sys.argv[1])

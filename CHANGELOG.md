@@ -1,6 +1,48 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-05] Cross-Sheet Pre-Crawl Orchestration Relay, REST Peer Deduplication & Automated Budget Backfill
+Files changed:
+- common/fleet_orchestrator.py (New: Pipelined domain fetch relay, decoupled parallel Job ID generation, and peer staging lookup)
+- common/fleet_deduplicator.py (Automated budget backfill refetch loop replacing the former no-backfill blanking policy)
+- common/advance_precrawl.py (Dynamic payload budget calculation, cross-sheet shared exclusion pool, and offset advancement)
+- Sheet1/api.py (Exposed `/fleet/staged-domains`, `/fleet/fetch-and-stage`, `/fleet/generate-job-ids`, `/fleet/orchestrate-precrawl`)
+- Sheet2/api.py (Exposed `/fleet/staged-domains`, `/fleet/fetch-and-stage`, `/fleet/generate-job-ids`, `/fleet/orchestrate-precrawl`)
+- Sheet3/api.py (Exposed `/fleet/staged-domains`, `/fleet/fetch-and-stage`, `/fleet/generate-job-ids`, `/fleet/orchestrate-precrawl`)
+- Sheet4/api.py (Exposed `/fleet/staged-domains`, `/fleet/fetch-and-stage`, `/fleet/generate-job-ids`, `/fleet/orchestrate-precrawl`)
+- run_daily_precrawl.sh (Integrated 11:05 PM IST fleet pre-crawl orchestrator with Desktop-5080 primary and Desktop-5321 fallback)
+Reason:
+1. Pipelined Staging (Decoupled Fetch & Parallel Job Generation): Implemented rapid domain fetch relay (Sheet 1 -> 2 -> 3 -> 4) completing domain reservation across the entire fleet in under 2 minutes, while immediately dispatching Tech Crawler Job ID generation concurrently in the background across all 4 nodes without blocking the relay.
+2. Peer REST API Communication: Added `/fleet/staged-domains`, `/fleet/fetch-and-stage`, and `/fleet/generate-job-ids` to FastAPI supervisors across all 4 sheets, allowing Desktop-5080 and Desktop-5321 to query each other's staged and claimed domains in <50ms with Bearer token authentication.
+3. Automated Budget Backfill: Replaced the outdated "No-Backfill" blanking policy in `fleet_deduplicator.py` with an automated re-fetch loop. When duplicate rows are purged, the deduplicator automatically queries Tracxn's API with cumulative exclusions to backfill fresh replacement rows until each sheet fulfills 100% of its assigned budget.
+4. Dynamic Cross-Sheet Offset Partitioning: Implemented cumulative offset advancement across sheets requesting identical filter payloads (e.g. `Unprocessed` 16k budget across Sheets 1, 2, and 4), preventing duplicate API queries and guaranteeing zero cross-sheet overlap.
+Related tests:
+- Temp_Test/unit/test_unit_cross_sheet_pagination.py (Verified offset paging past shared exclusions and cascading funnels)
+- Temp_Test/unit/test_unit_fleet_orchestrator.py (Verified peer staged domain querying and decoupled pipelined relay)
+- Temp_Test/unit/test_unit_deduplicator_backfill.py (Verified automated refetch and backfill of purged duplicate rows)
+
+## [2026-11-05] Fleet Git HEAD Alignment to `9dbe4d0` and Full 4-Sheet Pipeline Resume
+Files changed:
+- Temp_Test/align_git_head.py (Pulled origin/main and aligned git HEAD to 9dbe4d0 on Desktop-5080 and Desktop-5321)
+- Temp_Test/deploy_pull_and_resume_all.py (Restarted systemd services and cleared stale stop requests)
+- Temp_Test/trigger_resume_all_sheets.py (Dispatched POST /discovery/start for all 4 sheets)
+- Temp_Test/check_fleet_resume_status.py (Verified live running telemetry and active workers across all 4 nodes)
+- Temp_Test/sync_operations_dashboard.py (Synchronized Operations Dashboard KPI cards with 90,856 fleet total and 43,892 completed)
+Reason:
+1. Fleet Git Alignment: Aligned local git repositories on both production hosts (`Desktop-5080` and `Desktop-5321`) to commit `9dbe4d0` (`feat: add target budget threshold break invariance and progress logging to advance precrawl`).
+2. Clean Process Lifecycle Reset: Restarted systemd uvicorn services (`discovery-cf1`, `discovery-cf2`, `discovery-cf3`, `discovery-filterv2`), cleared stale `.stop_requested` files, and unblocked hanging worker processes.
+3. Full Fleet Pipeline Resume: Successfully dispatched `/discovery/start` (`start_row=3`, `mode="full"`) to all four production engines.
+4. Concurrency Verification: Confirmed all 4 engines are actively processing with **290 concurrent AI workers**:
+   - Sheet 1 (CF-1): 10,757 / 13,329 rows (77 active workers)
+   - Sheet 2 (CF-2): 14,746 / 28,546 rows (67 active workers)
+   - Sheet 3 (CF-3): 6,725 / 18,946 rows (73 active workers)
+   - Sheet 4 (Filter-V2): 11,664 / 30,035 rows (73 active workers)
+   - Fleet Grand Total: 90,856 rows with 43,892 domains completed (48.3%).
+Related tests:
+- Temp_Test/check_fleet_resume_status.py (All 4 sheets active=True, HTTP 200)
+- Temp_Test/sync_operations_dashboard.py (Operations Dashboard synchronized)
+
+
 ## [2026-11-05] Full Multi-Day Discovery Engine Logs Upload (Nov 1 to Nov 4, 97,911 Rows)
 Files changed:
 - Temp_Test/extract_nov1_nov2_datasets.py (Remote cache extraction for Nov 1 and Nov 2 from Desktop-5080 and Desktop-5321)
