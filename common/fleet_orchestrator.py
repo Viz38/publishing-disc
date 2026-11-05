@@ -204,7 +204,7 @@ async def orchestrate_fleet_precrawl_relay() -> Dict[str, Any]:
         "duplicates_across_sheets": 0
     }
 
-    async with httpx.AsyncClient(timeout=300.0, verify=False) as client:
+    async with httpx.AsyncClient(timeout=900.0, verify=False) as client:
         for sheet_num in [1, 2, 3, 4]:
             node = FLEET_NODES[sheet_num]
             s_name = node["name"]
