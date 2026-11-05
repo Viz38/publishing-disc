@@ -14,10 +14,13 @@ import logging
 import asyncio
 from typing import Dict, List, Set, Optional, Any
 import httpx
+from dotenv import load_dotenv
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
+
+load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 from common.advance_precrawl import (
     TARGET_SHEETS,
@@ -36,10 +39,12 @@ FLEET_NODES = {
     4: {"name": "Sheet 4 (Filter-V2)", "port": 8772, "host": "5321-sheet4.rajath.world", "folder": "Sheet4", "id": "1RYkvqgxMJpjMrD3x9D4VE8Zu4UJlf36gN-bfJ7T-bcA"},
 }
 
-AUTH_HEADERS = {
-    "Authorization": "Bearer REDACTED_SECRET",
-    "Content-Type": "application/json"
-}
+def get_auth_headers() -> Dict[str, str]:
+    token = os.getenv("SERVICE_AUTH_TOKEN", "")
+    return {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
 
 def is_node_local(sheet_num: int) -> bool:
     hostname = socket.gethostname().lower()
@@ -95,7 +100,7 @@ async def get_peer_staged_domains(peer_sheet_nums: Optional[List[int]] = None, c
         for num in targets:
             url = f"{get_node_url(num)}/fleet/staged-domains"
             try:
-                resp = await client.get(url, headers=AUTH_HEADERS)
+                resp = await client.get(url, headers=get_auth_headers())
                 if resp.status_code == 200:
                     payload = resp.json()
                     doms = payload.get("domains", [])
@@ -218,7 +223,7 @@ async def orchestrate_fleet_precrawl_relay() -> Dict[str, Any]:
             api_success = False
             payload = {"exclusions": list(exclusions)}
             try:
-                fetch_resp = await client.post(fetch_url, json=payload, headers=AUTH_HEADERS)
+                fetch_resp = await client.post(fetch_url, json=payload, headers=get_auth_headers())
                 if fetch_resp.status_code == 200:
                     fetch_data = fetch_resp.json()
                     staged_count = fetch_data.get("domains_staged", 0)
@@ -238,7 +243,7 @@ async def orchestrate_fleet_precrawl_relay() -> Dict[str, Any]:
             gen_url = f"{node_url}/fleet/generate-job-ids"
             gen_dispatched = False
             try:
-                gen_resp = await client.post(gen_url, headers=AUTH_HEADERS)
+                gen_resp = await client.post(gen_url, headers=get_auth_headers())
                 if gen_resp.status_code == 200:
                     gen_dispatched = True
                     logger.info(f"🚀 Dispatched background TC Job ID generation via API on {s_name}.")
@@ -253,7 +258,7 @@ async def orchestrate_fleet_precrawl_relay() -> Dict[str, Any]:
             doms = []
             if api_success:
                 try:
-                    dom_resp = await client.get(domains_url, headers=AUTH_HEADERS)
+                    dom_resp = await client.get(domains_url, headers=get_auth_headers())
                     if dom_resp.status_code == 200:
                         doms = dom_resp.json().get("domains", [])
                 except Exception as e:

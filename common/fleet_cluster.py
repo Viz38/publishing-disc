@@ -22,7 +22,9 @@ FLEET_TOPOGRAPHY: Dict[int, Dict[str, Any]] = {
     4: {"host": "Desktop-5321", "port": 8772, "public_url": "https://5321-sheet4.rajath.world"},
 }
 
-DEFAULT_AUTH_HEADER = {"Authorization": "Bearer REDACTED_SECRET"}
+def get_default_auth_token() -> str:
+    token = os.getenv("SERVICE_AUTH_TOKEN", "")
+    return f"Bearer {token}"
 
 class FleetClusterManager:
     """
@@ -32,15 +34,15 @@ class FleetClusterManager:
     def __init__(
         self,
         current_sheet_num: int,
-        auth_token: str = "Bearer REDACTED_SECRET",
+        auth_token: Optional[str] = None,
         offload_threshold: int = 300,
         max_batch_size: int = 25
     ):
         self.current_sheet_num = current_sheet_num
-        self.auth_token = auth_token
+        self.auth_token = auth_token or get_default_auth_token()
         self.offload_threshold = offload_threshold
         self.max_batch_size = max_batch_size
-        self._headers = {"Authorization": auth_token, "Content-Type": "application/json"}
+        self._headers = {"Authorization": self.auth_token, "Content-Type": "application/json"}
 
     def get_peer_urls(self) -> List[str]:
         """Returns public URLs for peer sheets running on the other desktop host."""
