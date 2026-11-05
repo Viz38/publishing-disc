@@ -7,7 +7,8 @@ import signal
 import sys
 import time
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
+from pydantic import BaseModel
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
