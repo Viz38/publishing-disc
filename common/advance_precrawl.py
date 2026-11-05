@@ -214,7 +214,7 @@ def fetch_domains_for_sheet(sheet_id: str, target_count: int = 15000, key_manage
 
         domain_added_count = 0
         for funnel in active_funnels:
-            if domain_added_count >= effective_budget:
+            if domain_added_count >= effective_budget or len(new_rows_57) >= target_count:
                 break
 
             f_name = funnel["name"]
@@ -279,8 +279,12 @@ def fetch_domains_for_sheet(sheet_id: str, target_count: int = 15000, key_manage
                                 )
                                 new_rows_57.append(row_57)
                                 domain_added_count += 1
+                                if domain_added_count % 1000 == 0:
+                                    logger.info(f"  --> Fetched {domain_added_count}/{effective_budget} domains for '{filter_name}' ({len(new_rows_57)} total for sheet)...")
                                 if len(new_rows_57) >= target_count:
                                     break
+                        if len(new_rows_57) >= target_count:
+                            break
                         from_offset += page_size
                         if total_cov and from_offset >= total_cov:
                             break

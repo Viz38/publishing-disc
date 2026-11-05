@@ -1,6 +1,58 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-05] Full Multi-Day Discovery Engine Logs Upload (Nov 1 to Nov 4, 97,911 Rows)
+Files changed:
+- Temp_Test/extract_nov1_nov2_datasets.py (Remote cache extraction for Nov 1 and Nov 2 from Desktop-5080 and Desktop-5321)
+- Temp_Test/upload_nov_logs_all_days.py (Unified streaming and formatting script for Nov 1 to Nov 4 logs)
+- Temp_Test/verify_final_nov_sheet.py (Comprehensive integrity verification script for target sheet)
+- Target Spreadsheet (`17z47E8v3F4xHBl7BG0IEkjWGeLMxOWIRu0H2Mfr30Nk`, Title: `Nov Logs: 1st to 4th`)
+Reason:
+1. Multi-Day Extraction: Harvested, deduplicated, and reconstructed full discovery engine execution logs across all 4 production nodes for November 1st through November 4th, 2026.
+2. Master 58-Column Formatting: Formatted each daily worksheet (`1Nov`, `2Nov`, `3Nov`, `4Nov`) with frozen Row 1 headers, bold 10pt text, `#E6EEFA` soft-blue background, centered alignment, clip wrap, and auto-fitted column widths for Columns A through BF.
+3. Raw Data Cell Cap Protection: Set Col AD (idx 29, `Raw Data`) to `"{RAW_Data_Appended}"` across all rows to prevent Google Sheets 50,000-character single-cell overflow errors.
+4. Final Verified Counts Across Worksheets:
+   - `1Nov`: 4,092 data rows (Daily Set / SMCP Set)
+   - `2Nov`: 13,395 data rows (Daily Set / SMCP Set)
+   - `3Nov`: 49,000 data rows (Ranjith Batch)
+   - `4Nov`: 31,424 data rows (Daily Set / SMCP Set)
+   - Grand Total: **97,911 completed domain records** uploaded and verified. Default empty `Sheet1` cleanly removed.
+Related tests:
+- Temp_Test/verify_final_nov_sheet.py (Verified all 4 tabs exist, dimensions match, 58 columns, Col AD marker, and exact row counts)
+
+
+## [2026-11-05] Hot Reload of Engines 3 & 4 on Desktop-5321 and Fleet Dashboard Synchronization (90,856 Rows)
+Files changed:
+- Temp_Test/reload_desktop_5321.py (Hot-reload sequence: terminated CLI process instances, flushed stop requests, cleanly restarted systemd uvicorn services, and triggered full start from Row 3)
+- Temp_Test/sync_operations_dashboard.py (Atomic sync script reading live telemetry from all 4 production nodes and batch-updating Operations Dashboard `Status` worksheet)
+- Operations Dashboard (`1eVKXWnGNsHp8WmoqXo8Pz-mB6f7V7xGleMfd7CcahSA`, tab `Status`): Table 1, Table 2, and KPI header cards updated to reflect 90,856 fleet rows
+Reason:
+1. Telemetry In-Memory Realignment: PIDs 1266906 and 1266908 on `Desktop-5321` were initialized at 12:14 PM IST with pre-expansion row counts (10,386 and 15,013). Executed Option B to hot-reload both engines.
+2. Clean Process Lifecycle Reset: Gracefully terminated previous processes, cleared stale `.stop_requested` files, restarted supervisor services (`discovery-cf3`, `discovery-filterv2`), and initiated pipeline tasks via `/discovery/start` (`start_row=3`, `mode="full"`).
+3. Expanded Dataset Ingestion: Both engines retrieved the complete expanded Google Sheet data from Row 3, updating `.progress.json` and REST endpoints to **18,946** (Engine 3) and **30,035** (Engine 4).
+4. Full Fleet Ground Truth Alignment: Synchronized Table 1, Table 2, and summary KPI cards in the Operations Dashboard to reflect the true fleet total: **90,856 domains** across all 4 production engines (Engine 1: 13,329, Engine 2: 28,546, Engine 3: 18,946, Engine 4: 30,035) with 286 active workers and 42,537 domains completed.
+Related tests:
+- Temp_Test/reload_desktop_5321.py (Successfully triggered restart, verified both engines running with updated totals)
+- Temp_Test/sync_operations_dashboard.py (Verified Table 1 and KPI cards atomic update to 90,856 fleet total)
+- Temp_Test/read_status_dashboard.py (Verified readback of 19 rows in Status tab)
+
+## [2026-11-05] Advance Pre-Crawl Staging (62,855 Domains) & Fleet Ingestion Expansion to 90,856 Rows
+Files changed:
+- Sheet1/next_day_pre_crawl.csv (16,699 domains with 16,699 valid TC Job IDs staged on Desktop-5080)
+- Sheet2/next_day_pre_crawl.csv (16,699 domains with 16,699 valid TC Job IDs staged on Desktop-5080)
+- Sheet3/next_day_pre_crawl.csv (11,468 domains with 11,468 valid TC Job IDs staged on Desktop-5321)
+- Sheet4/next_day_pre_crawl.csv (17,989 domains with 17,988 valid TC Job IDs staged on Desktop-5321)
+- common/advance_precrawl.py (Added target budget threshold break invariance and progress logging)
+- Active Production Sheets: Added 39,592 deduplicated domains to today's active live run across Sheets 1-4
+Reason:
+1. Appended Staged Batches to Active Fleet Run: Merged 39,592 deduplicated domains from the prior pre-crawl batch into today's live Google Sheets, scaling today's live run to 90,856 total domains (Sheet 1: 13,329, Sheet 2: 28,546, Sheet 3: 18,946, Sheet 4: 30,035).
+2. Advanced Domain Fetching for Tomorrow: Based on newly configured input budgets in tab 'CF_IF Engine - Input Payload', fetched fresh domain batches from Tracxn API while strictly excluding all 90,787 fleet domains actively being processed today.
+3. Tech Crawler Job ID Generation: Successfully generated 62,854 valid `bu-daily_render_*` Tech Crawler Job IDs (99.998% success rate) concurrently across all sheets.
+4. Production Node Distribution: Staged all four `next_day_pre_crawl.csv` files on `Desktop-5080` (Sheets 1 & 2) and `Desktop-5321` (Sheets 3 & 4) ready for automatic pickup during the 11:35 PM IST daily reset.
+Related tests:
+- Temp_Test/verify_final_precrawls.py (Verified 62,855 rows, 62,854 valid Job IDs)
+- Temp_Test/verify_remote_files.py (Verified 29 MB Sheet 1, 29 MB Sheet 2 on Desktop-5080; 20 MB Sheet 3, 31 MB Sheet 4 on Desktop-5321)
+
 ## [2026-11-05] Automated Central Funnel Check and Pre-Movement Recovery for External Batches
 Files changed:
 - common/tracxn_client.py (Added `CENTRAL_FUNNEL_ID`, `BACKLOG_FUNNEL_ID`, `FUNNEL_TRANSACTIONS_URL`, `get_domain_funnel_transaction_async`, and `ensure_domain_in_central_funnel_async`)
