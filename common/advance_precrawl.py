@@ -24,6 +24,7 @@ from common.key_manager import TracxnKeyManager
 from common.tech_crawler import TechCrawlerClient
 from common.storage_cleaner import clean_old_storage
 from common.gsheet_circuit_breaker import is_csv_only_mode, set_csv_only_mode, is_doc_too_large_error
+from common.domain_filter_validator import is_domain_leaked, batch_validate_domains
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("AdvancePreCrawl")
@@ -305,7 +306,16 @@ def fetch_domains_for_sheet(
 
                         for item in page_items:
                             dom = item.get("domain", "").strip().lower()
-                            if dom and dom not in domain_seen and dom not in existing_sheet_domains:
+                            if not dom or "." not in dom:
+                                continue
+
+                            # Check 3 criteria in-flight
+                            is_leaked, reason = is_domain_leaked(item)
+                            if is_leaked:
+                                logger.info(f"Purging leaked domain '{dom}' in advance pre-crawl (Reason: {reason})")
+                                continue
+
+                            if dom not in domain_seen and dom not in existing_sheet_domains:
                                 domain_seen.add(dom)
                                 existing_sheet_domains.add(dom)
                                 row_57 = parse_company_to_57col(
@@ -371,6 +381,20 @@ def fetch_domains_for_sheet(
 
             if custom_payload_template and "funnelId" not in custom_payload_template.get("filter", {}):
                 break
+
+    if new_rows_57:
+        logger.info(f"Auditing {len(new_rows_57)} pre-crawled candidate domains against 3 criteria...")
+        doms = [r[0].strip().lower() for r in new_rows_57 if r and r[0]]
+        val_map = batch_validate_domains(doms)
+        clean_rows = []
+        for r in new_rows_57:
+            d = r[0].strip().lower()
+            is_l, reas = val_map.get(d, (False, ""))
+            if is_l:
+                logger.warning(f"Purging leaked domain '{d}' in pre-crawl audit ({reas})")
+                continue
+            clean_rows.append(r)
+        new_rows_57 = clean_rows
 
     logger.info(f"Fetched {len(new_rows_57)} unique domains for sheet {sheet_id}")
     return new_rows_57

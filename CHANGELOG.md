@@ -1,6 +1,26 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-06] Self-Healing Ingestion Waterfall: 3-Criteria Filtering, Dynamic Repopulation & Sequential Fleet Handoff
+Files changed:
+- common/domain_filter_validator.py
+- common/tracxn_domain_ingestor.py
+- common/advance_precrawl.py
+- common/pipeline_engine.py
+Reason:
+1. 3-Criteria Leak Detection & Purge: Integrated `is_domain_leaked()` and `batch_validate_domains()` into domain ingestion and advance pre-crawl. Rejects all domains violating the 3 core criteria:
+   - sameAs == yes (aliased or redirected domains)
+   - status == "PUBLISHED" (or globalPublishedStatus, companyPublishStatus)
+   - feed tagged (assigned publishing feed in feedNames, businessModelList, or sectorList)
+2. Self-Healing Repopulation Loop: Implemented `audit_and_repopulate_rows()` and in-flight pagination repopulation in `TracxnDomainIngestor`. Any leaked or duplicate domains are discarded in-flight, and offset pagination fetches fresh replacement candidates until 100% of the assigned budget is fulfilled with verified clean domains.
+3. Sequential Fleet Handoff: `start_discovery_engine_all_sheets()` passes cumulative `fleet_seen` across Sheet 1 -> Sheet 2 -> Sheet 3 -> Sheet 4. As each sheet fulfills its clean budget, its verified domains are passed to subsequent sheets to guarantee 0 cross-sheet duplicates, and background TC Job ID creation is initiated.
+4. Pre-TC Safety Gate: Added pre-crawl audit in `advance_precrawl.py` and pre-TC safety gate in `pipeline_engine.py` (line 5337) to prevent generating Tech Crawler Job IDs on leaked or published domains.
+Related tests:
+- Temp_Test/test_domain_filter_validator.py (6 passed)
+- Temp_Test/test_self_healing_repopulation_loop.py (1 passed)
+- Temp_Test/test_fleet_self_healing_waterfall.py (2 passed)
+- Temp_Test/test_tracxn_domain_ingestor.py (4 passed)
+
 ## [2026-11-06] Elimination of Duplicate Central Funnel Force-Assignment on Publish Funnel Movements
 Files changed:
 - common/pipeline_engine.py (Added `is_pf_move` flag and auto-detection in `WriteAPI_Domain_Funnel` and `WriteAPI_Domain_Funnel_async`, guarding Central Funnel pre-movement checks and recovery)

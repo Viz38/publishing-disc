@@ -5,7 +5,8 @@ import csv
 import time
 import logging
 import datetime
-from typing import List, Dict, Any, Optional
+import asyncio
+from typing import List, Dict, Any, Optional, Set, Tuple
 import requests
 import gspread
 from google.oauth2.service_account import Credentials
@@ -19,6 +20,7 @@ load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 from common.key_manager import TracxnKeyManager
 from common.gsheet_circuit_breaker import is_csv_only_mode, set_csv_only_mode, is_doc_too_large_error
+from common.domain_filter_validator import is_domain_leaked, batch_validate_domains
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("TracxnDomainIngestor")
@@ -248,11 +250,175 @@ class TracxnDomainIngestor:
         # Cols 19-57 remain empty strings for downstream processing
         return row
 
-    def ingest_domains_for_sheet(self, sheet_cfg: Dict[str, Any], clear_first: bool = True) -> int:
+    def repopulate_clean_domains(
+        self,
+        fetch_fn,
+        budget: int,
+        fleet_seen: Set[str],
+        daily_seen: Set[str],
+        filter_metadata: Dict[str, Any],
+        max_loop_iterations: int = 20
+    ) -> List[List[Any]]:
+        """
+        Executes the self-healing ingestion loop:
+        1. Ingests domains from fetch_fn.
+        2. Evaluates the 3 criteria (sameAs, status == PUBLISHED, feeds tagged) -> removes invalid.
+        3. Evaluates duplicates (intra-batch, fleet_seen from prior sheets, daily_seen) -> removes duplicates.
+        4. Repopulates the removed count from fetch_fn.
+        5. Loops steps 2-4 until budget is fulfilled with 100% clean, unique domains.
+        """
+        clean_rows: List[List[Any]] = []
+        clean_domains: Set[str] = set()
+        offset = 0
+        loop_count = 0
+
+        while len(clean_rows) < budget and loop_count < max_loop_iterations:
+            loop_count += 1
+            needed = budget - len(clean_rows)
+            page_size = max(needed, 100)
+            items = fetch_fn(page_size, offset)
+            if not items:
+                break
+            offset += len(items)
+
+            for item in items:
+                dom = (item.get("domain") or "").strip().lower()
+                if not dom or "." not in dom:
+                    continue
+
+                # Step 2: Check 3 criteria
+                is_leaked, reason = is_domain_leaked(item)
+                if is_leaked:
+                    logger.info(f"Purging leaked domain '{dom}' (Reason: {reason})")
+                    continue
+
+                # Step 3: Check duplicates
+                if dom in clean_domains or dom in fleet_seen or dom in daily_seen:
+                    logger.info(f"Purging duplicate domain '{dom}'")
+                    continue
+
+                # Step 4: Add clean row
+                clean_domains.add(dom)
+                row_57 = self.parse_company_to_57col(
+                    company=item,
+                    funnel_name=filter_metadata.get("funnel_name", ""),
+                    funnel_id=filter_metadata.get("funnel_id", ""),
+                    filter_group_name=filter_metadata.get("filter_group_name", ""),
+                    filter_group_id=filter_metadata.get("filter_group_id", ""),
+                    filter_name=filter_metadata.get("filter_name", ""),
+                    filter_id=filter_metadata.get("filter_id", ""),
+                    payload_str=filter_metadata.get("payload_str", ""),
+                    added_time_str=filter_metadata.get("added_time_str", "")
+                )
+                clean_rows.append(row_57)
+                if len(clean_rows) >= budget:
+                    break
+
+        return clean_rows
+
+    def audit_and_repopulate_rows(
+        self,
+        candidate_rows: List[List[Any]],
+        fetch_replacement_fn,
+        target_budget: int,
+        fleet_seen: Set[str],
+        daily_seen: Set[str],
+        filter_metadata: Dict[str, Any],
+        max_loop_iterations: int = 20
+    ) -> List[List[Any]]:
+        """
+        Post-ingestion validation, deduplication, and self-healing repopulation:
+        1. Checks all candidate rows for the 3 criteria (via batch_validate_domains).
+        2. Discards leaked rows and duplicate rows.
+        3. Fetches replacement domains using fetch_replacement_fn.
+        4. Validates replacements against the 3 criteria and duplicates.
+        5. Loops until target_budget of 100% clean, verified, non-duplicate rows is reached.
+        """
+        # Step 1: Batch validate initial candidates
+        candidate_domains = [r[0].strip().lower() for r in candidate_rows if r and r[0]]
+        val_map = batch_validate_domains(candidate_domains)
+
+        clean_rows: List[List[Any]] = []
+        clean_domains: Set[str] = set()
+
+        for r in candidate_rows:
+            if not r or not r[0]:
+                continue
+            dom = r[0].strip().lower()
+            is_leaked, reason = val_map.get(dom, (False, ""))
+            if is_leaked:
+                logger.info(f"Post-ingestion audit purged leaked domain '{dom}' (Reason: {reason})")
+                continue
+            if dom in clean_domains or dom in fleet_seen or dom in daily_seen:
+                logger.info(f"Post-ingestion audit purged duplicate domain '{dom}'")
+                continue
+            clean_domains.add(dom)
+            clean_rows.append(r)
+
+        # Step 2: Repopulate if short of budget
+        loop_count = 0
+        while len(clean_rows) < target_budget and loop_count < max_loop_iterations:
+            loop_count += 1
+            needed = target_budget - len(clean_rows)
+            rep_items = fetch_replacement_fn(needed, filter_metadata)
+            if not rep_items:
+                break
+
+            potential_candidates = []
+            for item in rep_items:
+                dom = (item.get("domain") or "").strip().lower()
+                if not dom or "." not in dom:
+                    continue
+                is_leaked, reason = is_domain_leaked(item)
+                if is_leaked:
+                    logger.info(f"Purging leaked replacement domain '{dom}' (Reason: {reason})")
+                    continue
+                if dom in clean_domains or dom in fleet_seen or dom in daily_seen:
+                    logger.info(f"Purging duplicate replacement domain '{dom}'")
+                    continue
+                potential_candidates.append(item)
+
+            if not potential_candidates:
+                continue
+
+            # Batch validate remaining candidates
+            rep_doms = [(it.get("domain") or "").strip().lower() for it in potential_candidates]
+            rep_val_map = batch_validate_domains(rep_doms)
+
+            for item in potential_candidates:
+                dom = (item.get("domain") or "").strip().lower()
+                is_leaked, reason = rep_val_map.get(dom, (False, ""))
+                if is_leaked:
+                    logger.info(f"Purging leaked replacement domain '{dom}' after validation (Reason: {reason})")
+                    continue
+                if dom in clean_domains:
+                    continue
+
+                clean_domains.add(dom)
+                row_57 = self.parse_company_to_57col(
+                    company=item,
+                    funnel_name=filter_metadata.get("funnel_name", ""),
+                    funnel_id=filter_metadata.get("funnel_id", ""),
+                    filter_group_name=filter_metadata.get("filter_group_name", ""),
+                    filter_group_id=filter_metadata.get("filter_group_id", ""),
+                    filter_name=filter_metadata.get("filter_name", ""),
+                    filter_id=filter_metadata.get("filter_id", ""),
+                    payload_str=filter_metadata.get("payload_str", ""),
+                    added_time_str=filter_metadata.get("added_time_str", "")
+                )
+                clean_rows.append(row_57)
+                if len(clean_rows) >= target_budget:
+                    break
+
+        return clean_rows
+
+    def ingest_domains_for_sheet(self, sheet_cfg: Dict[str, Any], clear_first: bool = True, fleet_seen: Optional[Set[str]] = None) -> int:
         s_name = sheet_cfg["name"]
         s_id = sheet_cfg["sheet_id"]
+        if fleet_seen is None:
+            fleet_seen = set()
         logger.info(f"\n==========================================")
-        logger.info(f"[{s_name}] Ingesting fresh domains (Sheet ID: {s_id})...")
+        logger.info(f"[{s_name}] Ingesting fresh domains (Sheet ID: {s_id}, fleet_seen: {len(fleet_seen)})...")
         logger.info(f"==========================================")
 
         sh = retry_call(lambda: self.gc.open_by_key(s_id))
@@ -333,7 +499,7 @@ class TracxnDomainIngestor:
         logger.info(f"[{s_name}] Loaded {len(cross_sheet_seen)} active domains from other fleet sheets to exclude.")
 
         new_rows_57 = []
-        domain_seen = set(daily_seen) | cross_sheet_seen
+        domain_seen = set(daily_seen) | cross_sheet_seen | fleet_seen
         added_time_str = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
 
         # Row 0 & 1 are headers, payload data starts at row index 2 (Row 3/4)
@@ -452,23 +618,35 @@ class TracxnDomainIngestor:
 
                             for item in page_items:
                                 dom = item.get("domain", "").strip().lower()
-                                if dom and dom not in domain_seen:
-                                    domain_seen.add(dom)
-                                    row_57 = self.parse_company_to_57col(
-                                        company=item,
-                                        funnel_name=f_name,
-                                        funnel_id=f_id,
-                                        filter_group_name=filter_group_name,
-                                        filter_group_id=filter_group_id,
-                                        filter_name=filter_name,
-                                        filter_id=filter_id,
-                                        payload_str=payload_str,
-                                        added_time_str=added_time_str
-                                    )
-                                    new_rows_57.append(row_57)
-                                    domain_added_count += 1
-                                    if domain_added_count >= budget:
-                                        break
+                                if not dom or "." not in dom:
+                                    continue
+
+                                # Step 2: Check 3 criteria in-flight
+                                is_leaked, reason = is_domain_leaked(item)
+                                if is_leaked:
+                                    logger.info(f"[{s_name}] Purging leaked domain '{dom}' in-flight (Reason: {reason})")
+                                    continue
+
+                                # Step 3: Check duplicates (fleet, daily, intra-batch)
+                                if dom in domain_seen:
+                                    continue
+
+                                domain_seen.add(dom)
+                                row_57 = self.parse_company_to_57col(
+                                    company=item,
+                                    funnel_name=f_name,
+                                    funnel_id=f_id,
+                                    filter_group_name=filter_group_name,
+                                    filter_group_id=filter_group_id,
+                                    filter_name=filter_name,
+                                    filter_id=filter_id,
+                                    payload_str=payload_str,
+                                    added_time_str=added_time_str
+                                )
+                                new_rows_57.append(row_57)
+                                domain_added_count += 1
+                                if domain_added_count >= budget:
+                                    break
 
                             from_offset += page_size
                             if from_offset >= funnel_coverage:
@@ -538,7 +716,36 @@ class TracxnDomainIngestor:
             except Exception as e:
                 logger.warning(f"[{s_name}] Could not update payload coverage cells: {e}")
 
-        # 4. Write new domains to CF_IF_Engine_Database starting at Row 3 (or local_sheet.csv if CSV-only mode)
+        # 4. Post-Ingestion Audit & Criteria Verification across candidate rows
+        if new_rows_57:
+            logger.info(f"[{s_name}] Running post-ingestion verification across {len(new_rows_57)} candidate domains...")
+            candidate_domains = [r[0].strip().lower() for r in new_rows_57 if r and r[0]]
+            val_map = batch_validate_domains(candidate_domains)
+
+            verified_rows = []
+            leaked_purged = 0
+            dups_purged = 0
+            sheet_clean_doms = set()
+
+            for r in new_rows_57:
+                dom = r[0].strip().lower()
+                is_leaked, reason = val_map.get(dom, (False, ""))
+                if is_leaked:
+                    logger.warning(f"[{s_name}] Post-ingestion audit purged leaked domain '{dom}' (Reason: {reason})")
+                    leaked_purged += 1
+                    continue
+                if dom in sheet_clean_doms or dom in fleet_seen or dom in daily_seen:
+                    logger.warning(f"[{s_name}] Post-ingestion audit purged duplicate domain '{dom}'")
+                    dups_purged += 1
+                    continue
+                sheet_clean_doms.add(dom)
+                verified_rows.append(r)
+
+            logger.info(f"[{s_name}] Post-ingestion audit complete: {len(verified_rows)} verified clean, {leaked_purged} leaked purged, {dups_purged} duplicates purged.")
+            new_rows_57 = verified_rows
+            fleet_seen.update(sheet_clean_doms)
+
+        # 5. Write new domains to CF_IF_Engine_Database starting at Row 3 (or local_sheet.csv if CSV-only mode)
         if new_rows_57:
             total_new = len(new_rows_57)
             logger.info(f"[{s_name}] Total unique domains collected: {total_new}. Writing rows...")
@@ -591,15 +798,40 @@ class TracxnDomainIngestor:
             logger.info(f"[{s_name}] No new domains returned for active payloads.")
             return 0
 
-    def start_discovery_engine_all_sheets(self, clear_first: bool = True) -> Dict[str, int]:
+    def start_discovery_engine_all_sheets(self, clear_first: bool = True, start_tc_jobs: bool = False) -> Dict[str, int]:
         """
-        Executes clearing of rows 3+ and fresh Tracxn domain ingestion across all 4 target sheets.
-        Strictly does NOT trigger the Python pipeline (/discovery/start).
+        Executes sequential clearing of rows 3+ and fresh Tracxn domain ingestion across all 4 target sheets:
+        1. Ingests domains for Sheet 1.
+        2. Evaluates the 3 criteria (sameAs, status == PUBLISHED, feeds tagged) -> removes invalid.
+        3. Evaluates duplicates -> removes duplicates.
+        4. Repopulates until required number of domains matching all criteria are found.
+        5. Passes verified clean domains into fleet_seen for Sheet 2.
+        6. Optionally triggers background Tech Crawler Job ID creation.
+        7. Repeats for Sheet 2 -> Sheet 3 -> Sheet 4.
         """
         summary = {}
+        fleet_seen: Set[str] = set()
+
         for s_cfg in TARGET_SHEETS:
-            count = self.ingest_domains_for_sheet(s_cfg, clear_first=clear_first)
-            summary[s_cfg["name"]] = count
+            s_name = s_cfg["name"]
+            logger.info(f"\n==========================================")
+            logger.info(f"[{s_name}] Ingesting fresh domains with sequential fleet handoff ({len(fleet_seen)} domains in fleet_seen)...")
+            logger.info(f"==========================================")
+            count = self.ingest_domains_for_sheet(s_cfg, clear_first=clear_first, fleet_seen=fleet_seen)
+            summary[s_name] = count
+
+            if start_tc_jobs:
+                logger.info(f"[{s_name}] Initiating background Tech Crawler Job ID creation...")
+                try:
+                    from common.fleet_orchestrator import dispatch_job_generation_task
+                    sheet_num = s_cfg.get("sheet_num", 1)
+                    try:
+                        loop = asyncio.get_running_loop()
+                        loop.create_task(dispatch_job_generation_task(sheet_num))
+                    except RuntimeError:
+                        asyncio.run(dispatch_job_generation_task(sheet_num))
+                except Exception as te:
+                    logger.warning(f"[{s_name}] Could not trigger background TC job generation: {te}")
 
         logger.info("\n==========================================")
         logger.info("🎉 All 4 Sheets Ingestion Summary:")

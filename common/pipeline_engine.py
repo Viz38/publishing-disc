@@ -5336,6 +5336,14 @@ async def Integrated_Extract_domains(
                     continue
                 batch_processed_domains.add(domain_str)
 
+                # Pre-TC Safety Gate: Guard against leaked domains (status PUBLISHED, sameAs, or feed tagged)
+                pub_status = str(row[11] if len(row) > 11 else "").strip().upper()
+                if pub_status == "PUBLISHED":
+                    logging.warning(f"🚨 [Pre-TC Safety Gate] Skipping leaked PUBLISHED domain '{domain_str}' at Row {row_number}")
+                    await summarized_queue.put((idx, row, None, True))
+                    domain_queue.task_done()
+                    continue
+
                 if is_row_fully_completed(row):
                     await summarized_queue.put((idx, row, None, True))
                     domain_queue.task_done()
