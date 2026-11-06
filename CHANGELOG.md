@@ -3,6 +3,7 @@ All notable changes to this project are documented here.
 
 ## [2026-11-06] Migration of Target Sheets 2 and 4 to Clean V2 Master Spreadsheets
 Files changed:
+- common/upload_local_csv_to_sheet.py
 - common/advance_precrawl.py
 - common/fleet_deduplicator.py
 - common/fleet_orchestrator.py
