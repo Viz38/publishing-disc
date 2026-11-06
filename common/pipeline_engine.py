@@ -1,5 +1,7 @@
 import os
 import sys
+import csv
+csv.field_size_limit(sys.maxsize)
 from typing import List, Dict, Tuple, Optional, Any
 
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))

@@ -6,7 +6,9 @@ Ensures data is safely persisted to local CSV cache, and skips further GSheet wr
 """
 
 import os
+import sys
 import csv
+csv.field_size_limit(sys.maxsize)
 import logging
 import threading
 from datetime import datetime

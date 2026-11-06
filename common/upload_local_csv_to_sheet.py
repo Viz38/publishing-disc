@@ -82,6 +82,15 @@ def upload_csv_to_sheet(sheet_id: str, csv_path: str, sheet_num: int, chunk_size
         except Exception as e:
             logger.warning(f"Could not remove {csv_mode_file}: {e}")
 
+    sync_file = os.path.join(BASE_DIR, folder, "pending_gsheet_sync.csv")
+    if os.path.exists(sync_file):
+        try:
+            bak_file = sync_file + f".bak_{int(time.time())}"
+            os.rename(sync_file, bak_file)
+            logger.info(f"Archived obsolete {sync_file} -> {bak_file}")
+        except Exception as e:
+            logger.warning(f"Could not archive {sync_file}: {e}")
+
     stop_file = os.path.join(BASE_DIR, folder, ".stop_requested")
     if os.path.exists(stop_file):
         try:
@@ -102,3 +111,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
