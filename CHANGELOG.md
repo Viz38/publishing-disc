@@ -1,6 +1,23 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-06] Raw Data Storage Architecture: "Raw Data Appended - csv only" Policy & Fleet Backfill
+Files changed:
+- common/pipeline_engine.py
+- common/local_cache.py
+- common/upload_local_csv_to_sheet.py
+- GEMINI.md
+- CHANGELOG.md
+Reason:
+1. Google Sheet Column AD Policy: Updated all write gates (`write_sheet_data`, `build_57col_write_row`, and `upload_local_csv_to_sheet.py`) so that no raw HTML/markdown is saved directly into Google Sheets. Column AD (idx 29) is stamped with "Raw Data Appended - csv only" whenever genuine raw scraped data exists.
+2. Local CSV & Cache Preservation: Full raw markdown content is strictly preserved in `local_sheet.csv` and `.local_cache.csv`, ensuring that NIM 70B summarization, dead-domain verification (`is_nim_dead_domain`), and dual-heuristic cleaners operate with full fidelity.
+3. In-Memory Transparent Hydration: When engines read rows from Google Sheets with "Raw Data Appended - csv only", genuine raw data is hydrated from local cache or S3 (`tc_s3_markdown` in Col AA). Skip checks, dead-domain flags, and queue partitioning seamlessly recognize the marker without redundant re-crawling.
+4. Complete 4-Sheet Fleet Backfill: Backfilled all 4 live Google Sheets, replacing 39,498 raw data cells with "Raw Data Appended - csv only" (Sheet 1: 15,752, Sheet 2: 7,940, Sheet 3: 7,558, Sheet 4: 8,248).
+Related tests:
+- Temp_Test/test_raw_data_csv_only_rule.py
+- Temp_Test/backfill_raw_data_column.py
+
+
 ## [2026-11-06] Migration of Target Sheets 2 and 4 to Clean V2 Master Spreadsheets
 Files changed:
 - common/upload_local_csv_to_sheet.py

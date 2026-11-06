@@ -34,7 +34,12 @@ def upload_csv_to_sheet(sheet_id: str, csv_path: str, sheet_num: int, chunk_size
         reader = csv.reader(f)
         for r in reader:
             # 57 columns, cap each cell string at 49,000 characters
+            # Per rule: Column AD (idx 29) writes "Raw Data Appended - csv only" if raw data exists
             clean_row = [str(col)[:49000] for col in r[:57]]
+            if len(clean_row) > 29:
+                val_ad = clean_row[29].strip()
+                if val_ad and val_ad not in ("['Website is not working.']", "Raw Data Appended - csv only"):
+                    clean_row[29] = "Raw Data Appended - csv only"
             if len(clean_row) < 57:
                 clean_row.extend([""] * (57 - len(clean_row)))
             rows_to_upload.append(clean_row)

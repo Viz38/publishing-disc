@@ -350,7 +350,7 @@ def is_row_fully_completed(row: list) -> bool:
     if len(row) > 34 and str(row[34]).strip().upper() in ("NO_CONTENT", "FAILED_NO_CONTENT"):
         has_genuine_raw = (
             len(row) > 29
-            and len(str(row[29]).strip()) >= 50
+            and (len(str(row[29]).strip()) >= 50 or str(row[29]).strip() == "Raw Data Appended - csv only")
             and str(row[29]).strip() != "['Website is not working.']"
         )
         if not has_genuine_raw:
@@ -390,7 +390,7 @@ def is_eligible_for_tc_30min_recheck(row: list, active_waterfall_in_flight: Opti
         return False
 
     raw_data = str(row[29]).strip() if len(row) > 29 else ""
-    if len(raw_data) >= 50 and raw_data != "['Website is not working.']":
+    if (len(raw_data) >= 50 or raw_data == "Raw Data Appended - csv only") and raw_data != "['Website is not working.']":
         return False
 
     return True
@@ -741,14 +741,21 @@ async def write_sheet_data(client, SHEET_ID, sheet_name, data, start_row, start_
     if GSHEET_CIRCUIT_BREAKER.should_skip_gsheet():
         return
 
-    # Critical: safely cap all cell values to 49,000 chars to avoid Google Sheets 50,000 char per cell HTTP 400 fatal crash
-    data = [
-        [
+    # Transform Col 30 (Col AD: Raw Data) for Google Sheets:
+    # Per rule: No raw data saved to sheets; write "Raw Data Appended - csv only" if raw data exists
+    ad_offset = 30 - start_col
+    cleaned_data = []
+    for row in data:
+        row_copy = list(row)
+        if 0 <= ad_offset < len(row_copy):
+            val = str(row_copy[ad_offset]).strip() if row_copy[ad_offset] is not None else ""
+            if val and val not in ("['Website is not working.']", "Raw Data Appended - csv only"):
+                row_copy[ad_offset] = "Raw Data Appended - csv only"
+        cleaned_data.append([
             val[:49000] if isinstance(val, str) and len(val) > 49000 else val
-            for val in row
-        ]
-        for row in data
-    ]
+            for val in row_copy
+        ])
+    data = cleaned_data
 
     cache_key = (str(SHEET_ID).strip(), str(sheet_name).strip())
     worksheet = _WORKSHEET_CACHE.get(cache_key)
@@ -4104,7 +4111,15 @@ async def Integrated_Process_domain(
             home_body = ""
 
             existing_raw_data = safe_str(rowData[29]).strip() if len(rowData) > 29 else ""
-            if existing_raw_data and len(existing_raw_data) >= 50 and existing_raw_data != "['Website is not working.']":
+            if existing_raw_data == "Raw Data Appended - csv only":
+                # Hydrate genuine raw data from local cache if available
+                rec = LOCAL_CACHE.get_record(domain) if 'LOCAL_CACHE' in globals() else None
+                cached_soup = rec.get("scrappingBeautySoup", "") if isinstance(rec, dict) else ""
+                if cached_soup and len(cached_soup.strip()) >= 50 and cached_soup.strip() != "['Website is not working.']":
+                    home_body = cached_soup
+                    scrappingBeautySoup = cached_soup
+                    status_code = ""
+            elif existing_raw_data and len(existing_raw_data) >= 50 and existing_raw_data != "['Website is not working.']":
                 home_body = existing_raw_data
                 scrappingBeautySoup = existing_raw_data
                 status_code = ""
@@ -4228,7 +4243,7 @@ async def Integrated_Process_domain(
             engineClearedTime = safe_str(rowData[19]) if len(rowData) > 19 else ""
             engineClearedStatus = safe_str(rowData[20]) if len(rowData) > 20 else ""
             engineTimeTaken = ""
-            Final_Scrapped_Raw_data = rowData[29] if (len(rowData) > 29 and safe_str(rowData[29]).strip() and safe_str(rowData[29]).strip() != "['Website is not working.']") else (scrappingBeautySoup or home_body)
+            Final_Scrapped_Raw_data = rowData[29] if (len(rowData) > 29 and safe_str(rowData[29]).strip() and safe_str(rowData[29]).strip() not in ("['Website is not working.']", "Raw Data Appended - csv only")) else (scrappingBeautySoup or home_body)
             scrappingBeautySoup = safe_str(Final_Scrapped_Raw_data)
 
             currentFunnelName = rowData[24] if len(rowData) > 24 else ""
@@ -5268,8 +5283,8 @@ async def Integrated_Extract_domains(
             # Tier 0: Valid existing NIM summary ready for Gemini/Tracxn
             if len(nim_txt) > 20 and nim_st == "SUCCESS" and not nim_txt.startswith("http"):
                 presummarized_items.append((idx, r))
-            # Tier 1: Truly pre-scraped with usable raw content (>= 50 chars) ready for NIM
-            elif len(raw_scraped) >= 50 and raw_scraped != "['Website is not working.']":
+            # Tier 1: Truly pre-scraped with usable raw content (>= 50 chars or csv only marker) ready for NIM
+            elif (len(raw_scraped) >= 50 or raw_scraped == "Raw Data Appended - csv only") and raw_scraped != "['Website is not working.']":
                 priority_items.append((idx, r))
             # Tier 2: Needs Phase 1 scraping (Tech Crawler or Waterfall Scraper)
             else:
@@ -5388,7 +5403,7 @@ async def Integrated_Extract_domains(
                     else:
                         norm_d = safe_str(domain).strip().lower()
                         existing_raw_data = safe_str(row[29]).strip() if len(row) > 29 else ""
-                        is_wf_run = len(existing_raw_data) < 50
+                        is_wf_run = len(existing_raw_data) < 50 and existing_raw_data != "Raw Data Appended - csv only"
                         if is_wf_run and norm_d:
                             active_waterfall_in_flight.add(norm_d)
                         try:

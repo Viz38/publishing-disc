@@ -383,7 +383,7 @@ class LocalSheetCache:
             hydrated[27] = rec["tc_http_status"]
         if not hydrated[28] and rec.get("tc_signals"):
             hydrated[28] = rec["tc_signals"]
-        if not hydrated[29] and rec.get("scrappingBeautySoup"):
+        if (not hydrated[29] or hydrated[29] == "Raw Data Appended - csv only") and rec.get("scrappingBeautySoup"):
             hydrated[29] = str(rec["scrappingBeautySoup"])[:49000]
         if not hydrated[30] and rec.get("tc_job_gen_time"):
             hydrated[30] = rec["tc_job_gen_time"]
@@ -503,9 +503,15 @@ class LocalSheetCache:
         row_out[27] = in_row[27] or rec.get("tc_http_status", "") or ""
         row_out[28] = in_row[28] or rec.get("tc_signals", "") or ""
 
-        # Raw Data at Col 30 (idx 29 / Col AD) - CAP AT 49,000 CHARS
+        # Raw Data at Col 30 (idx 29 / Col AD) - write "Raw Data Appended - csv only" if raw data exists
         raw_content = rec.get("scrappingBeautySoup") or in_row[29] or ""
-        row_out[29] = str(raw_content)[:49000]
+        raw_str = str(raw_content).strip()
+        if raw_str and raw_str not in ("['Website is not working.']", "Raw Data Appended - csv only"):
+            row_out[29] = "Raw Data Appended - csv only"
+        elif raw_str == "Raw Data Appended - csv only":
+            row_out[29] = "Raw Data Appended - csv only"
+        else:
+            row_out[29] = raw_str[:49000]
 
         row_out[30] = in_row[30] or rec.get("tc_job_gen_time", "")
         row_out[31] = in_row[31] or rec.get("tc_final_url", "")
