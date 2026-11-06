@@ -23,6 +23,7 @@ load_dotenv(os.path.join(BASE_DIR, ".env"))
 from common.key_manager import TracxnKeyManager
 from common.tech_crawler import TechCrawlerClient
 from common.storage_cleaner import clean_old_storage
+from common.gsheet_circuit_breaker import is_csv_only_mode, set_csv_only_mode, is_doc_too_large_error
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("AdvancePreCrawl")
@@ -564,7 +565,8 @@ def load_precrawl_to_sheet(sheet_id: str, folder: str, chunk_size: int = 500) ->
         logger.warning(f"No advance pre-crawl CSV found at {csv_path}")
         return 0
 
-    logger.info(f"Loading advance pre-crawled domains from {csv_path} to Google Sheet {sheet_id}...")
+    sheet_dir = os.path.join(BASE_DIR, folder)
+    logger.info(f"Loading advance pre-crawled domains from {csv_path} (folder={folder}, sheet_id={sheet_id})...")
     rows_to_load = []
     with open(csv_path, "r", encoding="utf-8") as f:
         reader = csv.reader(f)
@@ -579,49 +581,70 @@ def load_precrawl_to_sheet(sheet_id: str, folder: str, chunk_size: int = 500) ->
         return 0
 
     total_rows = len(rows_to_load)
-    gc = get_gspread_client()
-    sh = retry_call(lambda: gc.open_by_key(sheet_id))
-    try:
-        ws = retry_call(lambda: sh.worksheet("CF_IF_Engine_Database"))
-    except Exception:
-        ws = retry_call(lambda: sh.get_worksheet(0))
+    use_csv_only = is_csv_only_mode(sheet_dir)
 
-    # 1. Clear old data from Row 3
-    last_row = ws.row_count
-    if last_row > 2:
-        logger.info(f"Clearing old rows from Row 3 to Row {last_row} in CF_IF_Engine_Database...")
-        retry_call(lambda: ws.batch_clear([f"A3:BE{last_row}"]))
+    if not use_csv_only:
+        try:
+            gc = get_gspread_client()
+            sh = retry_call(lambda: gc.open_by_key(sheet_id), max_retries=3, delay=2)
+            try:
+                ws = retry_call(lambda: sh.worksheet("CF_IF_Engine_Database"), max_retries=2, delay=1)
+            except Exception:
+                ws = retry_call(lambda: sh.get_worksheet(0), max_retries=2, delay=1)
 
-    # 2. Ensure sheet has enough rows
-    needed_total_rows = 2 + total_rows
-    if ws.row_count < needed_total_rows:
-        add_cnt = needed_total_rows - ws.row_count + 100
-        logger.info(f"Expanding worksheet by {add_cnt} rows...")
-        retry_call(lambda: ws.add_rows(add_cnt))
+            # 1. Clear old data from Row 3
+            last_row = ws.row_count
+            if last_row > 2:
+                logger.info(f"Clearing old rows from Row 3 to Row {last_row} in CF_IF_Engine_Database...")
+                retry_call(lambda: ws.batch_clear([f"A3:BE{last_row}"]), max_retries=3, delay=2)
 
-    # 3. Write in chunks
-    logger.info(f"Writing {total_rows} rows in chunks of {chunk_size}...")
-    for i in range(0, total_rows, chunk_size):
-        chunk = rows_to_load[i : i + chunk_size]
-        start_r = 3 + i
-        end_r = 2 + i + len(chunk)
-        range_name = f"A{start_r}:BE{end_r}"
-        retry_call(lambda: ws.update(range_name=range_name, values=chunk, value_input_option="USER_ENTERED"))
-        logger.info(f"  Written chunk {i + len(chunk)}/{total_rows} ({range_name})")
-        time.sleep(1.0)
+            # 2. Ensure sheet has enough rows
+            needed_total_rows = 2 + total_rows
+            if ws.row_count < needed_total_rows:
+                add_cnt = needed_total_rows - ws.row_count + 100
+                logger.info(f"Expanding worksheet by {add_cnt} rows...")
+                retry_call(lambda: ws.add_rows(add_cnt), max_retries=3, delay=2)
 
-    # 4. Archive pre-crawl CSV
-    cache_dir = os.path.join(BASE_DIR, folder, "Logs", "Cache")
+            # 3. Write in chunks
+            logger.info(f"Writing {total_rows} rows in chunks of {chunk_size}...")
+            for i in range(0, total_rows, chunk_size):
+                chunk = rows_to_load[i : i + chunk_size]
+                start_r = 3 + i
+                end_r = 2 + i + len(chunk)
+                range_name = f"A{start_r}:BE{end_r}"
+                retry_call(lambda: ws.update(range_name=range_name, values=chunk, value_input_option="USER_ENTERED"), max_retries=3, delay=2)
+                logger.info(f"  Written chunk {i + len(chunk)}/{total_rows} ({range_name})")
+                time.sleep(1.0)
+
+        except Exception as gsheet_err:
+            logger.critical(
+                f"🚨 Google Sheet clear/write operation failed for {folder} ({gsheet_err})! "
+                "Automatically applying CSV-only mode."
+            )
+            use_csv_only = True
+
+    if use_csv_only:
+        set_csv_only_mode(sheet_dir, True)
+        local_sheet_csv = os.path.join(sheet_dir, "local_sheet.csv")
+        logger.info(f"📂 [CSV-Only Mode] Staging {total_rows} domains directly into {local_sheet_csv}...")
+        with open(local_sheet_csv, "w", encoding="utf-8", newline="") as f_out:
+            writer = csv.writer(f_out)
+            writer.writerows(rows_to_load)
+        logger.info(f"✅ Staged {total_rows} domains into {local_sheet_csv}")
+
+    # 4. Archive pre-crawl CSV so tomorrow has a clean slate
+    cache_dir = os.path.join(sheet_dir, "Logs", "Cache")
     os.makedirs(cache_dir, exist_ok=True)
     date_str = datetime.datetime.now().strftime("%Y-%m-%d")
-    archive_path = os.path.join(cache_dir, f"pre_crawl_loaded_{date_str}.csv")
+    mode_suffix = "_csv_mode" if use_csv_only else ""
+    archive_path = os.path.join(cache_dir, f"pre_crawl_loaded_{date_str}{mode_suffix}.csv")
     try:
         os.rename(csv_path, archive_path)
         logger.info(f"Archived loaded pre-crawl CSV to {archive_path}")
     except Exception as e:
         logger.warning(f"Could not archive {csv_path}: {e}")
 
-    logger.info(f"✅ Successfully loaded {total_rows} pre-crawled domains to sheet {sheet_id}!")
+    logger.info(f"✅ Successfully loaded/staged {total_rows} pre-crawled domains for {folder} (CSV-Only: {use_csv_only})!")
     return total_rows
 
 if __name__ == "__main__":

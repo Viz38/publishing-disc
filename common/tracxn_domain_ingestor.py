@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import csv
 import time
 import logging
 import datetime
@@ -17,6 +18,7 @@ if BASE_DIR not in sys.path:
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 from common.key_manager import TracxnKeyManager
+from common.gsheet_circuit_breaker import is_csv_only_mode, set_csv_only_mode, is_doc_too_large_error
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("TracxnDomainIngestor")
@@ -273,13 +275,33 @@ class TracxnDomainIngestor:
         except Exception:
             db_ws = sh.get_worksheet(0)
 
+        # Resolve local sheet directory for CSV-only mode
+        from common.fleet_deduplicator import TARGET_SHEETS as FLEET_TARGET_SHEETS
+        folder = sheet_cfg.get("folder")
+        if not folder:
+            for ts in FLEET_TARGET_SHEETS:
+                if ts.get("id") == s_id or ts.get("sheet_id") == s_id:
+                    folder = ts.get("folder")
+                    break
+        if not folder and "sheet_num" in sheet_cfg:
+            folder = f"Sheet{sheet_cfg['sheet_num']}"
+        sheet_dir = os.path.join(BASE_DIR, folder) if folder else None
+
+        use_csv_only = is_csv_only_mode(sheet_dir) if sheet_dir else False
+
         # 2. Clear Database if requested (Rows 3+)
-        if clear_first:
+        if clear_first and not use_csv_only:
             last_row = db_ws.row_count
             if last_row > 2:
-                logger.info(f"[{s_name}] Clearing old data from Row 3 to Row {last_row}...")
-                retry_call(lambda: db_ws.batch_clear([f"A3:BE{last_row}"]))
-                logger.info(f"[{s_name}] Database cleared successfully.")
+                try:
+                    logger.info(f"[{s_name}] Clearing old data from Row 3 to Row {last_row}...")
+                    retry_call(lambda: db_ws.batch_clear([f"A3:BE{last_row}"]), max_retries=3, delay=2)
+                    logger.info(f"[{s_name}] Database cleared successfully.")
+                except Exception as ce:
+                    logger.critical(f"[{s_name}] 🚨 Database clear failed ({ce})! Sheet appears read-only/too large. Switching to CSV-only mode.")
+                    use_csv_only = True
+                    if sheet_dir:
+                        set_csv_only_mode(sheet_dir, True)
 
         # 3. Process each payload row
         # Strictly enforce unique domain ingestion: load today's daily processed registry
@@ -516,28 +538,44 @@ class TracxnDomainIngestor:
             except Exception as e:
                 logger.warning(f"[{s_name}] Could not update payload coverage cells: {e}")
 
-        # 4. Write new domains to CF_IF_Engine_Database starting at Row 3
+        # 4. Write new domains to CF_IF_Engine_Database starting at Row 3 (or local_sheet.csv if CSV-only mode)
         if new_rows_57:
             total_new = len(new_rows_57)
-            logger.info(f"[{s_name}] Total unique domains collected: {total_new}. Writing to target sheet...")
+            logger.info(f"[{s_name}] Total unique domains collected: {total_new}. Writing rows...")
 
-            # Ensure row capacity
-            target_needed_rows = total_new + 10
-            if db_ws.row_count < target_needed_rows:
-                retry_call(lambda: db_ws.resize(rows=target_needed_rows, cols=57))
+            if not use_csv_only:
+                try:
+                    # Ensure row capacity
+                    target_needed_rows = total_new + 10
+                    if db_ws.row_count < target_needed_rows:
+                        retry_call(lambda: db_ws.resize(rows=target_needed_rows, cols=57), max_retries=3, delay=2)
 
-            # Push in chunks of 500
-            CHUNK_SIZE = 500
-            for start_idx in range(0, total_new, CHUNK_SIZE):
-                chunk = new_rows_57[start_idx : start_idx + CHUNK_SIZE]
-                write_start_row = 3 + start_idx
-                write_end_row = write_start_row + len(chunk) - 1
-                target_range = f"A{write_start_row}:BE{write_end_row}"
-                logger.info(f"[{s_name}] Writing chunk {target_range} ({len(chunk)} rows)...")
-                retry_call(lambda: db_ws.update(range_name=target_range, values=chunk))
-                time.sleep(1.5)
+                    # Push in chunks of 500
+                    CHUNK_SIZE = 500
+                    for start_idx in range(0, total_new, CHUNK_SIZE):
+                        chunk = new_rows_57[start_idx : start_idx + CHUNK_SIZE]
+                        write_start_row = 3 + start_idx
+                        write_end_row = write_start_row + len(chunk) - 1
+                        target_range = f"A{write_start_row}:BE{write_end_row}"
+                        logger.info(f"[{s_name}] Writing chunk {target_range} ({len(chunk)} rows)...")
+                        retry_call(lambda: db_ws.update(range_name=target_range, values=chunk), max_retries=3, delay=2)
+                        time.sleep(1.5)
 
-            logger.info(f"[{s_name}] ✅ Ingestion complete! Added {total_new} domains to {db_ws.title}.")
+                    logger.info(f"[{s_name}] ✅ Ingestion complete! Added {total_new} domains to {db_ws.title}.")
+                except Exception as we:
+                    logger.critical(f"[{s_name}] 🚨 Sheet write failed ({we})! Automatically applying CSV-only mode.")
+                    use_csv_only = True
+                    if sheet_dir:
+                        set_csv_only_mode(sheet_dir, True)
+
+            if use_csv_only and sheet_dir:
+                set_csv_only_mode(sheet_dir, True)
+                local_sheet_csv = os.path.join(sheet_dir, "local_sheet.csv")
+                logger.info(f"[{s_name}] 📂 [CSV-Only Mode] Staging {total_new} domains directly into {local_sheet_csv}...")
+                with open(local_sheet_csv, "w", encoding="utf-8", newline="") as f_out:
+                    writer = csv.writer(f_out)
+                    writer.writerows(new_rows_57)
+                logger.info(f"[{s_name}] ✅ Staged {total_new} domains into {local_sheet_csv}")
 
             # 5. Post-Ingestion Cross-Sheet Cleaning & Deduplication Operation
             # Strictly executed BEFORE any Tech Crawler Job ID is generated

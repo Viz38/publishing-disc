@@ -636,13 +636,28 @@ def open_sheet_with_fallback(client, sheet_id: str):
 async def read_sheet_data(client, SHEET_ID, sheet_name, start_row=3, start_col=1):
     logging.info(f"Opening sheet {SHEET_ID} [{sheet_name}] to load rows starting from row {start_row}...")
 
-    # Fast-path: If CSV-only mode is active and local pre-crawl CSV exists, load directly from CSV
+    # Fast-path: If CSV-only mode is active, load directly from local_sheet.csv (or promote from next_day_pre_crawl.csv)
     if _SHEET_DIR and is_csv_only_mode(_SHEET_DIR):
+        local_sheet_csv = os.path.join(_SHEET_DIR, "local_sheet.csv")
         precrawl_csv = os.path.join(_SHEET_DIR, "next_day_pre_crawl.csv")
-        if os.path.exists(precrawl_csv) and os.path.getsize(precrawl_csv) > 0:
+
+        target_csv = None
+        if os.path.exists(local_sheet_csv) and os.path.getsize(local_sheet_csv) > 0:
+            target_csv = local_sheet_csv
+        elif os.path.exists(precrawl_csv) and os.path.getsize(precrawl_csv) > 0:
+            try:
+                import shutil
+                shutil.copy2(precrawl_csv, local_sheet_csv)
+                target_csv = local_sheet_csv
+                logging.info(f"📂 [CSV-Only Mode] Promoted {precrawl_csv} to {local_sheet_csv}")
+            except Exception as pe:
+                logging.warning(f"Could not promote {precrawl_csv} to local_sheet.csv: {pe}")
+                target_csv = precrawl_csv
+
+        if target_csv and os.path.exists(target_csv):
             import csv
-            logging.info(f"📂 [CSV-Only Mode] Active for {_SHEET_DIR}. Loading input rows directly from {precrawl_csv}...")
-            with open(precrawl_csv, "r", encoding="utf-8", errors="replace") as f:
+            logging.info(f"📂 [CSV-Only Mode] Active for {_SHEET_DIR}. Loading input rows directly from {target_csv}...")
+            with open(target_csv, "r", encoding="utf-8", errors="replace") as f:
                 rows = list(csv.reader(f))
             padded_rows = []
             for r in rows:
@@ -652,7 +667,7 @@ async def read_sheet_data(client, SHEET_ID, sheet_name, start_row=3, start_col=1
                     padded_rows.append(r[:57])
             offset = max(0, start_row - 3)
             sliced = padded_rows[offset:]
-            logging.info(f"📂 [CSV-Only Mode] Loaded {len(padded_rows)} total rows from local CSV. Sliced {len(sliced)} rows starting from row {start_row}.")
+            logging.info(f"📂 [CSV-Only Mode] Loaded {len(padded_rows)} total rows from {target_csv}. Sliced {len(sliced)} rows starting from row {start_row}.")
             return sliced
     is_pipe = is_pipeline_sheet(SHEET_ID)
     primary_mgr = await get_gspread_client()
@@ -692,6 +707,29 @@ async def read_sheet_data(client, SHEET_ID, sheet_name, start_row=3, start_col=1
     if not sliced_data and raw_total > 0:
         logging.warning(f"⚠️ start_row={start_row} is beyond the total rows ({raw_total}) in worksheet [{sheet_name}]! No domains to process.")
     return sliced_data
+
+
+def persist_local_sheet_csv(sheet_dir: str, rows: List[List[Any]]) -> bool:
+    """Atomically writes 57-column in-memory sheet rows to local_sheet.csv."""
+    if not sheet_dir or not rows:
+        return False
+    target_file = os.path.join(sheet_dir, "local_sheet.csv")
+    tmp_file = f"{target_file}.tmp.{os.getpid()}"
+    try:
+        with open(tmp_file, "w", encoding="utf-8", newline="") as f:
+            import csv
+            writer = csv.writer(f)
+            writer.writerows(rows)
+        os.replace(tmp_file, target_file)
+        return True
+    except Exception as e:
+        logging.warning(f"Could not persist {target_file}: {e}")
+        if os.path.exists(tmp_file):
+            try:
+                os.remove(tmp_file)
+            except Exception:
+                pass
+        return False
 
 
 async def write_sheet_data(client, SHEET_ID, sheet_name, data, start_row, start_col=4):
@@ -748,9 +786,9 @@ async def write_sheet_data(client, SHEET_ID, sheet_name, data, start_row, start_
             await worksheet.update(values=data, range_name=cell_range, value_input_option='USER_ENTERED')
         except TypeError:
             await worksheet.update(cell_range, data, value_input_option='USER_ENTERED')
+        GSHEET_CIRCUIT_BREAKER.record_write_success()
     except Exception as update_err:
-        if is_doc_too_large_error(update_err):
-            GSHEET_CIRCUIT_BREAKER.trip(str(update_err))
+        if GSHEET_CIRCUIT_BREAKER.handle_error(update_err):
             return
 
         logging.warning(f"Worksheet update failed ({update_err}). Invalidating cache and retrying...")
@@ -765,9 +803,9 @@ async def write_sheet_data(client, SHEET_ID, sheet_name, data, start_row, start_
                 await worksheet.update(values=data, range_name=cell_range, value_input_option='USER_ENTERED')
             except TypeError:
                 await worksheet.update(cell_range, data, value_input_option='USER_ENTERED')
+            GSHEET_CIRCUIT_BREAKER.record_write_success()
         except Exception as retry_err:
-            if is_doc_too_large_error(retry_err):
-                GSHEET_CIRCUIT_BREAKER.trip(str(retry_err))
+            if GSHEET_CIRCUIT_BREAKER.handle_error(retry_err):
                 return
             raise
 
@@ -5069,6 +5107,8 @@ async def Integrated_Extract_domains(
             if GSHEET_CIRCUIT_BREAKER.should_skip_gsheet():
                 for r_num, c_num, val in buf:
                     GSHEET_CIRCUIT_BREAKER.record_pending_sync(PENDING_SYNC_FILE, "unknown", r_num, c_num, val)
+                if _SHEET_DIR and pf_data:
+                    persist_local_sheet_csv(_SHEET_DIR, pf_data)
                 return
 
             # Deduplicate buffer keeping latest update per (row_number, col_number)
@@ -5100,10 +5140,11 @@ async def Integrated_Extract_domains(
                         await write_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, chunk_rows, start_r, c_num)
                         await asyncio.sleep(0.05)
                     except Exception as ex:
-                        if is_doc_too_large_error(ex):
-                            GSHEET_CIRCUIT_BREAKER.trip(str(ex))
+                        if GSHEET_CIRCUIT_BREAKER.handle_error(ex):
                             for r_num, val in grp:
                                 GSHEET_CIRCUIT_BREAKER.record_pending_sync(PENDING_SYNC_FILE, "unknown", r_num, c_num, val)
+                            if _SHEET_DIR and pf_data:
+                                persist_local_sheet_csv(_SHEET_DIR, pf_data)
                             return
 
                         logging.warning(f"Batch write failed for rows {start_r}-{start_r + len(chunk_rows)-1} col {c_num}: {ex}. Trying chunked fallback (5 rows)...")
@@ -5116,10 +5157,11 @@ async def Integrated_Extract_domains(
                                 await write_sheet_data(client, SHEET_ID, EXTRACTING_SHEET_NAME, sub_rows, sub_start, c_num)
                                 await asyncio.sleep(0.05)
                             except Exception as sub_ex:
-                                if is_doc_too_large_error(sub_ex):
-                                    GSHEET_CIRCUIT_BREAKER.trip(str(sub_ex))
+                                if GSHEET_CIRCUIT_BREAKER.handle_error(sub_ex):
                                     for r_num, val in grp:
                                         GSHEET_CIRCUIT_BREAKER.record_pending_sync(PENDING_SYNC_FILE, "unknown", r_num, c_num, val)
+                                    if _SHEET_DIR and pf_data:
+                                        persist_local_sheet_csv(_SHEET_DIR, pf_data)
                                     break
                                 logging.error(f"Chunked fallback failed for rows {sub_start}-{sub_start + len(sub_rows)-1} col {c_num}: {sub_ex}")
 
@@ -5761,6 +5803,9 @@ async def Integrated_Extract_domains(
         # Signal sheet writer worker to flush remaining writes and exit
         await sheet_write_queue.put(None)
         await writer_task
+
+        if _SHEET_DIR and GSHEET_CIRCUIT_BREAKER.should_skip_gsheet() and pf_data:
+            persist_local_sheet_csv(_SHEET_DIR, pf_data)
 
         update_progress_file(
             processed, total_domains, success_count, fail_count,

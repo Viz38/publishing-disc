@@ -1,6 +1,23 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-06] Decoupled Local Sheet CSV Ingestion, Auto-Triggered CSV Mode on Clear/Write Failures, and Midnight Rollover Protection
+Files changed:
+- common/gsheet_circuit_breaker.py
+- common/pipeline_engine.py
+- common/advance_precrawl.py
+- common/tracxn_domain_ingestor.py
+Reason:
+1. Local Sheet CSV Decoupling: In CSV-only mode, the active operating dataset is loaded and persisted directly to `local_sheet.csv` rather than reading from `next_day_pre_crawl.csv`. This prevents next day's advance pre-crawl batch from overwriting today's running dataset.
+2. Consecutive Write Failure Auto-Trip: Added consecutive failure tracking to `GSheetCircuitBreaker` (threshold = 3). If write operations fail repeatedly (or encounter `DOCUMENT_TOO_LARGE_TO_EDIT` / read-only exceptions), the circuit breaker automatically trips and permanently persists `.csv_only_mode`.
+3. Startup / Next-Day Clear Failure Auto-Fallback: When Google Sheets `batch_clear` or sheet writes fail repeatedly during morning/nightly rollover (e.g. `DOCUMENT_TOO_LARGE_TO_EDIT`), `load_precrawl_to_sheet` and `ingest_domains_for_sheet` automatically apply CSV-only mode, stage the new domains directly into `local_sheet.csv`, archive the loaded pre-crawl file, and return the row count so pipeline auto-start proceeds without breaking the flow.
+4. Midnight Rollover Invariance: New domains for the next day are picked up strictly during the 11:35 PM - 12:45 AM IST rollover window under any mode. Active runs continue uninterrupted during the day.
+Related tests:
+- Temp_Test/test_circuit_breaker_consecutive_failures.py (Passed)
+- Temp_Test/test_read_sheet_data_csv.py (Passed)
+- Temp_Test/test_csv_only_local_sheet_flow.py (Passed)
+- Temp_Test/test_csv_only_mode_precrawl.py (Passed)
+
 ## [2026-11-06] Local CSV Pre-Crawl Engine Input Fallback & Circuit Breaker Decoupling
 Files changed:
 - common/gsheet_circuit_breaker.py

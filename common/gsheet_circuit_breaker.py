@@ -75,17 +75,49 @@ class GSheetCircuitBreaker:
     When tripped, signals all sheet writers to bypass network updates to Google Sheets,
     avoiding recursive retries, 400 errors, and log file bloat.
     """
-    def __init__(self, name: str = "DiscoverySheet", sheet_dir: Optional[str] = None):
+    def __init__(self, name: str = "DiscoverySheet", sheet_dir: Optional[str] = None, failure_threshold: int = 3):
         self.name = name
         self.sheet_dir = sheet_dir
+        self.failure_threshold = max(1, failure_threshold)
+        self._consecutive_write_failures = 0
         self._tripped = False
         self._trip_reason = ""
         self._tripped_at: Optional[datetime] = None
         self._lock = threading.Lock()
 
+    @property
+    def consecutive_write_failures(self) -> int:
+        with self._lock:
+            return self._consecutive_write_failures
+
     def is_tripped(self) -> bool:
         with self._lock:
             return self._tripped
+
+    def record_write_success(self) -> None:
+        """Resets the consecutive write failure counter on any successful sheet write."""
+        with self._lock:
+            self._consecutive_write_failures = 0
+
+    def record_write_failure(self, ex: Optional[Exception] = None) -> bool:
+        """
+        Records a write failure. If the exception is a document-size/read-only limit error,
+        or if consecutive write failures reach failure_threshold, trips the circuit breaker.
+        Returns True if tripped, False otherwise.
+        """
+        with self._lock:
+            self._consecutive_write_failures += 1
+            cnt = self._consecutive_write_failures
+
+        if is_doc_too_large_error(ex):
+            self.trip(f"Document size limit reached: {ex}")
+            return True
+
+        if cnt >= self.failure_threshold:
+            self.trip(f"Consecutive write failures reached {cnt} (threshold: {self.failure_threshold}): {ex}")
+            return True
+
+        return False
 
     def should_skip_gsheet(self) -> bool:
         with self._lock:
@@ -114,6 +146,7 @@ class GSheetCircuitBreaker:
             self._tripped = False
             self._trip_reason = ""
             self._tripped_at = None
+            self._consecutive_write_failures = 0
             if self.sheet_dir:
                 set_csv_only_mode(self.sheet_dir, False)
             logging.info(f"🔄 [GSheetCircuitBreaker] Reset for {self.name}.")
@@ -121,12 +154,9 @@ class GSheetCircuitBreaker:
     def handle_error(self, ex: Exception) -> bool:
         """
         Evaluates an exception from a sheet write attempt.
-        If it's a document size limit error, trips the circuit breaker and returns True.
+        Trips if it's a document size error or if consecutive failures hit the threshold.
         """
-        if is_doc_too_large_error(ex):
-            self.trip(str(ex))
-            return True
-        return False
+        return self.record_write_failure(ex)
 
     def record_pending_sync(
         self,
