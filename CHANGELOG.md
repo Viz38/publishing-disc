@@ -1,6 +1,18 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-06] Elimination of Duplicate Central Funnel Force-Assignment on Publish Funnel Movements
+Files changed:
+- common/pipeline_engine.py (Added `is_pf_move` flag and auto-detection in `WriteAPI_Domain_Funnel` and `WriteAPI_Domain_Funnel_async`, guarding Central Funnel pre-movement checks and recovery)
+Reason:
+1. Root Cause Elimination: In Phase 4 Step 2 (Industry Funnel to Publish Funnel movement, which applies to ~96% of all domains), `WriteAPI_Domain_Funnel_async` previously executed an unqualified `effective_source_funnel != cf_central_fid and dest_Funnel != cf_central_fid` check. This treated the Industry Funnel as an external funnel, erroneously invoked `ensure_domain_in_central_funnel_async` to pre-move the domain back into Central Funnel, and re-assigned the domain in Central Funnel (`5dc559138787070a80be21ba`) a second time.
+2. Publish Funnel Bypass Guard: Added `is_pf_move: bool = False` (with auto-detection when `filterGroupId is None and filterId is None and effective_source_funnel != cf_central_fid and dest_Funnel != cf_central_fid`) ensuring IF -> PF movements move directly from `industry_funnel_id` to `publish_funnel_id` without touching Central Funnel or triggering duplicate CF force-assignments.
+3. Strict CF Movement Invariance: Central Funnel (`5dc559138787070a80be21ba`) is now force-assigned strictly once per domain during CF -> IF movement.
+Related tests:
+- Temp_Test/test_cf_force_assign_once.py (3 passed: CF->IF + IF->PF exact 1-count verification, auto-detection bypass verification, and UNASSIGNABLE handling)
+- Temp_Test/unit/test_unit_cf_precheck.py (6 passed)
+
+
 ## [2026-11-06] Decoupled Local Sheet CSV Ingestion, Auto-Triggered CSV Mode on Clear/Write Failures, and Midnight Rollover Protection
 Files changed:
 - common/gsheet_circuit_breaker.py

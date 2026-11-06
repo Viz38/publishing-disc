@@ -2482,7 +2482,7 @@ async def _resolve_tracxn_async_token(token=None) -> str:
         return await TRACXN_KEY_MANAGER.acquire() if hasattr(TRACXN_KEY_MANAGER, "acquire") else TRACXN_KEY_MANAGER.get_token()
     return token or Tracxn_API_Token
 
-def WriteAPI_Domain_Funnel(domainProfileId, source_funnelID, filterGroupId, filterId, dest_Funnel, status, comments, token=None):
+def WriteAPI_Domain_Funnel(domainProfileId, source_funnelID, filterGroupId, filterId, dest_Funnel, status, comments, token=None, is_pf_move: bool = False):
     effective_source_funnel = str(source_funnelID or "").strip()
     if not effective_source_funnel or effective_source_funnel == "-":
         effective_source_funnel = getattr(TRACXN_CLIENT, "CENTRAL_FUNNEL_ID", "5dc559138787070a80be21ba") if 'TRACXN_CLIENT' in globals() and TRACXN_CLIENT is not None else "5dc559138787070a80be21ba"
@@ -2500,7 +2500,7 @@ def WriteAPI_Domain_Funnel(domainProfileId, source_funnelID, filterGroupId, filt
         ret = Change_Domain_Funnel_Moved_Out(domainProfileId, effective_source_funnel, filterGroupId, filterId, dest_Funnel, comments, tok)
     return 'TRUE' if ret == 'YES' else 'FALSE'
 
-async def WriteAPI_Domain_Funnel_async(domainProfileId, source_funnelID, filterGroupId, filterId, dest_Funnel, status, comments, token=None, session: aiohttp.ClientSession = None):
+async def WriteAPI_Domain_Funnel_async(domainProfileId, source_funnelID, filterGroupId, filterId, dest_Funnel, status, comments, token=None, session: aiohttp.ClientSession = None, is_pf_move: bool = False):
     cf_central_fid = getattr(TRACXN_CLIENT, "CENTRAL_FUNNEL_ID", "5dc559138787070a80be21ba") if 'TRACXN_CLIENT' in globals() and TRACXN_CLIENT is not None else "5dc559138787070a80be21ba"
     effective_source_funnel = str(source_funnelID or "").strip()
     if not effective_source_funnel or effective_source_funnel == "-":
@@ -2508,6 +2508,10 @@ async def WriteAPI_Domain_Funnel_async(domainProfileId, source_funnelID, filterG
 
     if not domainProfileId or not effective_source_funnel or not dest_Funnel or not status:
         return 'FALSE'
+
+    # Auto-detect IF -> PF movement: source is not Central Funnel and filter details are None
+    if not is_pf_move and (filterGroupId is None and filterId is None and effective_source_funnel != cf_central_fid and dest_Funnel != cf_central_fid):
+        is_pf_move = True
 
     close_sess = False
     active_sess = session
@@ -2521,8 +2525,9 @@ async def WriteAPI_Domain_Funnel_async(domainProfileId, source_funnelID, filterG
             # Bind single user token across all actions for this domain to preserve assignment identity
             tok = await TRACXN_CLIENT._acquire_token(tok)
             if status == 'MOVED_OUT':
-                # Check if effective_source_funnel is Backlog or external while dest is an Industry Funnel
-                if effective_source_funnel != cf_central_fid and dest_Funnel != cf_central_fid:
+                # Pre-move to Central Funnel is ONLY required for external/Backlog batches moving to an Industry Funnel.
+                # It MUST NEVER run for IF -> PF movements (which move directly from IF to PF without touching CF).
+                if not is_pf_move and effective_source_funnel != cf_central_fid and dest_Funnel != cf_central_fid:
                     pre_move_res = await TRACXN_CLIENT.ensure_domain_in_central_funnel_async(
                         active_sess, domainProfileId, current_funnel_id=effective_source_funnel,
                         filter_group_id=filterGroupId, filter_id=filterId, comments="Pre-move to Central Funnel", token=tok
@@ -2537,8 +2542,8 @@ async def WriteAPI_Domain_Funnel_async(domainProfileId, source_funnelID, filterG
                 if move_res in ("YES", "ALREADY_MOVED"):
                     return 'TRUE'
 
-                # If movement failed or returned UNASSIGNABLE, check if domain was outside Central Funnel and attempt recovery
-                if move_res in ("UNASSIGNABLE", "NO") and effective_source_funnel == cf_central_fid and dest_Funnel != cf_central_fid:
+                # If movement failed due to domain outside CF on a CF->IF move, attempt CF pre-placement recovery
+                if not is_pf_move and move_res in ("UNASSIGNABLE", "NO") and effective_source_funnel == cf_central_fid and dest_Funnel != cf_central_fid:
                     logging.info(f"Move from CF to {dest_Funnel} failed for {domainProfileId} ({move_res}). Attempting CF pre-placement recovery...")
                     pre_cf_res = await TRACXN_CLIENT.ensure_domain_in_central_funnel_async(
                         active_sess, domainProfileId, current_funnel_id=None,
@@ -3959,7 +3964,7 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
             tag_status_pf = batch_tag_res
             tag_status_discovery = batch_tag_res
 
-            if_pf_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, industry_funnel_id, None, None, publish_funnel_id, if_pf_action, comment, token, session=session) 
+            if_pf_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, industry_funnel_id, None, None, publish_funnel_id, if_pf_action, comment, token, session=session, is_pf_move=True) 
             if_pf_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
 
             if if_pf_status == "TRUE":
@@ -6321,7 +6326,7 @@ async def Execute_Phase4_Ingestion_Write_APIs(client, mainheaders, SHEET_ID, EXT
                     # IF -> PF Write API & Tagging
                     if industry_funnel_id and publish_funnel_id:
                         tag_status_pf = await Domain_HashTag_async(domain, tag_name_pf, token)
-                        if_pf_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, industry_funnel_id, None, None, publish_funnel_id, if_pf_action, comment, token, session=session)
+                        if_pf_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, industry_funnel_id, None, None, publish_funnel_id, if_pf_action, comment, token, session=session, is_pf_move=True)
                         if_pf_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
                         if if_pf_status == "TRUE":
                             if_pf_status = "DONE"
