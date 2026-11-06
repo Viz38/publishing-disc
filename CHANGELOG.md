@@ -1,6 +1,25 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-06] Migration of Target Sheets 2 and 4 to Clean V2 Master Spreadsheets
+Files changed:
+- common/advance_precrawl.py
+- common/fleet_deduplicator.py
+- common/fleet_orchestrator.py
+- common/tracxn_domain_ingestor.py
+- status_dashboard.gs
+- GEMINI.md
+Reason:
+1. Replaced production spreadsheets for Engine 2 and Engine 4 with pristine 57-column master spreadsheets:
+   - Sheet 2 (CF-2): `1QGraMZOJjc-EIZlt_CieOVpr1jxw6tLa_QnWgWHou5I`
+   - Sheet 4 (Filter-V2): `1z3wH--c2qHGlNqW0e-6Mc8IVqh_kN5_fbWjILM4FxQM`
+2. Successfully copied payload filter definitions (`CF_IF Engine - Input Payload`) and funnel mappings (`Funnel_Details`) into the new spreadsheets.
+3. Updated all references across the codebase, configuration files, and fleet orchestrators.
+4. Migrated in-flight execution state from local CSV data (`local_sheet.csv`) to Google Sheets, removed `.csv_only_mode`, and resumed discovery engines directly via Google Sheets starting from Row 3.
+Related tests:
+- Temp_Test/copy_payloads_and_funnels.py
+
+
 ## [2026-11-06] Self-Healing Ingestion Waterfall: 3-Criteria Filtering, Dynamic Repopulation & Sequential Fleet Handoff
 Files changed:
 - common/domain_filter_validator.py

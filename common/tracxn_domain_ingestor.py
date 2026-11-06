@@ -38,7 +38,7 @@ TARGET_SHEETS = [
     },
     {
         "sheet_num": 2,
-        "sheet_id": "1xH7HPdSYtj7J1AjycQ6pvwz5VJKFsNHngnWxtyKZNFQ",
+        "sheet_id": "1QGraMZOJjc-EIZlt_CieOVpr1jxw6tLa_QnWgWHou5I",
         "name": "Discovery Operations - Engine 2"
     },
     {
@@ -48,7 +48,7 @@ TARGET_SHEETS = [
     },
     {
         "sheet_num": 4,
-        "sheet_id": "1RYkvqgxMJpjMrD3x9D4VE8Zu4UJlf36gN-bfJ7T-bcA",
+        "sheet_id": "1z3wH--c2qHGlNqW0e-6Mc8IVqh_kN5_fbWjILM4FxQM",
         "name": "Discovery Operations - Engine 4"
     }
 ]

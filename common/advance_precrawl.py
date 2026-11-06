@@ -33,9 +33,9 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapi
 
 TARGET_SHEETS = [
     {"num": 1, "id": os.getenv("SHEET1_ID", "1IWXqnR52IzpFewE0QS0tlJFT65nJE_fmIoJs8ps9nZo"), "name": "Sheet 1 (CF-1)", "folder": "Sheet1"},
-    {"num": 2, "id": os.getenv("SHEET2_ID", "1xH7HPdSYtj7J1AjycQ6pvwz5VJKFsNHngnWxtyKZNFQ"), "name": "Sheet 2 (CF-2)", "folder": "Sheet2"},
+    {"num": 2, "id": os.getenv("SHEET2_ID", "1QGraMZOJjc-EIZlt_CieOVpr1jxw6tLa_QnWgWHou5I"), "name": "Sheet 2 (CF-2)", "folder": "Sheet2"},
     {"num": 3, "id": os.getenv("SHEET3_ID", "1MHdkFCsoAY0V7ix_pJ5SpWFq3EFpJEug2ntJk1FkEl8"), "name": "Sheet 3 (CF-3)", "folder": "Sheet3"},
-    {"num": 4, "id": os.getenv("SHEET4_ID", "1RYkvqgxMJpjMrD3x9D4VE8Zu4UJlf36gN-bfJ7T-bcA"), "name": "Sheet 4 (Filter-V2)", "folder": "Sheet4"},
+    {"num": 4, "id": os.getenv("SHEET4_ID", "1z3wH--c2qHGlNqW0e-6Mc8IVqh_kN5_fbWjILM4FxQM"), "name": "Sheet 4 (Filter-V2)", "folder": "Sheet4"},
 ]
 
 FUNNELS = [
