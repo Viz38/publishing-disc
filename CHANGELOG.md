@@ -1,6 +1,20 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-07] Recovery of Sheet 2 from CSV-Only Mode, Complete GSheet Replay, and Fleet NIM Key Pool Purification
+Files changed:
+- .env (Local workspace, Desktop-5080, Desktop-5321)
+- Temp_Test/replay_and_upload_sheet2.py
+- CHANGELOG.md
+Reason:
+1. Sheet 2 Full Recovery & GSheet Sync: Replayed 41,955 updates from `pending_gsheet_sync.csv` into `local_sheet.csv`, formatted all 16,700 rows with "Raw Data Appended - csv only" in Column AD (reducing CSV footprint from 222 MB to 72 MB), and bulk-uploaded all rows directly to Google Sheet 2 (`1QGraMZOJjc-EIZlt_CieOVpr1jxw6tLa_QnWgWHou5I`). Verified 8,410 NIM summaries and 8,387 Tracxn movements populated live on the sheet. Removed `.csv_only_mode` and archived `pending_gsheet_sync.csv`.
+2. Sheet 4 Inspection & Acceleration: Confirmed Sheet 4 (`1z3wH--c2qHGlNqW0e-6Mc8IVqh_kN5_fbWjILM4FxQM`) is already writing directly to Google Sheets (8,062 NIM summaries, 8,057 Tracxn movements live) with no `.csv_only_mode` active. Slowness was resolved by addressing NIM key starvation.
+3. NVIDIA NIM Key Pool Purification: Tested all 52 keys against NVCF endpoints. Identified and pruned 4 invalid keys returning HTTP 403 Forbidden (`...6oD4gT`, `...PvJoXO`, `...yUniul`, `...kiML7b`). Synced the 48 healthy keys across local and remote `.env` files. With 48 keys, each sheet receives exactly 12 isolated, non-overlapping keys (eliminating cross-engine contention and 429 rate limit storms).
+4. Fleet-Wide Service Restart & Top-Row Resume: Restarted systemd services on both hosts (`discovery-cf1`, `discovery-cf2` on Desktop-5080; `discovery-cf3`, `discovery-filterv2` on Desktop-5321) and resumed all 4 engines starting from Row 3 per Top-Row Resume Mandate.
+Related tests:
+- Temp_Test/test_replay_logic.py
+- Temp_Test/replay_and_upload_sheet2.py
+
 ## [2026-11-06] Raw Data Storage Architecture: "Raw Data Appended - csv only" Policy & Fleet Backfill
 Files changed:
 - common/pipeline_engine.py
