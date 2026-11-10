@@ -1,6 +1,25 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-10] P0 Clear-All Budget Guarantee, NIM 404 Cooldown Fix, 60K Fleet Budget Rebalancing, and Sheet 1/4 GSheet Sync
+Files changed:
+- common/advance_precrawl.py
+- common/pipeline_engine.py
+- CHANGELOG.md
+Reason:
+1. P0 Clear-All & Non-P0 Clear-All Pre-Crawl Guarantee: Updated `fetch_domains_for_sheet` in `common/advance_precrawl.py` so blank-budget (`""`) Clear-All payloads never get skipped or truncated by `effective_target_count` regardless of row ordering, and `P0` Clear-All domain additions (`p0_clear_all_added`) are strictly additive so they never starve P1 integer-budgeted rows.
+2. NVIDIA NIM Transient 404 Protection: Updated `Nvidia_API_ASYNC` in `common/pipeline_engine.py` to apply a 15s temporary cooldown (`token_rotator.mark_rate_limited(api_key, cooldown_seconds=15.0)`) on transient HTTP `404` responses instead of permanently deleting healthy keys via `mark_invalid` (only `401`/`403` remain permanent invalidations). Fixed Sheet 3 key starvation where 10/12 healthy keys had been pruned on transient 404s.
+3. 60,000/day Fleet Budget Rebalancing across Sheets 1-4 `CF_IF Engine - Input Payload`:
+   - Sheet 1 (~15,000): Enabled `Domains DB (FY2026/FY2025/FY2024)` (`150/500/400`), set `Bright Data Processing - CF` to Clear-All (`""`) with `{"not": {"hashTags": ["bu_llm_discovery_processing"]}}` to finish remaining untagged leads without re-pulling 61k+ tagged leads, and added `Domains DB (HashTags) - CF` (`14,000`).
+   - Sheet 2 (15,000): Restored `Domains DB (HashTags) - CF` (`15,000`) and set all 3 Bright Data rows to `0`.
+   - Sheet 3 (20,000 `Unpublished Domains - Product` + additive `P0 - Funded` Clear-All): Kept `P0 - Funded` Rows 11-12 as `""` Clear-All and tuned the 7 highest-volume P1 rows from 26,300 to 22,400 sum (~20,000 net yield after depleted sub-filters).
+   - Sheet 4 (~10,000 all non-Bright-Data groups): Disabled all 3 Bright Data rows (`0`) and balanced `P0 - Others` (100), `P1 (Others)` (100), `P1 - Customer Mandates` (12), `P1 - Employee Count` (150), `Focussed Discovery - Employee Count (GData)` (200), `High PS` (250), `Data from GLi Source` (500), and `Deep Tech` (250).
+4. Sheet 1 & Sheet 4 CSV-Only Recovery: Replayed `pending_gsheet_sync.csv` onto `local_sheet.csv`, uploaded live 57-col data (with `"Raw Data Appended - csv only"` in Col AD) directly to Google Sheets 1 and 4, cleared `.csv_only_mode`, restarted services with updated code across Desktop-5080 and Desktop-5321, and resumed from Row 3.
+Related tests:
+- Temp_Test/test_budget_and_nim_fixes.py
+- Temp_Test/update_fleet_budgets.py
+- Temp_Test/replay_and_upload_sheet.py
+
 ## [2026-11-07] Recovery of Sheet 2 from CSV-Only Mode, Complete GSheet Replay, and Fleet NIM Key Pool Purification
 Files changed:
 - .env (Local workspace, Desktop-5080, Desktop-5321)

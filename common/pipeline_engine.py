@@ -1072,12 +1072,12 @@ async def Nvidia_API_ASYNC(promptMsg, token_rotator: NIMKeyManager = None, max_a
                         payload["messages"][1]["content"] = shorter
                         await asyncio.sleep(0.5)
 
-                    # 404 Not Found (account deactivated / model endpoint issue)
+                    # 404 Not Found (transient NVCF function routing / endpoint blip — cool down instead of permanent deactivation)
                     elif resp.status == 404:
                         resp_text = await resp.text()
-                        logging.warning(f"NIM 404 on key ...{api_key[-6:]}: {resp_text[:120]}. Deactivating key...")
+                        logging.warning(f"NIM 404 on key ...{api_key[-6:]}: {resp_text[:120]}. Cooling down key for 15s...")
                         if token_rotator:
-                            token_rotator.mark_invalid(api_key)
+                            token_rotator.mark_rate_limited(api_key, cooldown_seconds=15.0)
                         await asyncio.sleep(0.1)
 
                     # 5xx Server Errors

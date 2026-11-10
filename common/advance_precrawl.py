@@ -204,13 +204,11 @@ def fetch_domains_for_sheet(
         existing_sheet_domains = initialize_fleet_exclusion_pool(gc)
 
     new_rows_57 = []
+    p0_clear_all_added = 0
     domain_seen = set()
     added_time_str = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
 
     for idx in range(2, len(payload_rows)):
-        if len(new_rows_57) >= effective_target_count:
-            break
-
         p_row = payload_rows[idx]
         if not p_row or not p_row[0]:
             continue
@@ -221,6 +219,14 @@ def fetch_domains_for_sheet(
         filter_group_id = p_row[4] if len(p_row) > 4 else ""
 
         budget_str = p_row[5].strip() if len(p_row) > 5 else ""
+        is_clear_all = (budget_str == "")
+        is_p0_clear_all = is_clear_all and (
+            str(p_row[0]).strip().upper().startswith("P0")
+            or filter_name.strip().upper().startswith("P0")
+        )
+        if not is_clear_all and (len(new_rows_57) - p0_clear_all_added) >= effective_target_count:
+            continue
+
         if budget_str:
             try:
                 budget = int(budget_str)
@@ -256,7 +262,9 @@ def fetch_domains_for_sheet(
 
         domain_added_count = 0
         for funnel in active_funnels:
-            if domain_added_count >= effective_budget or len(new_rows_57) >= effective_target_count:
+            if domain_added_count >= effective_budget or (
+                not is_clear_all and (len(new_rows_57) - p0_clear_all_added) >= effective_target_count
+            ):
                 break
 
             f_name = funnel["name"]
@@ -331,11 +339,13 @@ def fetch_domains_for_sheet(
                                 )
                                 new_rows_57.append(row_57)
                                 domain_added_count += 1
+                                if is_p0_clear_all:
+                                    p0_clear_all_added += 1
                                 if domain_added_count % 1000 == 0:
-                                    logger.info(f"  --> Fetched {domain_added_count}/{effective_budget} domains for '{filter_name}' ({len(new_rows_57)}/{effective_target_count} total for sheet)...")
-                                if len(new_rows_57) >= effective_target_count:
+                                    logger.info(f"  --> Fetched {domain_added_count}/{effective_budget} domains for '{filter_name}' ({len(new_rows_57)}/{effective_target_count} total for sheet, P0 clear-all={p0_clear_all_added})...")
+                                if not is_clear_all and (len(new_rows_57) - p0_clear_all_added) >= effective_target_count:
                                     break
-                        if len(new_rows_57) >= effective_target_count:
+                        if not is_clear_all and (len(new_rows_57) - p0_clear_all_added) >= effective_target_count:
                             break
                         from_offset += page_size
                         if from_offset > 0 and from_offset % 2000 == 0 and domain_added_count < effective_budget:
