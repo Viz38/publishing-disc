@@ -1,6 +1,15 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-10] Add Consecutive Error/Timeout Cap in `advance_precrawl.py`
+Files changed:
+- common/advance_precrawl.py
+- CHANGELOG.md
+Reason:
+1. Prevent Infinite Retry Loops on Slow/Timeout Queries: Added a `consecutive_errors` cap (`max_consecutive_errors = 4` for request exceptions and HTTP 401/403 auth failures, `10` for HTTP 429 rate limits, reset on HTTP 200) inside `fetch_domains_for_sheet()`. Previously, a slow Tracxn API query returning repeated `ReadTimeout` errors (e.g., `EC - Others - Unprocessed` on Sheet 4) retried forever, blocking all downstream filter groups from being fetched.
+Related tests:
+- Temp_Test/test_budget_and_nim_fixes.py (`test_timeout_loop_breaks_after_consecutive_errors`)
+
 ## [2026-11-10] Fix Per-Row Effective Budget Overshoot in `advance_precrawl.py`
 Files changed:
 - common/advance_precrawl.py

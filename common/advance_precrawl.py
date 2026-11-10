@@ -285,6 +285,8 @@ def fetch_domains_for_sheet(
                 payload_str = json.dumps(query_payload)
 
             from_offset = 0
+            consecutive_errors = 0
+            max_consecutive_errors = 4
 
             while domain_added_count < effective_budget:
                 page_size = 100
@@ -306,6 +308,7 @@ def fetch_domains_for_sheet(
                 try:
                     resp = requests.post(TRACXN_API_URL, json=page_payload, headers=headers, timeout=30)
                     if resp.status_code == 200:
+                        consecutive_errors = 0
                         data = resp.json()
                         page_items = data.get("result", [])
                         total_cov = data.get("total_count", 0)
@@ -373,15 +376,27 @@ def fetch_domains_for_sheet(
                             continue
 
                         km.handle_http_error(token, resp.status_code)
-                        logger.warning(f"Tracxn token invalid/expired (status {resp.status_code}). Rotating token...")
+                        consecutive_errors += 1
+                        logger.warning(f"Tracxn token invalid/expired (status {resp.status_code}, attempt {consecutive_errors}/{max_consecutive_errors}). Rotating token...")
+                        if consecutive_errors >= max_consecutive_errors:
+                            logger.warning(f"Aborting '{filter_name}' ({f_name}) after {consecutive_errors} consecutive auth errors.")
+                            break
                         continue
                     elif resp.status_code == 401:
                         km.handle_http_error(token, resp.status_code)
-                        logger.warning(f"Tracxn token invalid/expired (status {resp.status_code}). Rotating token...")
+                        consecutive_errors += 1
+                        logger.warning(f"Tracxn token invalid/expired (status {resp.status_code}, attempt {consecutive_errors}/{max_consecutive_errors}). Rotating token...")
+                        if consecutive_errors >= max_consecutive_errors:
+                            logger.warning(f"Aborting '{filter_name}' ({f_name}) after {consecutive_errors} consecutive auth errors.")
+                            break
                         continue
                     elif resp.status_code == 429:
                         km.handle_http_error(token, resp.status_code)
-                        logger.warning("Tracxn rate limit 429 hit. Sleeping 2s and rotating...")
+                        consecutive_errors += 1
+                        logger.warning(f"Tracxn rate limit 429 hit (attempt {consecutive_errors}/10). Sleeping 2s and rotating...")
+                        if consecutive_errors >= 10:
+                            logger.warning(f"Aborting '{filter_name}' ({f_name}) after {consecutive_errors} consecutive 429 rate-limit errors.")
+                            break
                         time.sleep(2)
                         continue
                     else:
@@ -389,7 +404,11 @@ def fetch_domains_for_sheet(
                         logger.warning(f"Tracxn error status {resp.status_code}. Rotating...")
                         break
                 except Exception as e:
-                    logger.warning(f"Error fetching Tracxn domains: {e}")
+                    consecutive_errors += 1
+                    logger.warning(f"Error fetching Tracxn domains (attempt {consecutive_errors}/{max_consecutive_errors}) for '{filter_name}': {e}")
+                    if consecutive_errors >= max_consecutive_errors:
+                        logger.warning(f"Aborting '{filter_name}' ({f_name}) after {consecutive_errors} consecutive request errors so downstream payloads can proceed.")
+                        break
                     time.sleep(2)
                     continue
 
