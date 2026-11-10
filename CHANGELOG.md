@@ -1,6 +1,15 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-10] Fix Per-Row Effective Budget Overshoot in `advance_precrawl.py`
+Files changed:
+- common/advance_precrawl.py
+- CHANGELOG.md
+Reason:
+1. Per-Row `effective_budget` Enforcement: Added `domain_added_count >= effective_budget` break checks inside the inner `for item in page_items:` loop in `fetch_domains_for_sheet()`. Previously, when a sub-filter payload row had a small budget (e.g. `12` on Sheet 4 Customer Mandates), `fetch_domains_for_sheet` consumed up to the full 100-item API page before checking the outer `while` condition, starving downstream groups (`P1 - Employee Count`, `High PS`, `GLi`, `Deep Tech`).
+Related tests:
+- Temp_Test/test_budget_and_nim_fixes.py
+
 ## [2026-11-10] Fix 50% Job ID Cutoff Bug in Advance Pre-Crawl (`generate_job_ids_for_rows`)
 Files changed:
 - common/advance_precrawl.py

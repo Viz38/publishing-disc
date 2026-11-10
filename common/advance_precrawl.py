@@ -343,9 +343,13 @@ def fetch_domains_for_sheet(
                                     p0_clear_all_added += 1
                                 if domain_added_count % 1000 == 0:
                                     logger.info(f"  --> Fetched {domain_added_count}/{effective_budget} domains for '{filter_name}' ({len(new_rows_57)}/{effective_target_count} total for sheet, P0 clear-all={p0_clear_all_added})...")
-                                if not is_clear_all and (len(new_rows_57) - p0_clear_all_added) >= effective_target_count:
+                                if domain_added_count >= effective_budget or (
+                                    not is_clear_all and (len(new_rows_57) - p0_clear_all_added) >= effective_target_count
+                                ):
                                     break
-                        if not is_clear_all and (len(new_rows_57) - p0_clear_all_added) >= effective_target_count:
+                        if domain_added_count >= effective_budget or (
+                            not is_clear_all and (len(new_rows_57) - p0_clear_all_added) >= effective_target_count
+                        ):
                             break
                         from_offset += page_size
                         if from_offset > 0 and from_offset % 2000 == 0 and domain_added_count < effective_budget:
