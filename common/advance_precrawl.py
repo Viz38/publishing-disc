@@ -439,44 +439,42 @@ async def generate_job_ids_for_rows(rows: List[List[str]], concurrency: int = 25
                 except asyncio.QueueEmpty:
                     break
 
-                idx, r = item
-                domain = r[0].strip() if r and r[0] else ""
-                if domain:
-                    # Skip if already populated with a valid Tech Crawler Job ID
-                    if len(r) > 21 and r[21] and r[21].startswith("bu-daily_render_"):
-                        skipped_count += 1
-                        queue.task_done()
-                        continue
+                try:
+                    idx, r = item
+                    domain = r[0].strip() if r and r[0] else ""
+                    if domain:
+                        # Skip if already populated with a valid Tech Crawler Job ID
+                        if len(r) > 21 and r[21] and r[21].startswith("bu-daily_render_"):
+                            skipped_count += 1
+                            continue
 
-                    await asyncio.sleep(0.04)  # Small pacing
-                    try:
-                        job_id = await tc_client.generate_job_id(session, domain)
-                        gen_time = datetime.datetime.now().strftime("%d/%b/%Y %H:%M:%S")
-                        if job_id:
-                            r[20] = "DONE"
-                            r[21] = job_id
-                            r[22] = gen_time
-                            r[23] = "PROCESSING"
-                            created_count += 1
-                        else:
-                            r[20] = "DONE"
-                            r[21] = ""
-                            r[22] = gen_time
-                            r[23] = "FAILED"
+                        await asyncio.sleep(0.04)  # Small pacing
+                        try:
+                            job_id = await tc_client.generate_job_id(session, domain)
+                            gen_time = datetime.datetime.now().strftime("%d/%b/%Y %H:%M:%S")
+                            if job_id:
+                                r[20] = "DONE"
+                                r[21] = job_id
+                                r[22] = gen_time
+                                r[23] = "PROCESSING"
+                                created_count += 1
+                            else:
+                                r[20] = "DONE"
+                                r[21] = ""
+                                r[22] = gen_time
+                                r[23] = "FAILED"
+                                failed_count += 1
+                        except Exception as e:
+                            logger.debug(f"Error generating job ID for {domain}: {e}")
                             failed_count += 1
-                    except Exception as e:
-                        logger.debug(f"Error generating job ID for {domain}: {e}")
-                        failed_count += 1
 
-                    done = created_count + failed_count + skipped_count
-                    if done % 500 == 0 or done == total:
-                        logger.info(f"Tech Crawler Job ID Generation Progress: {done}/{total} ({created_count} OK, {failed_count} FAIL, {skipped_count} ALREADY PRESENT)")
-                        if save_folder and done % 500 == 0:
-                            save_precrawl_to_csv(save_folder, rows)
-
-                queue.task_done()
-
-                queue.task_done()
+                        done = created_count + failed_count + skipped_count
+                        if done % 500 == 0 or done == total:
+                            logger.info(f"Tech Crawler Job ID Generation Progress: {done}/{total} ({created_count} OK, {failed_count} FAIL, {skipped_count} ALREADY PRESENT)")
+                            if save_folder and done % 500 == 0:
+                                save_precrawl_to_csv(save_folder, rows)
+                finally:
+                    queue.task_done()
 
         # Bounded worker pool: exactly `concurrency` workers running concurrently
         workers = [asyncio.create_task(_worker()) for _ in range(concurrency)]

@@ -1,6 +1,17 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-10] Fix 50% Job ID Cutoff Bug in Advance Pre-Crawl (`generate_job_ids_for_rows`)
+Files changed:
+- common/advance_precrawl.py
+- CHANGELOG.md
+Reason:
+1. Root Cause Fixed (`generate_job_ids_for_rows`): Removed a duplicate `queue.task_done()` call in `_worker()` inside `common/advance_precrawl.py` and wrapped item processing in `try...finally: queue.task_done()`. Previously, `queue.task_done()` was invoked twice per normal domain, causing `await queue.join()` to prematurely unblock at ~50% progress and cancel active workers, leaving half of `next_day_pre_crawl.csv` without Tech Crawler Job IDs.
+2. Verified 100% Job ID generation across all non-empty domains while preserving already-populated `bu-daily_render_*` Job IDs and safely handling blank domain rows.
+Related tests:
+- Temp_Test/test_job_id_100pct.py
+- Temp_Test/test_budget_and_nim_fixes.py
+
 ## [2026-11-10] P0 Clear-All Budget Guarantee, NIM 404 Cooldown Fix, 60K Fleet Budget Rebalancing, and Sheet 1/4 GSheet Sync
 Files changed:
 - common/advance_precrawl.py
