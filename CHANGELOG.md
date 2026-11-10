@@ -1,6 +1,17 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-10] Fix Multi-Profile Leak Validation Blind Spots and Adaptive Timeout Retries
+Files changed:
+- common/domain_filter_validator.py
+- common/advance_precrawl.py
+- CHANGELOG.md
+Reason:
+1. Paginated Multi-Dataset Leak Validation (`domain_filter_validator.py`): Updated `batch_validate_domains` and `batch_validate_domains_async` to use `chunk_size=25` with `size=100` `from`-offset pagination, query `dataset="tracxn"` first with `"internal"` fallback, rotate API keys via `TracxnKeyManager`, and preserve sticky leak flags across multiple profiles (`billosdock.com` + 8 multi-profile `feed_tagged` domains caught during full 58,516 audit).
+2. Adaptive Query Shrink on ReadTimeout (`advance_precrawl.py`): Halves `page_size` (down to `25`) and increases HTTP timeout (up to `90s`) across timeout retries inside `fetch_domains_for_sheet()`, allowing heavy ES queries like `EC - Others - Unprocessed` to succeed while still capping at 4 consecutive errors.
+Related tests:
+- Temp_Test/test_budget_and_nim_fixes.py (`test_batch_validate_paginates_tracxn_and_sticky_leaks`, `test_timeout_reduces_page_size_and_succeeds`)
+
 ## [2026-11-10] Add Consecutive Error/Timeout Cap in `advance_precrawl.py`
 Files changed:
 - common/advance_precrawl.py

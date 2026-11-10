@@ -11,7 +11,8 @@ any of the 3 fundamental funnel ingestion rules:
 """
 
 import logging
-from typing import Dict, Any, Tuple, List, Optional
+import time
+from typing import Dict, Any, Tuple, List, Optional, Set
 import requests
 import aiohttp
 import asyncio
@@ -88,54 +89,106 @@ def is_domain_leaked(item: Dict[str, Any]) -> Tuple[bool, str]:
     return False, ""
 
 
+def _apply_validation_items(
+    items: List[Dict[str, Any]],
+    results: Dict[str, Tuple[bool, str]],
+    returned_domains: Set[str]
+) -> None:
+    """Applies leak evaluation across returned profiles without clearing an already-flagged domain."""
+    for item in items:
+        dom = (item.get("domain") or item.get("name") or "").strip().lower()
+        if dom not in results:
+            continue
+        returned_domains.add(dom)
+        is_l, reason = is_domain_leaked(item)
+        if is_l and not results[dom][0]:
+            results[dom] = (True, reason)
+
+
+def _get_key_manager_or_token(token: Optional[str]):
+    if token:
+        return None, token
+    try:
+        from common.key_manager import TracxnKeyManager
+        return TracxnKeyManager(), None
+    except Exception:
+        try:
+            from common.pipeline_engine import Tracxn_API_Token
+            return None, Tracxn_API_Token
+        except Exception:
+            return None, ""
+
+
+def _build_tracxn_headers(tok: str) -> Dict[str, str]:
+    return {
+        "Content-Type": "application/json",
+        "accessToken": tok,
+        "X-Request-Source": "Discovery Team",
+        "cache-control": "no-cache"
+    }
+
+
 def batch_validate_domains(
     domains: List[str],
     token: Optional[str] = None,
-    chunk_size: int = 100
+    chunk_size: int = 25
 ) -> Dict[str, Tuple[bool, str]]:
     """
     Synchronously batch-validates a list of domain names against Tracxn API.
+    Paginates multi-profile results, rotates API keys on throttling/errors, queries 'tracxn'
+    first with 'internal' fallback for any missing domains, and preserves sticky leak flags.
     Returns mapping: domain -> (is_leaked, reason).
     """
     if not domains:
         return {}
 
-    clean_domains = [d.strip().lower() for d in domains if d and d.strip()]
+    clean_domains = list(dict.fromkeys(d.strip().lower() for d in domains if d and d.strip()))
     results: Dict[str, Tuple[bool, str]] = {d: (False, "") for d in clean_domains}
+    km, static_token = _get_key_manager_or_token(token)
 
-    if not token:
-        try:
-            from common.pipeline_engine import Tracxn_API_Token
-            token = Tracxn_API_Token
-        except Exception:
-            token = ""
-
-    headers = {
-        "Content-Type": "application/json",
-        "accessToken": token,
-        "X-Request-Source": "Discovery Team",
-        "cache-control": "no-cache"
-    }
+    def _query_dataset(chunk: List[str], dataset: str) -> Set[str]:
+        seen: Set[str] = set()
+        offset = 0
+        while True:
+            payload = {"dataset": dataset, "filter": {"domain": chunk}, "from": offset, "size": 100}
+            fetched_page = False
+            for _ in range(5):
+                tok = km.get_next_token() if km else static_token
+                if not tok:
+                    break
+                try:
+                    resp = requests.post(
+                        TRACXN_DOMAINS_API_URL,
+                        json=payload,
+                        headers=_build_tracxn_headers(tok),
+                        timeout=25
+                    )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        items = data.get("result", [])
+                        total = data.get("total_count", len(items))
+                        _apply_validation_items(items, results, seen)
+                        fetched_page = True
+                        if not items or offset + len(items) >= total:
+                            return seen
+                        offset += len(items)
+                        break
+                    if km:
+                        km.handle_http_error(tok, resp.status_code)
+                    logger.warning(f"Batch validation ({dataset}) status {resp.status_code}: {resp.text[:100]}")
+                    time.sleep(1.5 if resp.status_code == 429 else 0.5)
+                except Exception as e:
+                    logger.error(f"Batch validation ({dataset}) request exception: {e}")
+                    time.sleep(1.0)
+            if not fetched_page:
+                return seen
 
     for i in range(0, len(clean_domains), chunk_size):
         chunk = clean_domains[i:i + chunk_size]
-        payload = {
-            "dataset": "internal",
-            "filter": {"domain": chunk},
-            "size": len(chunk)
-        }
-        try:
-            resp = requests.post(TRACXN_DOMAINS_API_URL, json=payload, headers=headers, timeout=25)
-            if resp.status_code == 200:
-                data = resp.json()
-                for item in data.get("result", []):
-                    dom = (item.get("domain") or item.get("name") or "").strip().lower()
-                    if dom in results:
-                        results[dom] = is_domain_leaked(item)
-            else:
-                logger.warning(f"Batch validation status {resp.status_code}: {resp.text[:100]}")
-        except Exception as e:
-            logger.error(f"Batch validation request exception: {e}")
+        seen_tracxn = _query_dataset(chunk, "tracxn")
+        missing = [d for d in chunk if d not in seen_tracxn]
+        if missing:
+            _query_dataset(missing, "internal")
 
     return results
 
@@ -144,7 +197,7 @@ async def batch_validate_domains_async(
     domains: List[str],
     token: Optional[str] = None,
     session: Optional[aiohttp.ClientSession] = None,
-    chunk_size: int = 100
+    chunk_size: int = 25
 ) -> Dict[str, Tuple[bool, str]]:
     """
     Asynchronously batch-validates a list of domain names against Tracxn API.
@@ -153,42 +206,53 @@ async def batch_validate_domains_async(
     if not domains:
         return {}
 
-    clean_domains = [d.strip().lower() for d in domains if d and d.strip()]
+    clean_domains = list(dict.fromkeys(d.strip().lower() for d in domains if d and d.strip()))
     results: Dict[str, Tuple[bool, str]] = {d: (False, "") for d in clean_domains}
+    km, static_token = _get_key_manager_or_token(token)
 
-    if not token:
-        try:
-            from common.pipeline_engine import Tracxn_API_Token
-            token = Tracxn_API_Token
-        except Exception:
-            token = ""
-
-    headers = {
-        "Content-Type": "application/json",
-        "accessToken": token,
-        "X-Request-Source": "Discovery Team",
-        "cache-control": "no-cache"
-    }
+    async def _query_dataset_async(sess: aiohttp.ClientSession, chunk: List[str], dataset: str) -> Set[str]:
+        seen: Set[str] = set()
+        offset = 0
+        while True:
+            payload = {"dataset": dataset, "filter": {"domain": chunk}, "from": offset, "size": 100}
+            fetched_page = False
+            for _ in range(5):
+                tok = km.get_next_token() if km else static_token
+                if not tok:
+                    break
+                try:
+                    async with sess.post(
+                        TRACXN_DOMAINS_API_URL,
+                        json=payload,
+                        headers=_build_tracxn_headers(tok),
+                        timeout=aiohttp.ClientTimeout(total=25)
+                    ) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            items = data.get("result", [])
+                            total = data.get("total_count", len(items))
+                            _apply_validation_items(items, results, seen)
+                            fetched_page = True
+                            if not items or offset + len(items) >= total:
+                                return seen
+                            offset += len(items)
+                            break
+                        if km:
+                            km.handle_http_error(tok, resp.status)
+                        text = await resp.text()
+                        logger.warning(f"Async batch validation ({dataset}) status {resp.status}: {text[:100]}")
+                        await asyncio.sleep(1.5 if resp.status == 429 else 0.5)
+                except Exception as e:
+                    logger.error(f"Async batch validation ({dataset}) request error: {e}")
+                    await asyncio.sleep(1.0)
+            if not fetched_page:
+                return seen
 
     async def _check_chunk(sess: aiohttp.ClientSession, chunk: List[str]):
-        payload = {
-            "dataset": "internal",
-            "filter": {"domain": chunk},
-            "size": len(chunk)
-        }
-        try:
-            async with sess.post(TRACXN_DOMAINS_API_URL, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=25)) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    for item in data.get("result", []):
-                        dom = (item.get("domain") or item.get("name") or "").strip().lower()
-                        if dom in results:
-                            results[dom] = is_domain_leaked(item)
-                else:
-                    text = await resp.text()
-                    logger.warning(f"Async batch validation status {resp.status}: {text[:100]}")
-        except Exception as e:
-            logger.error(f"Async batch validation request error: {e}")
+        seen_tracxn = await _query_dataset_async(sess, chunk, "tracxn")
+        missing = [d for d in chunk if d not in seen_tracxn]
+        if missing:
+            await _query_dataset_async(sess, missing, "internal")
 
     chunks = [clean_domains[i:i + chunk_size] for i in range(0, len(clean_domains), chunk_size)]
     if session is not None:

@@ -285,11 +285,12 @@ def fetch_domains_for_sheet(
                 payload_str = json.dumps(query_payload)
 
             from_offset = 0
+            page_size = 100
+            req_timeout = 30
             consecutive_errors = 0
             max_consecutive_errors = 4
 
             while domain_added_count < effective_budget:
-                page_size = 100
                 page_payload = dict(query_payload)
                 page_payload["from"] = from_offset
                 page_payload["size"] = page_size
@@ -306,7 +307,7 @@ def fetch_domains_for_sheet(
                 }
 
                 try:
-                    resp = requests.post(TRACXN_API_URL, json=page_payload, headers=headers, timeout=30)
+                    resp = requests.post(TRACXN_API_URL, json=page_payload, headers=headers, timeout=req_timeout)
                     if resp.status_code == 200:
                         consecutive_errors = 0
                         data = resp.json()
@@ -409,6 +410,10 @@ def fetch_domains_for_sheet(
                     if consecutive_errors >= max_consecutive_errors:
                         logger.warning(f"Aborting '{filter_name}' ({f_name}) after {consecutive_errors} consecutive request errors so downstream payloads can proceed.")
                         break
+                    if isinstance(e, requests.exceptions.Timeout) or "timed out" in str(e).lower():
+                        page_size = max(25, page_size // 2)
+                        req_timeout = min(90, max(45, req_timeout + 15))
+                        logger.info(f"Shrinking page_size={page_size} and raising timeout={req_timeout}s for '{filter_name}' retry...")
                     time.sleep(2)
                     continue
 
