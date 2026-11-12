@@ -13,51 +13,42 @@ def get_now_ist() -> datetime.datetime:
     """Returns the current datetime in Indian Standard Time (IST, UTC+5:30)."""
     return datetime.datetime.now(IST_TZ)
 
-def is_5am_ist_cutoff(current_dt: Optional[datetime.datetime] = None, now_dt: Optional[datetime.datetime] = None) -> bool:
-    """
-    Returns True if current time in IST (UTC+5:30) is within the daily cutoff window (23:30:00 - 23:34:59 IST).
-    Apps Script / Ingestion refreshes domains at 11:30 PM IST, so any pipeline running in this window must be halted.
-    """
+def _to_ist(current_dt: Optional[datetime.datetime] = None, now_dt: Optional[datetime.datetime] = None) -> datetime.datetime:
+    """Converts a datetime (or current wall time) to IST (UTC+5:30)."""
     dt = current_dt or now_dt
     if dt is None:
-        dt = get_now_ist()
-    elif dt.tzinfo is None:
-        dt = dt.replace(tzinfo=IST_TZ)
-    else:
-        dt = dt.astimezone(IST_TZ)
-    return dt.hour == 23 and dt.minute >= 30 and dt.minute < 35
+        return get_now_ist()
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=IST_TZ)
+    return dt.astimezone(IST_TZ)
+
+def is_5am_ist_cutoff(current_dt: Optional[datetime.datetime] = None, now_dt: Optional[datetime.datetime] = None) -> bool:
+    """
+    Returns True if current time in IST (UTC+5:30) is within the daily midnight cutoff window (00:00:00 - 00:04:59 IST).
+    Ingestion / sheet cleanup refreshes domains at 12:00 AM IST, so any pipeline running in this window must halt.
+    """
+    dt = _to_ist(current_dt, now_dt)
+    return dt.hour == 0 and dt.minute < 5
 
 is_cutoff_window = is_5am_ist_cutoff
 
 def is_pre_cutoff_window(current_dt: Optional[datetime.datetime] = None, now_dt: Optional[datetime.datetime] = None) -> bool:
     """
-    Returns True if current time in IST (UTC+5:30) is within the Pre-Cutoff Flush window (23:00:00 - 23:29:59 IST).
-    During this 11:00 PM - 11:30 PM window, no new URLs are accepted for scraping; all NIM-summarized domains are flushed
-    through Gemini predictions and Review & Write APIs so they are marked DONE before 11:30 PM.
+    Returns True if current time in IST (UTC+5:30) is within the Pre-Cutoff Flush window (23:30:00 - 23:59:59 IST).
+    During this 11:30 PM - 12:00 AM window, no new URLs are accepted for scraping; all NIM-summarized domains are flushed
+    through Gemini predictions and Review & Write APIs so they are marked DONE before 12:00 AM.
     """
-    dt = current_dt or now_dt
-    if dt is None:
-        dt = get_now_ist()
-    elif dt.tzinfo is None:
-        dt = dt.replace(tzinfo=IST_TZ)
-    else:
-        dt = dt.astimezone(IST_TZ)
-    return dt.hour == 23 and dt.minute < 30
+    dt = _to_ist(current_dt, now_dt)
+    return dt.hour == 23 and dt.minute >= 30
 
 def is_before_4am_ist(current_dt: Optional[datetime.datetime] = None, now_dt: Optional[datetime.datetime] = None) -> bool:
     """
-    Returns True if current time in IST (UTC+5:30) has not reached the 11:00 PM IST cutoff.
-    Between 23:00:00 and 23:35:00 IST, pipeline retries of previously failed phases are halted
-    in preparation for the 11:30 PM daily refresh window.
+    Returns True if current time in IST (UTC+5:30) is outside the nightly wind-down / midnight cutoff window.
+    Between 23:30:00 and 00:04:59 IST, pipeline retries of previously failed phases are halted
+    in preparation for the 12:00 AM daily refresh window.
     """
-    dt = current_dt or now_dt
-    if dt is None:
-        dt = get_now_ist()
-    elif dt.tzinfo is None:
-        dt = dt.replace(tzinfo=IST_TZ)
-    else:
-        dt = dt.astimezone(IST_TZ)
-    if dt.hour == 23:
+    dt = _to_ist(current_dt, now_dt)
+    if (dt.hour == 23 and dt.minute >= 30) or (dt.hour == 0 and dt.minute < 5):
         return False
     return True
 
@@ -99,21 +90,11 @@ def get_ist_timestamp() -> str:
 def get_cycle_date_ist(current_dt: Optional[datetime.datetime] = None) -> str:
     """
     Returns the daily processing cycle date string (YYYY-MM-DD) in IST.
-    Daily domains refresh and auto-start at 11:35 PM IST (23:35 IST).
-    Therefore, the window from 23:35:00 to 23:59:59 IST belongs to the cycle
-    operating primarily on the next calendar day (days=+1).
-    From 00:00:00 to 23:34:59 IST, it belongs to the current calendar day.
+    Daily clear & refresh happens at 12:00 AM IST (00:00 IST), so each calendar day
+    from 00:00:00 to 23:59:59 IST belongs directly to its IST calendar date.
     """
-    if current_dt is None:
-        current_dt = get_now_ist()
-    elif current_dt.tzinfo is None:
-        current_dt = current_dt.replace(tzinfo=IST_TZ)
-    else:
-        current_dt = current_dt.astimezone(IST_TZ)
-
-    if current_dt.hour == 23 and current_dt.minute >= 35:
-        current_dt = current_dt + datetime.timedelta(days=1)
-    return current_dt.strftime("%Y-%m-%d")
+    dt = _to_ist(current_dt)
+    return dt.strftime("%Y-%m-%d")
 
 def safe_str(val: Any) -> str:
     """Safely converts any value to string, stripping whitespace."""
@@ -546,14 +527,21 @@ class LocalSheetCache:
         row_out[55] = rec.get("tag_status_review") or in_row[55] or ""  # Col BD: Review Hashtag (domainformanualreview)
 
         # Col BE: Disc Movement Hashtag (bu_llm_discovery_processing)
-        # Added ONLY if PF Hashtag (bu_llm_feed_prediction) is YES/TRUE
-        pf_tag = str(row_out[54]).strip().upper()
-        if pf_tag in ("YES", "TRUE"):
-            row_out[56] = rec.get("discovery_bq") or in_row[56] or "YES"
+        # Added ONLY if BOTH CF->IF and IF->PF Movements are DONE
+        cf_done = str(row_out[49]).strip().upper() == "DONE"
+        pf_done = str(row_out[51]).strip().upper() == "DONE"
+        if cf_done and pf_done:
+            disc_val = str(rec.get("discovery_bq") or in_row[56] or "").strip().lower()
+            if disc_val in ("yes", "true"):
+                row_out[56] = "yes"
+            elif disc_val == "no":
+                row_out[56] = "no"
+            else:
+                row_out[56] = ""
         elif row_out[49] or row_out[51]:
-            row_out[56] = "NO"
+            row_out[56] = "no"
         else:
-            row_out[56] = rec.get("discovery_bq") or in_row[56] or ""
+            row_out[56] = ""
 
         return row_out
 

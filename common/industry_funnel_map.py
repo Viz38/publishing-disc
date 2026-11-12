@@ -218,51 +218,51 @@ INDUSTRY_FUNNELS_21: Dict[str, Dict[str, Any]] = {
     },
     "18": {
         "number": "18",
-        "name": "ToPublish Funnel : Mining",
-        "id": "5dc586462799a51cc0ff34de",
-        "type": "ToPublish Funnel",
-        "subtype": "Type A",
-        "tpf": "Real Estate and Construction",
-        "if_cf": "Industrial Goods & Manufacturing",
+        "name": "Mining",
+        "id": "5dc585f32799a51cc0ff145c",
+        "type": "Industry Funnel",
+        "subtype": "Regular",
+        "tpf": "Mining",
+        "if_cf": "CENTRAL FUNNEL",
         "cf": "CENTRAL FUNNEL",
-        "dept": "SR",
-        "row": ["ToPublish Funnel : Mining", "5dc586462799a51cc0ff34de", "ToPublish Funnel", "Type A", "Real Estate and Construction", "Industrial Goods & Manufacturing", "CENTRAL FUNNEL", "SR", "18"]
+        "dept": "Discovery",
+        "row": ["Mining", "5dc585f32799a51cc0ff145c", "Industry Funnel", "Regular", "Mining", "CENTRAL FUNNEL", "CENTRAL FUNNEL", "Discovery", "18"]
     },
     "19": {
         "number": "19",
-        "name": "ToPublish Funnel : Telecom",
-        "id": "5dc585e52799a51cc0ff0de4",
-        "type": "ToPublish Funnel",
-        "subtype": "Type A",
-        "tpf": "All Publishing",
-        "if_cf": "All Publishing",
+        "name": "Telecom",
+        "id": "5dc585f32799a51cc0ff1438",
+        "type": "Industry Funnel",
+        "subtype": "Regular",
+        "tpf": "Telecom",
+        "if_cf": "CENTRAL FUNNEL",
         "cf": "CENTRAL FUNNEL",
-        "dept": "SR",
-        "row": ["ToPublish Funnel : Telecom", "5dc585e52799a51cc0ff0de4", "ToPublish Funnel", "Type A", "All Publishing", "All Publishing", "CENTRAL FUNNEL", "SR", "19"]
+        "dept": "Discovery",
+        "row": ["Telecom", "5dc585f32799a51cc0ff1438", "Industry Funnel", "Regular", "Telecom", "CENTRAL FUNNEL", "CENTRAL FUNNEL", "Discovery", "19"]
     },
     "20": {
         "number": "20",
-        "name": "ToPublish Funnel : Nonprofit",
-        "id": "5dc585f42799a51cc0ff14ec",
-        "type": "ToPublish Funnel",
-        "subtype": "Type A",
-        "tpf": "Real Estate and Construction",
-        "if_cf": "Industrial Goods & Manufacturing",
+        "name": "Nonprofits",
+        "id": "5dc585f42799a51cc0ff1450",
+        "type": "Industry Funnel",
+        "subtype": "Regular",
+        "tpf": "Nonprofits",
+        "if_cf": "CENTRAL FUNNEL",
         "cf": "CENTRAL FUNNEL",
-        "dept": "SR",
-        "row": ["ToPublish Funnel : Nonprofit", "5dc585f42799a51cc0ff14ec", "ToPublish Funnel", "Type A", "Real Estate and Construction", "Industrial Goods & Manufacturing", "CENTRAL FUNNEL", "SR", "20"]
+        "dept": "Discovery",
+        "row": ["Nonprofits", "5dc585f42799a51cc0ff1450", "Industry Funnel", "Regular", "Nonprofits", "CENTRAL FUNNEL", "CENTRAL FUNNEL", "Discovery", "20"]
     },
     "21": {
         "number": "21",
-        "name": "ToPublish Funnel : Government",
-        "id": "5dc585ef2799a51cc0ff127c",
-        "type": "ToPublish Funnel",
-        "subtype": "Type A",
-        "tpf": "Real Estate and Construction",
-        "if_cf": "Industrial Goods & Manufacturing",
+        "name": "Public Administration",
+        "id": "5dc585f42799a51cc0ff14c8",
+        "type": "Industry Funnel",
+        "subtype": "Regular",
+        "tpf": "Public Administration",
+        "if_cf": "CENTRAL FUNNEL",
         "cf": "CENTRAL FUNNEL",
-        "dept": "SR",
-        "row": ["ToPublish Funnel : Government", "5dc585ef2799a51cc0ff127c", "ToPublish Funnel", "Type A", "Real Estate and Construction", "Industrial Goods & Manufacturing", "CENTRAL FUNNEL", "SR", "21"]
+        "dept": "Discovery",
+        "row": ["Public Administration", "5dc585f42799a51cc0ff14c8", "Industry Funnel", "Regular", "Public Administration", "CENTRAL FUNNEL", "CENTRAL FUNNEL", "Discovery", "21"]
     },
 }
 
@@ -293,14 +293,18 @@ for num, info in INDUSTRY_FUNNELS_21.items():
 ALL_FUNNEL_ROWS = [
     ["Central Funnel (Backlog)", "64197f01a6dcff6572453ead", "Central Funnel (Backlog)", "None", "Central Funnel (Backlog)", "CENTRAL FUNNEL", "Central Funnel (Backlog)", "Discovery", ""],
     ["CENTRAL FUNNEL", "5dc559138787070a80be21ba", "CENTRAL FUNNEL", "None", "CENTRAL FUNNEL", "CENTRAL FUNNEL", "CENTRAL FUNNEL", "Discovery", ""],
-    ["ToPublish Funnel : Telecom", "5dc585e52799a51cc0ff0de4", "ToPublish Funnel", "Type A", "ToPublish Funnel : Telecom", "CENTRAL FUNNEL", "CENTRAL FUNNEL", "SR", "19"],
+    ["Mining", "5dc585f32799a51cc0ff145c", "Industry Funnel", "Regular", "Mining", "CENTRAL FUNNEL", "CENTRAL FUNNEL", "Discovery", "18"],
+    ["Telecom", "5dc585f32799a51cc0ff1438", "Industry Funnel", "Regular", "Telecom", "CENTRAL FUNNEL", "CENTRAL FUNNEL", "Discovery", "19"],
+    ["Nonprofits", "5dc585f42799a51cc0ff1450", "Industry Funnel", "Regular", "Nonprofits", "CENTRAL FUNNEL", "CENTRAL FUNNEL", "Discovery", "20"],
+    ["Public Administration", "5dc585f42799a51cc0ff14c8", "Industry Funnel", "Regular", "Public Administration", "CENTRAL FUNNEL", "CENTRAL FUNNEL", "Discovery", "21"],
+    ["ToPublish Funnel : Telecom", "5dc585e52799a51cc0ff0de4", "ToPublish Funnel", "Type A", "ToPublish Funnel : Telecom", "CENTRAL FUNNEL", "CENTRAL FUNNEL", "SR", ""],
     ["ToPublish Funnel : Conglomerates", "5e01d34a8787073b3ee38fd2", "ToPublish Funnel", "Type A", "ToPublish Funnel : Conglomerates", "CENTRAL FUNNEL", "CENTRAL FUNNEL", "SR", ""],
     ["Publishing Funnel : Inappropriate Content", "5e7c9ddb87870750f0f913ad", "Publishing Funnel", "Type C", "Publishing Funnel : Inappropriate Content", "CENTRAL FUNNEL", "CENTRAL FUNNEL", "SR", ""],
     ["Publishing Funnel : Stealth Mode", "5ea2a5338787076ed26d05fe", "Publishing Funnel", "Type C", "Publishing Funnel : Stealth Mode", "CENTRAL FUNNEL", "CENTRAL FUNNEL", "SR", ""],
     ["Publishing Funnel : Website Not Working", "5e721fcd878707706f64f241", "Publishing Funnel", "Type C", "Publishing Funnel : Website Not Working", "CENTRAL FUNNEL", "CENTRAL FUNNEL", "SR", ""],
-    ["ToPublish Funnel : Mining", "5dc586462799a51cc0ff34de", "ToPublish Funnel", "Type A", "ToPublish Funnel : Mining", "CENTRAL FUNNEL", "CENTRAL FUNNEL", "SR", "18"],
-    ["ToPublish Funnel : Nonprofit", "5dc585f42799a51cc0ff14ec", "ToPublish Funnel", "Type A", "ToPublish Funnel : Nonprofit", "CENTRAL FUNNEL", "CENTRAL FUNNEL", "SR", "20"],
-    ["ToPublish Funnel : Government", "5dc585ef2799a51cc0ff127c", "ToPublish Funnel", "Type A", "ToPublish Funnel : Government", "CENTRAL FUNNEL", "CENTRAL FUNNEL", "SR", "21"],
+    ["ToPublish Funnel : Mining", "5dc586462799a51cc0ff34de", "ToPublish Funnel", "Type A", "ToPublish Funnel : Mining", "CENTRAL FUNNEL", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Nonprofit", "5dc585f42799a51cc0ff14ec", "ToPublish Funnel", "Type A", "ToPublish Funnel : Nonprofit", "CENTRAL FUNNEL", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Government", "5dc585ef2799a51cc0ff127c", "ToPublish Funnel", "Type A", "ToPublish Funnel : Government", "CENTRAL FUNNEL", "CENTRAL FUNNEL", "SR", ""],
     ["Aerospace Maritime & Defence", "5dc585f32799a51cc0ff1474", "Industry Funnel", "Regular", "Aerospace Maritime & Defence", "CENTRAL FUNNEL", "CENTRAL FUNNEL", "Discovery", "13"],
     ["Automotive", "5dc585f22799a51cc0ff13fc", "Industry Funnel", "Regular", "Automotive", "CENTRAL FUNNEL", "CENTRAL FUNNEL", "Discovery", "14"],
     ["Consumer Goods & Retail", "5dc585f32799a51cc0ff1444", "Industry Funnel", "Regular", "Consumer Goods & Retail", "CENTRAL FUNNEL", "CENTRAL FUNNEL", "Discovery", "2"],
@@ -327,23 +331,23 @@ ALL_FUNNEL_ROWS = [
     ["ToPublish Funnel : Robotics and Drones", "5dc585e12799a51cc0ff0c88", "ToPublish Funnel", "Type A", "ToPublish Funnel : Robotics and Drones", "Hi-Tech", "CENTRAL FUNNEL", "SR", ""],
     ["ToPublish Funnel : 3D Technologies", "5dc585e12799a51cc0ff0c58", "ToPublish Funnel", "Type A", "ToPublish Funnel : 3D Technologies", "Hi-Tech", "CENTRAL FUNNEL", "SR", ""],
     ["ToPublish Funnel : Logistics", "5dc585e42799a51cc0ff0dc0", "ToPublish Funnel", "Type A", "ToPublish Funnel : Logistics", "Logistics Transportation Travel & Hospitality", "CENTRAL FUNNEL", "SR", ""],
-    ["ToPublish Funnel : Telecom", "5dc585e52799a51cc0ff0de4", "ToPublish Funnel", "Type A", "ToPublish Funnel : Telecom", "Aerospace Maritime & Defence", "CENTRAL FUNNEL", "SR", "19"],
-    ["ToPublish Funnel : Telecom", "5dc585e52799a51cc0ff0de4", "ToPublish Funnel", "Type A", "ToPublish Funnel : Telecom", "Automotive", "CENTRAL FUNNEL", "SR", "19"],
-    ["ToPublish Funnel : Telecom", "5dc585e52799a51cc0ff0de4", "ToPublish Funnel", "Type A", "ToPublish Funnel : Telecom", "Consumer Goods & Retail", "CENTRAL FUNNEL", "SR", "19"],
-    ["ToPublish Funnel : Telecom", "5dc585e52799a51cc0ff0de4", "ToPublish Funnel", "Type A", "ToPublish Funnel : Telecom", "Financial Services", "CENTRAL FUNNEL", "SR", "19"],
-    ["ToPublish Funnel : Telecom", "5dc585e52799a51cc0ff0de4", "ToPublish Funnel", "Type A", "ToPublish Funnel : Telecom", "Business Services", "CENTRAL FUNNEL", "SR", "19"],
-    ["ToPublish Funnel : Telecom", "5dc585e52799a51cc0ff0de4", "ToPublish Funnel", "Type A", "ToPublish Funnel : Telecom", "Energy and Utilities", "CENTRAL FUNNEL", "SR", "19"],
-    ["ToPublish Funnel : Telecom", "5dc585e52799a51cc0ff0de4", "ToPublish Funnel", "Type A", "ToPublish Funnel : Telecom", "Chemicals & Materials", "CENTRAL FUNNEL", "SR", "19"],
-    ["ToPublish Funnel : Telecom", "5dc585e52799a51cc0ff0de4", "ToPublish Funnel", "Type A", "ToPublish Funnel : Telecom", "Consumer Services", "CENTRAL FUNNEL", "SR", "19"],
-    ["ToPublish Funnel : Telecom", "5dc585e52799a51cc0ff0de4", "ToPublish Funnel", "Type A", "ToPublish Funnel : Telecom", "Education", "CENTRAL FUNNEL", "SR", "19"],
-    ["ToPublish Funnel : Telecom", "5dc585e52799a51cc0ff0de4", "ToPublish Funnel", "Type A", "ToPublish Funnel : Telecom", "Healthcare", "CENTRAL FUNNEL", "SR", "19"],
-    ["ToPublish Funnel : Telecom", "5dc585e52799a51cc0ff0de4", "ToPublish Funnel", "Type A", "ToPublish Funnel : Telecom", "Hi-Tech", "CENTRAL FUNNEL", "SR", "19"],
-    ["ToPublish Funnel : Telecom", "5dc585e52799a51cc0ff0de4", "ToPublish Funnel", "Type A", "ToPublish Funnel : Telecom", "Food Agriculture Fishing and Forestry", "CENTRAL FUNNEL", "SR", "19"],
-    ["ToPublish Funnel : Telecom", "5dc585e52799a51cc0ff0de4", "ToPublish Funnel", "Type A", "ToPublish Funnel : Telecom", "Logistics Transportation Travel & Hospitality", "CENTRAL FUNNEL", "SR", "19"],
-    ["ToPublish Funnel : Telecom", "5dc585e52799a51cc0ff0de4", "ToPublish Funnel", "Type A", "ToPublish Funnel : Telecom", "Media & Entertainment", "CENTRAL FUNNEL", "SR", "19"],
-    ["ToPublish Funnel : Telecom", "5dc585e52799a51cc0ff0de4", "ToPublish Funnel", "Type A", "ToPublish Funnel : Telecom", "IT Infrastructure & Services", "CENTRAL FUNNEL", "SR", "19"],
-    ["ToPublish Funnel : Telecom", "5dc585e52799a51cc0ff0de4", "ToPublish Funnel", "Type A", "ToPublish Funnel : Telecom", "Industrial Goods & Manufacturing", "CENTRAL FUNNEL", "SR", "19"],
-    ["ToPublish Funnel : Telecom", "5dc585e52799a51cc0ff0de4", "ToPublish Funnel", "Type A", "ToPublish Funnel : Telecom", "Real Estate and Construction", "CENTRAL FUNNEL", "SR", "19"],
+    ["ToPublish Funnel : Telecom", "5dc585e52799a51cc0ff0de4", "ToPublish Funnel", "Type A", "ToPublish Funnel : Telecom", "Aerospace Maritime & Defence", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Telecom", "5dc585e52799a51cc0ff0de4", "ToPublish Funnel", "Type A", "ToPublish Funnel : Telecom", "Automotive", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Telecom", "5dc585e52799a51cc0ff0de4", "ToPublish Funnel", "Type A", "ToPublish Funnel : Telecom", "Consumer Goods & Retail", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Telecom", "5dc585e52799a51cc0ff0de4", "ToPublish Funnel", "Type A", "ToPublish Funnel : Telecom", "Financial Services", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Telecom", "5dc585e52799a51cc0ff0de4", "ToPublish Funnel", "Type A", "ToPublish Funnel : Telecom", "Business Services", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Telecom", "5dc585e52799a51cc0ff0de4", "ToPublish Funnel", "Type A", "ToPublish Funnel : Telecom", "Energy and Utilities", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Telecom", "5dc585e52799a51cc0ff0de4", "ToPublish Funnel", "Type A", "ToPublish Funnel : Telecom", "Chemicals & Materials", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Telecom", "5dc585e52799a51cc0ff0de4", "ToPublish Funnel", "Type A", "ToPublish Funnel : Telecom", "Consumer Services", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Telecom", "5dc585e52799a51cc0ff0de4", "ToPublish Funnel", "Type A", "ToPublish Funnel : Telecom", "Education", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Telecom", "5dc585e52799a51cc0ff0de4", "ToPublish Funnel", "Type A", "ToPublish Funnel : Telecom", "Healthcare", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Telecom", "5dc585e52799a51cc0ff0de4", "ToPublish Funnel", "Type A", "ToPublish Funnel : Telecom", "Hi-Tech", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Telecom", "5dc585e52799a51cc0ff0de4", "ToPublish Funnel", "Type A", "ToPublish Funnel : Telecom", "Food Agriculture Fishing and Forestry", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Telecom", "5dc585e52799a51cc0ff0de4", "ToPublish Funnel", "Type A", "ToPublish Funnel : Telecom", "Logistics Transportation Travel & Hospitality", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Telecom", "5dc585e52799a51cc0ff0de4", "ToPublish Funnel", "Type A", "ToPublish Funnel : Telecom", "Media & Entertainment", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Telecom", "5dc585e52799a51cc0ff0de4", "ToPublish Funnel", "Type A", "ToPublish Funnel : Telecom", "IT Infrastructure & Services", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Telecom", "5dc585e52799a51cc0ff0de4", "ToPublish Funnel", "Type A", "ToPublish Funnel : Telecom", "Industrial Goods & Manufacturing", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Telecom", "5dc585e52799a51cc0ff0de4", "ToPublish Funnel", "Type A", "ToPublish Funnel : Telecom", "Real Estate and Construction", "CENTRAL FUNNEL", "SR", ""],
     ["ToPublish Funnel : Mobile Apps", "5dc585fd2799a51cc0ff18a0", "ToPublish Funnel", "Type A", "ToPublish Funnel : Mobile Apps", "Consumer Services", "CENTRAL FUNNEL", "SR", ""],
     ["ToPublish Funnel : Mobile Apps", "5dc585fd2799a51cc0ff18a0", "ToPublish Funnel", "Type A", "ToPublish Funnel : Mobile Apps", "IT Infrastructure & Services", "CENTRAL FUNNEL", "SR", ""],
     ["ToPublish Funnel : Healthcare Providers", "5dc586042799a51cc0ff1bdc", "ToPublish Funnel", "Type B", "ToPublish Funnel : Healthcare Providers", "Healthcare", "CENTRAL FUNNEL", "SR", ""],
@@ -444,23 +448,23 @@ ALL_FUNNEL_ROWS = [
     ["ToPublish Funnel : Finance & Accounting", "5dc585e62799a51cc0ff0e98", "ToPublish Funnel", "Type A", "ToPublish Funnel : Finance & Accounting", "Financial Services", "CENTRAL FUNNEL", "SR", ""],
     ["ToPublish Funnel : Maritime", "5dc5864b2799a51cc0ff36fa", "ToPublish Funnel", "Type A", "ToPublish Funnel : Maritime", "Aerospace Maritime & Defence", "CENTRAL FUNNEL", "SR", ""],
     ["ToPublish Funnel : Field Force Automation", "5dc585e62799a51cc0ff0ed4", "ToPublish Funnel", "Type A", "ToPublish Funnel : Field Force Automation", "Business Services", "CENTRAL FUNNEL", "SR", ""],
-    ["ToPublish Funnel : Mining", "5dc586462799a51cc0ff34de", "ToPublish Funnel", "Type A", "ToPublish Funnel : Mining", "Aerospace Maritime & Defence", "CENTRAL FUNNEL", "SR", "18"],
-    ["ToPublish Funnel : Mining", "5dc586462799a51cc0ff34de", "ToPublish Funnel", "Type A", "ToPublish Funnel : Mining", "Automotive", "CENTRAL FUNNEL", "SR", "18"],
-    ["ToPublish Funnel : Mining", "5dc586462799a51cc0ff34de", "ToPublish Funnel", "Type A", "ToPublish Funnel : Mining", "Consumer Goods & Retail", "CENTRAL FUNNEL", "SR", "18"],
-    ["ToPublish Funnel : Mining", "5dc586462799a51cc0ff34de", "ToPublish Funnel", "Type A", "ToPublish Funnel : Mining", "Financial Services", "CENTRAL FUNNEL", "SR", "18"],
-    ["ToPublish Funnel : Mining", "5dc586462799a51cc0ff34de", "ToPublish Funnel", "Type A", "ToPublish Funnel : Mining", "Business Services", "CENTRAL FUNNEL", "SR", "18"],
-    ["ToPublish Funnel : Mining", "5dc586462799a51cc0ff34de", "ToPublish Funnel", "Type A", "ToPublish Funnel : Mining", "Energy and Utilities", "CENTRAL FUNNEL", "SR", "18"],
-    ["ToPublish Funnel : Mining", "5dc586462799a51cc0ff34de", "ToPublish Funnel", "Type A", "ToPublish Funnel : Mining", "Chemicals & Materials", "CENTRAL FUNNEL", "SR", "18"],
-    ["ToPublish Funnel : Mining", "5dc586462799a51cc0ff34de", "ToPublish Funnel", "Type A", "ToPublish Funnel : Mining", "Consumer Services", "CENTRAL FUNNEL", "SR", "18"],
-    ["ToPublish Funnel : Mining", "5dc586462799a51cc0ff34de", "ToPublish Funnel", "Type A", "ToPublish Funnel : Mining", "Education", "CENTRAL FUNNEL", "SR", "18"],
-    ["ToPublish Funnel : Mining", "5dc586462799a51cc0ff34de", "ToPublish Funnel", "Type A", "ToPublish Funnel : Mining", "Healthcare", "CENTRAL FUNNEL", "SR", "18"],
-    ["ToPublish Funnel : Mining", "5dc586462799a51cc0ff34de", "ToPublish Funnel", "Type A", "ToPublish Funnel : Mining", "Hi-Tech", "CENTRAL FUNNEL", "SR", "18"],
-    ["ToPublish Funnel : Mining", "5dc586462799a51cc0ff34de", "ToPublish Funnel", "Type A", "ToPublish Funnel : Mining", "Food Agriculture Fishing and Forestry", "CENTRAL FUNNEL", "SR", "18"],
-    ["ToPublish Funnel : Mining", "5dc586462799a51cc0ff34de", "ToPublish Funnel", "Type A", "ToPublish Funnel : Mining", "Logistics Transportation Travel & Hospitality", "CENTRAL FUNNEL", "SR", "18"],
-    ["ToPublish Funnel : Mining", "5dc586462799a51cc0ff34de", "ToPublish Funnel", "Type A", "ToPublish Funnel : Mining", "Media & Entertainment", "CENTRAL FUNNEL", "SR", "18"],
-    ["ToPublish Funnel : Mining", "5dc586462799a51cc0ff34de", "ToPublish Funnel", "Type A", "ToPublish Funnel : Mining", "IT Infrastructure & Services", "CENTRAL FUNNEL", "SR", "18"],
-    ["ToPublish Funnel : Mining", "5dc586462799a51cc0ff34de", "ToPublish Funnel", "Type A", "ToPublish Funnel : Mining", "Industrial Goods & Manufacturing", "CENTRAL FUNNEL", "SR", "18"],
-    ["ToPublish Funnel : Mining", "5dc586462799a51cc0ff34de", "ToPublish Funnel", "Type A", "ToPublish Funnel : Mining", "Real Estate and Construction", "CENTRAL FUNNEL", "SR", "18"],
+    ["ToPublish Funnel : Mining", "5dc586462799a51cc0ff34de", "ToPublish Funnel", "Type A", "ToPublish Funnel : Mining", "Aerospace Maritime & Defence", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Mining", "5dc586462799a51cc0ff34de", "ToPublish Funnel", "Type A", "ToPublish Funnel : Mining", "Automotive", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Mining", "5dc586462799a51cc0ff34de", "ToPublish Funnel", "Type A", "ToPublish Funnel : Mining", "Consumer Goods & Retail", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Mining", "5dc586462799a51cc0ff34de", "ToPublish Funnel", "Type A", "ToPublish Funnel : Mining", "Financial Services", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Mining", "5dc586462799a51cc0ff34de", "ToPublish Funnel", "Type A", "ToPublish Funnel : Mining", "Business Services", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Mining", "5dc586462799a51cc0ff34de", "ToPublish Funnel", "Type A", "ToPublish Funnel : Mining", "Energy and Utilities", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Mining", "5dc586462799a51cc0ff34de", "ToPublish Funnel", "Type A", "ToPublish Funnel : Mining", "Chemicals & Materials", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Mining", "5dc586462799a51cc0ff34de", "ToPublish Funnel", "Type A", "ToPublish Funnel : Mining", "Consumer Services", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Mining", "5dc586462799a51cc0ff34de", "ToPublish Funnel", "Type A", "ToPublish Funnel : Mining", "Education", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Mining", "5dc586462799a51cc0ff34de", "ToPublish Funnel", "Type A", "ToPublish Funnel : Mining", "Healthcare", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Mining", "5dc586462799a51cc0ff34de", "ToPublish Funnel", "Type A", "ToPublish Funnel : Mining", "Hi-Tech", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Mining", "5dc586462799a51cc0ff34de", "ToPublish Funnel", "Type A", "ToPublish Funnel : Mining", "Food Agriculture Fishing and Forestry", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Mining", "5dc586462799a51cc0ff34de", "ToPublish Funnel", "Type A", "ToPublish Funnel : Mining", "Logistics Transportation Travel & Hospitality", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Mining", "5dc586462799a51cc0ff34de", "ToPublish Funnel", "Type A", "ToPublish Funnel : Mining", "Media & Entertainment", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Mining", "5dc586462799a51cc0ff34de", "ToPublish Funnel", "Type A", "ToPublish Funnel : Mining", "IT Infrastructure & Services", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Mining", "5dc586462799a51cc0ff34de", "ToPublish Funnel", "Type A", "ToPublish Funnel : Mining", "Industrial Goods & Manufacturing", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Mining", "5dc586462799a51cc0ff34de", "ToPublish Funnel", "Type A", "ToPublish Funnel : Mining", "Real Estate and Construction", "CENTRAL FUNNEL", "SR", ""],
     ["ToPublish Funnel : Packaging", "5ea119c68787074b71849dbc", "ToPublish Funnel", "Type A", "ToPublish Funnel : Packaging", "Industrial Goods & Manufacturing", "CENTRAL FUNNEL", "SR", ""],
     ["ToPublish Funnel : DaaS", "5dc585fa2799a51cc0ff17a4", "ToPublish Funnel", "Type A", "ToPublish Funnel : DaaS", "Business Services", "CENTRAL FUNNEL", "SR", ""],
     ["ToPublish Funnel : Blockchain", "5dc585e22799a51cc0ff0d0c", "ToPublish Funnel", "Type A", "ToPublish Funnel : Blockchain", "Financial Services", "CENTRAL FUNNEL", "SR", ""],
@@ -492,40 +496,40 @@ ALL_FUNNEL_ROWS = [
     ["ToPublish Funnel : IoT", "5dc585e32799a51cc0ff0d24", "ToPublish Funnel", "Type A", "ToPublish Funnel : IoT", "Hi-Tech", "CENTRAL FUNNEL", "SR", ""],
     ["ToPublish Funnel : Rail Transport", "5dc586312799a51cc0ff2db2", "ToPublish Funnel", "Type A", "ToPublish Funnel : Rail Transport", "Logistics Transportation Travel & Hospitality", "CENTRAL FUNNEL", "SR", ""],
     ["ToPublish Funnel : Smart Cars", "5dc585e12799a51cc0ff0c4c", "ToPublish Funnel", "Type A", "ToPublish Funnel : Smart Cars", "Automotive", "CENTRAL FUNNEL", "SR", ""],
-    ["ToPublish Funnel : Nonprofit", "5dc585f42799a51cc0ff14ec", "ToPublish Funnel", "Type A", "ToPublish Funnel : Nonprofit", "Aerospace Maritime & Defence", "CENTRAL FUNNEL", "SR", "20"],
-    ["ToPublish Funnel : Nonprofit", "5dc585f42799a51cc0ff14ec", "ToPublish Funnel", "Type A", "ToPublish Funnel : Nonprofit", "Automotive", "CENTRAL FUNNEL", "SR", "20"],
-    ["ToPublish Funnel : Nonprofit", "5dc585f42799a51cc0ff14ec", "ToPublish Funnel", "Type A", "ToPublish Funnel : Nonprofit", "Consumer Goods & Retail", "CENTRAL FUNNEL", "SR", "20"],
-    ["ToPublish Funnel : Nonprofit", "5dc585f42799a51cc0ff14ec", "ToPublish Funnel", "Type A", "ToPublish Funnel : Nonprofit", "Financial Services", "CENTRAL FUNNEL", "SR", "20"],
-    ["ToPublish Funnel : Nonprofit", "5dc585f42799a51cc0ff14ec", "ToPublish Funnel", "Type A", "ToPublish Funnel : Nonprofit", "Business Services", "CENTRAL FUNNEL", "SR", "20"],
-    ["ToPublish Funnel : Nonprofit", "5dc585f42799a51cc0ff14ec", "ToPublish Funnel", "Type A", "ToPublish Funnel : Nonprofit", "Energy and Utilities", "CENTRAL FUNNEL", "SR", "20"],
-    ["ToPublish Funnel : Nonprofit", "5dc585f42799a51cc0ff14ec", "ToPublish Funnel", "Type A", "ToPublish Funnel : Nonprofit", "Chemicals & Materials", "CENTRAL FUNNEL", "SR", "20"],
-    ["ToPublish Funnel : Nonprofit", "5dc585f42799a51cc0ff14ec", "ToPublish Funnel", "Type A", "ToPublish Funnel : Nonprofit", "Consumer Services", "CENTRAL FUNNEL", "SR", "20"],
-    ["ToPublish Funnel : Nonprofit", "5dc585f42799a51cc0ff14ec", "ToPublish Funnel", "Type A", "ToPublish Funnel : Nonprofit", "Education", "CENTRAL FUNNEL", "SR", "20"],
-    ["ToPublish Funnel : Nonprofit", "5dc585f42799a51cc0ff14ec", "ToPublish Funnel", "Type A", "ToPublish Funnel : Nonprofit", "Healthcare", "CENTRAL FUNNEL", "SR", "20"],
-    ["ToPublish Funnel : Nonprofit", "5dc585f42799a51cc0ff14ec", "ToPublish Funnel", "Type A", "ToPublish Funnel : Nonprofit", "Hi-Tech", "CENTRAL FUNNEL", "SR", "20"],
-    ["ToPublish Funnel : Nonprofit", "5dc585f42799a51cc0ff14ec", "ToPublish Funnel", "Type A", "ToPublish Funnel : Nonprofit", "Food Agriculture Fishing and Forestry", "CENTRAL FUNNEL", "SR", "20"],
-    ["ToPublish Funnel : Nonprofit", "5dc585f42799a51cc0ff14ec", "ToPublish Funnel", "Type A", "ToPublish Funnel : Nonprofit", "Logistics Transportation Travel & Hospitality", "CENTRAL FUNNEL", "SR", "20"],
-    ["ToPublish Funnel : Nonprofit", "5dc585f42799a51cc0ff14ec", "ToPublish Funnel", "Type A", "ToPublish Funnel : Nonprofit", "Media & Entertainment", "CENTRAL FUNNEL", "SR", "20"],
-    ["ToPublish Funnel : Nonprofit", "5dc585f42799a51cc0ff14ec", "ToPublish Funnel", "Type A", "ToPublish Funnel : Nonprofit", "IT Infrastructure & Services", "CENTRAL FUNNEL", "SR", "20"],
-    ["ToPublish Funnel : Nonprofit", "5dc585f42799a51cc0ff14ec", "ToPublish Funnel", "Type A", "ToPublish Funnel : Nonprofit", "Industrial Goods & Manufacturing", "CENTRAL FUNNEL", "SR", "20"],
-    ["ToPublish Funnel : Nonprofit", "5dc585f42799a51cc0ff14ec", "ToPublish Funnel", "Type A", "ToPublish Funnel : Nonprofit", "Real Estate and Construction", "CENTRAL FUNNEL", "SR", "20"],
-    ["ToPublish Funnel : Government", "5dc585ef2799a51cc0ff127c", "ToPublish Funnel", "Type A", "ToPublish Funnel : Government", "Aerospace Maritime & Defence", "CENTRAL FUNNEL", "SR", "21"],
-    ["ToPublish Funnel : Government", "5dc585ef2799a51cc0ff127c", "ToPublish Funnel", "Type A", "ToPublish Funnel : Government", "Automotive", "CENTRAL FUNNEL", "SR", "21"],
-    ["ToPublish Funnel : Government", "5dc585ef2799a51cc0ff127c", "ToPublish Funnel", "Type A", "ToPublish Funnel : Government", "Consumer Goods & Retail", "CENTRAL FUNNEL", "SR", "21"],
-    ["ToPublish Funnel : Government", "5dc585ef2799a51cc0ff127c", "ToPublish Funnel", "Type A", "ToPublish Funnel : Government", "Financial Services", "CENTRAL FUNNEL", "SR", "21"],
-    ["ToPublish Funnel : Government", "5dc585ef2799a51cc0ff127c", "ToPublish Funnel", "Type A", "ToPublish Funnel : Government", "Business Services", "CENTRAL FUNNEL", "SR", "21"],
-    ["ToPublish Funnel : Government", "5dc585ef2799a51cc0ff127c", "ToPublish Funnel", "Type A", "ToPublish Funnel : Government", "Energy and Utilities", "CENTRAL FUNNEL", "SR", "21"],
-    ["ToPublish Funnel : Government", "5dc585ef2799a51cc0ff127c", "ToPublish Funnel", "Type A", "ToPublish Funnel : Government", "Chemicals & Materials", "CENTRAL FUNNEL", "SR", "21"],
-    ["ToPublish Funnel : Government", "5dc585ef2799a51cc0ff127c", "ToPublish Funnel", "Type A", "ToPublish Funnel : Government", "Consumer Services", "CENTRAL FUNNEL", "SR", "21"],
-    ["ToPublish Funnel : Government", "5dc585ef2799a51cc0ff127c", "ToPublish Funnel", "Type A", "ToPublish Funnel : Government", "Education", "CENTRAL FUNNEL", "SR", "21"],
-    ["ToPublish Funnel : Government", "5dc585ef2799a51cc0ff127c", "ToPublish Funnel", "Type A", "ToPublish Funnel : Government", "Healthcare", "CENTRAL FUNNEL", "SR", "21"],
-    ["ToPublish Funnel : Government", "5dc585ef2799a51cc0ff127c", "ToPublish Funnel", "Type A", "ToPublish Funnel : Government", "Hi-Tech", "CENTRAL FUNNEL", "SR", "21"],
-    ["ToPublish Funnel : Government", "5dc585ef2799a51cc0ff127c", "ToPublish Funnel", "Type A", "ToPublish Funnel : Government", "Food Agriculture Fishing and Forestry", "CENTRAL FUNNEL", "SR", "21"],
-    ["ToPublish Funnel : Government", "5dc585ef2799a51cc0ff127c", "ToPublish Funnel", "Type A", "ToPublish Funnel : Government", "Logistics Transportation Travel & Hospitality", "CENTRAL FUNNEL", "SR", "21"],
-    ["ToPublish Funnel : Government", "5dc585ef2799a51cc0ff127c", "ToPublish Funnel", "Type A", "ToPublish Funnel : Government", "Media & Entertainment", "CENTRAL FUNNEL", "SR", "21"],
-    ["ToPublish Funnel : Government", "5dc585ef2799a51cc0ff127c", "ToPublish Funnel", "Type A", "ToPublish Funnel : Government", "IT Infrastructure & Services", "CENTRAL FUNNEL", "SR", "21"],
-    ["ToPublish Funnel : Government", "5dc585ef2799a51cc0ff127c", "ToPublish Funnel", "Type A", "ToPublish Funnel : Government", "Industrial Goods & Manufacturing", "CENTRAL FUNNEL", "SR", "21"],
-    ["ToPublish Funnel : Government", "5dc585ef2799a51cc0ff127c", "ToPublish Funnel", "Type A", "ToPublish Funnel : Government", "Real Estate and Construction", "CENTRAL FUNNEL", "SR", "21"],
+    ["ToPublish Funnel : Nonprofit", "5dc585f42799a51cc0ff14ec", "ToPublish Funnel", "Type A", "ToPublish Funnel : Nonprofit", "Aerospace Maritime & Defence", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Nonprofit", "5dc585f42799a51cc0ff14ec", "ToPublish Funnel", "Type A", "ToPublish Funnel : Nonprofit", "Automotive", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Nonprofit", "5dc585f42799a51cc0ff14ec", "ToPublish Funnel", "Type A", "ToPublish Funnel : Nonprofit", "Consumer Goods & Retail", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Nonprofit", "5dc585f42799a51cc0ff14ec", "ToPublish Funnel", "Type A", "ToPublish Funnel : Nonprofit", "Financial Services", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Nonprofit", "5dc585f42799a51cc0ff14ec", "ToPublish Funnel", "Type A", "ToPublish Funnel : Nonprofit", "Business Services", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Nonprofit", "5dc585f42799a51cc0ff14ec", "ToPublish Funnel", "Type A", "ToPublish Funnel : Nonprofit", "Energy and Utilities", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Nonprofit", "5dc585f42799a51cc0ff14ec", "ToPublish Funnel", "Type A", "ToPublish Funnel : Nonprofit", "Chemicals & Materials", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Nonprofit", "5dc585f42799a51cc0ff14ec", "ToPublish Funnel", "Type A", "ToPublish Funnel : Nonprofit", "Consumer Services", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Nonprofit", "5dc585f42799a51cc0ff14ec", "ToPublish Funnel", "Type A", "ToPublish Funnel : Nonprofit", "Education", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Nonprofit", "5dc585f42799a51cc0ff14ec", "ToPublish Funnel", "Type A", "ToPublish Funnel : Nonprofit", "Healthcare", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Nonprofit", "5dc585f42799a51cc0ff14ec", "ToPublish Funnel", "Type A", "ToPublish Funnel : Nonprofit", "Hi-Tech", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Nonprofit", "5dc585f42799a51cc0ff14ec", "ToPublish Funnel", "Type A", "ToPublish Funnel : Nonprofit", "Food Agriculture Fishing and Forestry", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Nonprofit", "5dc585f42799a51cc0ff14ec", "ToPublish Funnel", "Type A", "ToPublish Funnel : Nonprofit", "Logistics Transportation Travel & Hospitality", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Nonprofit", "5dc585f42799a51cc0ff14ec", "ToPublish Funnel", "Type A", "ToPublish Funnel : Nonprofit", "Media & Entertainment", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Nonprofit", "5dc585f42799a51cc0ff14ec", "ToPublish Funnel", "Type A", "ToPublish Funnel : Nonprofit", "IT Infrastructure & Services", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Nonprofit", "5dc585f42799a51cc0ff14ec", "ToPublish Funnel", "Type A", "ToPublish Funnel : Nonprofit", "Industrial Goods & Manufacturing", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Nonprofit", "5dc585f42799a51cc0ff14ec", "ToPublish Funnel", "Type A", "ToPublish Funnel : Nonprofit", "Real Estate and Construction", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Government", "5dc585ef2799a51cc0ff127c", "ToPublish Funnel", "Type A", "ToPublish Funnel : Government", "Aerospace Maritime & Defence", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Government", "5dc585ef2799a51cc0ff127c", "ToPublish Funnel", "Type A", "ToPublish Funnel : Government", "Automotive", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Government", "5dc585ef2799a51cc0ff127c", "ToPublish Funnel", "Type A", "ToPublish Funnel : Government", "Consumer Goods & Retail", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Government", "5dc585ef2799a51cc0ff127c", "ToPublish Funnel", "Type A", "ToPublish Funnel : Government", "Financial Services", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Government", "5dc585ef2799a51cc0ff127c", "ToPublish Funnel", "Type A", "ToPublish Funnel : Government", "Business Services", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Government", "5dc585ef2799a51cc0ff127c", "ToPublish Funnel", "Type A", "ToPublish Funnel : Government", "Energy and Utilities", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Government", "5dc585ef2799a51cc0ff127c", "ToPublish Funnel", "Type A", "ToPublish Funnel : Government", "Chemicals & Materials", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Government", "5dc585ef2799a51cc0ff127c", "ToPublish Funnel", "Type A", "ToPublish Funnel : Government", "Consumer Services", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Government", "5dc585ef2799a51cc0ff127c", "ToPublish Funnel", "Type A", "ToPublish Funnel : Government", "Education", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Government", "5dc585ef2799a51cc0ff127c", "ToPublish Funnel", "Type A", "ToPublish Funnel : Government", "Healthcare", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Government", "5dc585ef2799a51cc0ff127c", "ToPublish Funnel", "Type A", "ToPublish Funnel : Government", "Hi-Tech", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Government", "5dc585ef2799a51cc0ff127c", "ToPublish Funnel", "Type A", "ToPublish Funnel : Government", "Food Agriculture Fishing and Forestry", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Government", "5dc585ef2799a51cc0ff127c", "ToPublish Funnel", "Type A", "ToPublish Funnel : Government", "Logistics Transportation Travel & Hospitality", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Government", "5dc585ef2799a51cc0ff127c", "ToPublish Funnel", "Type A", "ToPublish Funnel : Government", "Media & Entertainment", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Government", "5dc585ef2799a51cc0ff127c", "ToPublish Funnel", "Type A", "ToPublish Funnel : Government", "IT Infrastructure & Services", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Government", "5dc585ef2799a51cc0ff127c", "ToPublish Funnel", "Type A", "ToPublish Funnel : Government", "Industrial Goods & Manufacturing", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Government", "5dc585ef2799a51cc0ff127c", "ToPublish Funnel", "Type A", "ToPublish Funnel : Government", "Real Estate and Construction", "CENTRAL FUNNEL", "SR", ""],
     ["Publishing Funnel : Think Tanks", "5efeec278787075d7aefc1e9", "Publishing Funnel", "Type C", "Publishing Funnel : Think Tanks", "ToPublish Funnel : Government", "CENTRAL FUNNEL", "SR", ""],
     ["ToPublish Funnel : Pre-K Education", "628f12f32bab9223930b99cb", "ToPublish Funnel", "Type A", "ToPublish Funnel : Pre-K Education", "Education", "CENTRAL FUNNEL", "SR", ""],
     ["Publishing Funnel : Telecom Infrastructure", "5e49a4fd8787074963803a52", "Publishing Funnel", "Type C", "Publishing Funnel : Telecom Infrastructure", "ToPublish Funnel : Telecom", "CENTRAL FUNNEL", "SR", ""],
@@ -862,7 +866,7 @@ ALL_FUNNEL_ROWS = [
     ["ToPublish Funnel : Robotics and Drones", "5dc585e12799a51cc0ff0c88", "ToPublish Funnel", "Type A", "Hi-Tech", "Real Estate and Construction", "CENTRAL FUNNEL", "SR", ""],
     ["ToPublish Funnel : 3D Technologies", "5dc585e12799a51cc0ff0c58", "ToPublish Funnel", "Type A", "Hi-Tech", "Real Estate and Construction", "CENTRAL FUNNEL", "SR", ""],
     ["ToPublish Funnel : Logistics", "5dc585e42799a51cc0ff0dc0", "ToPublish Funnel", "Type A", "Logistics Transportation Travel & Hospitality", "Real Estate and Construction", "CENTRAL FUNNEL", "SR", ""],
-    ["ToPublish Funnel : Telecom", "5dc585e52799a51cc0ff0de4", "ToPublish Funnel", "Type A", "Real Estate and Construction", "Industrial Goods & Manufacturing", "CENTRAL FUNNEL", "SR", "19"],
+    ["ToPublish Funnel : Telecom", "5dc585e52799a51cc0ff0de4", "ToPublish Funnel", "Type A", "Real Estate and Construction", "Industrial Goods & Manufacturing", "CENTRAL FUNNEL", "SR", ""],
     ["ToPublish Funnel : Mobile Apps", "5dc585fd2799a51cc0ff18a0", "ToPublish Funnel", "Type A", "IT Infrastructure & Services", "Real Estate and Construction", "CENTRAL FUNNEL", "SR", ""],
     ["ToPublish Funnel : Healthcare Providers", "5dc586042799a51cc0ff1bdc", "ToPublish Funnel", "Type B", "Healthcare", "Real Estate and Construction", "CENTRAL FUNNEL", "SR", ""],
     ["ToPublish Funnel : Product Management Tools", "5dc585f52799a51cc0ff1564", "ToPublish Funnel", "Type A", "IT Infrastructure & Services", "Real Estate and Construction", "CENTRAL FUNNEL", "SR", ""],
@@ -1262,7 +1266,7 @@ ALL_FUNNEL_ROWS = [
     ["Publishing Funnel : Ship Repair and Management Services", "5e93d844df77c2061174026c", "Publishing Funnel", "Type C", "ToPublish Funnel : Maritime", "Aerospace Maritime & Defence", "CENTRAL FUNNEL", "SR", ""],
     ["Publishing Funnel : Interior Designers", "62905f15269e1573780ab347", "Publishing Funnel", "Type C", "ToPublish Funnel : Real Estate", "Real Estate and Construction", "CENTRAL FUNNEL", "SR", ""],
     ["ToPublish Funnel : Field Force Automation", "5dc585e62799a51cc0ff0ed4", "ToPublish Funnel", "Type A", "Business Services", "Real Estate and Construction", "CENTRAL FUNNEL", "SR", ""],
-    ["ToPublish Funnel : Mining", "5dc586462799a51cc0ff34de", "ToPublish Funnel", "Type A", "Real Estate and Construction", "Industrial Goods & Manufacturing", "CENTRAL FUNNEL", "SR", "18"],
+    ["ToPublish Funnel : Mining", "5dc586462799a51cc0ff34de", "ToPublish Funnel", "Type A", "Real Estate and Construction", "Industrial Goods & Manufacturing", "CENTRAL FUNNEL", "SR", ""],
     ["ToPublish Funnel : Packaging", "5ea119c68787074b71849dbc", "ToPublish Funnel", "Type A", "Industrial Goods & Manufacturing", "Real Estate and Construction", "CENTRAL FUNNEL", "SR", ""],
     ["Publishing Funnel : Crop Farming", "5ebb4f83977ce828692d53c7", "Publishing Funnel", "Type C", "ToPublish Funnel : Crops", "Food Agriculture Fishing and Forestry", "CENTRAL FUNNEL", "SR", ""],
     ["Publishing Funnel : Language Services", "5dc5865a2799a51cc0ff3c16", "Publishing Funnel", "Type C", "ToPublish Funnel : Digital Transformation and Collaboration", "Business Services", "CENTRAL FUNNEL", "SR", ""],
@@ -1338,8 +1342,8 @@ ALL_FUNNEL_ROWS = [
     ["Publishing Funnel : Loyalty Services", "5dc586522799a51cc0ff396a", "Publishing Funnel", "Type C", "ToPublish Funnel : Marketing, Sales, Advertising and Customer Service", "Business Services", "CENTRAL FUNNEL", "SR", ""],
     ["Publishing Funnel : Cannabis Growers", "618218a36aa1d30b79bd4ae4", "Publishing Funnel", "Type C", "ToPublish Funnel : Crops", "Food Agriculture Fishing and Forestry", "CENTRAL FUNNEL", "SR", ""],
     ["Publishing Funnel : Food Media", "628f2c2a1f184653c3de782d", "Publishing Funnel", "Type C", "ToPublish Funnel : Food", "Food Agriculture Fishing and Forestry", "CENTRAL FUNNEL", "SR", ""],
-    ["ToPublish Funnel : Nonprofit", "5dc585f42799a51cc0ff14ec", "ToPublish Funnel", "Type A", "Real Estate and Construction", "Industrial Goods & Manufacturing", "CENTRAL FUNNEL", "SR", "20"],
-    ["ToPublish Funnel : Government", "5dc585ef2799a51cc0ff127c", "ToPublish Funnel", "Type A", "Real Estate and Construction", "Industrial Goods & Manufacturing", "CENTRAL FUNNEL", "SR", "21"],
+    ["ToPublish Funnel : Nonprofit", "5dc585f42799a51cc0ff14ec", "ToPublish Funnel", "Type A", "Real Estate and Construction", "Industrial Goods & Manufacturing", "CENTRAL FUNNEL", "SR", ""],
+    ["ToPublish Funnel : Government", "5dc585ef2799a51cc0ff127c", "ToPublish Funnel", "Type A", "Real Estate and Construction", "Industrial Goods & Manufacturing", "CENTRAL FUNNEL", "SR", ""],
     ["Publishing Funnel : Aircraft Cabin Interiors", "5e9329b4df62d7035792f9fb", "Publishing Funnel", "Type C", "ToPublish Funnel : Aerospace", "Aerospace Maritime & Defence", "CENTRAL FUNNEL", "SR", ""],
     ["Publishing Funnel : Space Research Services", "5ef34f9f8787070bb8e5a53b", "Publishing Funnel", "Type C", "ToPublish Funnel : Space", "Aerospace Maritime & Defence", "CENTRAL FUNNEL", "SR", ""],
     ["Publishing Funnel : Automotive Projects", "5fad1d83de5c4755bcdd8f8e", "Publishing Funnel", "Type C", "ToPublish Funnel : Auto Components and Industry Bodies", "Automotive", "CENTRAL FUNNEL", "SR", ""],
@@ -1561,7 +1565,7 @@ ALL_FUNNEL_ROWS = [
     ["ToPublish Funnel : Robotics and Drones", "5dc585e12799a51cc0ff0c88", "ToPublish Funnel", "Type A", "All Publishing", "All Publishing", "CENTRAL FUNNEL", "SR", ""],
     ["ToPublish Funnel : 3D Technologies", "5dc585e12799a51cc0ff0c58", "ToPublish Funnel", "Type A", "All Publishing", "All Publishing", "CENTRAL FUNNEL", "SR", ""],
     ["ToPublish Funnel : Logistics", "5dc585e42799a51cc0ff0dc0", "ToPublish Funnel", "Type A", "All Publishing", "All Publishing", "CENTRAL FUNNEL", "SR", ""],
-    ["ToPublish Funnel : Telecom", "5dc585e52799a51cc0ff0de4", "ToPublish Funnel", "Type A", "All Publishing", "All Publishing", "CENTRAL FUNNEL", "SR", "19"],
+    ["ToPublish Funnel : Telecom", "5dc585e52799a51cc0ff0de4", "ToPublish Funnel", "Type A", "All Publishing", "All Publishing", "CENTRAL FUNNEL", "SR", ""],
     ["ToPublish Funnel : Mobile Apps", "5dc585fd2799a51cc0ff18a0", "ToPublish Funnel", "Type A", "All Publishing", "All Publishing", "CENTRAL FUNNEL", "SR", ""],
     ["ToPublish Funnel : Healthcare Providers", "5dc586042799a51cc0ff1bdc", "ToPublish Funnel", "Type B", "All Publishing", "All Publishing", "CENTRAL FUNNEL", "SR", ""],
     ["ToPublish Funnel : Product Management Tools", "5dc585f52799a51cc0ff1564", "ToPublish Funnel", "Type A", "All Publishing", "All Publishing", "CENTRAL FUNNEL", "SR", ""],
@@ -1677,6 +1681,200 @@ for r in ALL_FUNNEL_ROWS:
         ID_TO_FUNNEL[fid] = entry
     if pnum and pnum not in NUMBER_TO_FUNNEL:
         NUMBER_TO_FUNNEL[pnum] = entry
+
+
+_NAME_ALIASES: Dict[str, str] = {
+    "non profit": "nonprofits",
+    "non-profit": "nonprofits",
+    "consumer service": "consumer services",
+}
+
+
+def _normalize_tokens(text: str) -> Tuple[str, ...]:
+    stop = {"and", "the", "of", "for"}
+    words = [w for w in re.findall(r"[a-z0-9]+", text.lower()) if w not in stop]
+    return tuple(words)
+
+
+def _singular_compact(text: str) -> str:
+    compact = re.sub(r"[^a-z0-9]+", "", text.lower())
+    if compact.endswith("s") and len(compact) > 4:
+        return compact[:-1]
+    return compact
+
+
+def parse_if_prompt_categories(prompt_text: str) -> Dict[str, str]:
+    """
+    Parses numbered Industry Funnel category lines (e.g. '17. Hi-Tech - ...',
+    '20. Non Profit -') from the Config Sheet IF classification prompt (D3).
+    """
+    categories: Dict[str, str] = {}
+    if not prompt_text:
+        return categories
+    for raw_line in str(prompt_text).splitlines():
+        line = raw_line.strip()
+        m = re.match(r"^(\d{1,3})\.\s+(.+)$", line)
+        if not m:
+            continue
+        num_str = m.group(1)
+        rest = m.group(2).strip()
+        label = re.split(r"\s+[-–](?:\s+|$)|:(?:\s+|$)", rest, maxsplit=1)[0].strip().rstrip("-–:").strip()
+        if label and num_str not in categories:
+            categories[num_str] = label
+    return categories
+
+
+def _match_label_in_live_map(label: str, live_name_map: Dict[str, Tuple[str, str]]) -> Tuple[str, str]:
+    """Matches a prompt/model category label strictly against live Config Sheet funnels."""
+    if not label or not live_name_map:
+        return ("", "")
+    low = label.strip().lower()
+    if low.startswith(("topublish funnel", "publishing funnel")):
+        return live_name_map.get(low, ("", ""))
+
+    if low in live_name_map:
+        return live_name_map[low]
+
+    aliased = _NAME_ALIASES.get(low)
+    if aliased and aliased in live_name_map:
+        return live_name_map[aliased]
+
+    compact = _singular_compact(low)
+    for norm_name, pair in live_name_map.items():
+        if _singular_compact(norm_name) == compact:
+            return pair
+
+    label_tokens = set(_normalize_tokens(low))
+    if label_tokens:
+        best_score = 0.0
+        best_pair: Tuple[str, str] = ("", "")
+        for norm_name, pair in live_name_map.items():
+            if norm_name.startswith(("topublish funnel", "publishing funnel")):
+                continue
+            cand_tokens = set(_normalize_tokens(norm_name))
+            if not cand_tokens:
+                continue
+            overlap = len(label_tokens & cand_tokens)
+            if overlap == len(label_tokens) or overlap == len(cand_tokens):
+                score = overlap / max(len(label_tokens), len(cand_tokens))
+                if score > best_score:
+                    best_score = score
+                    best_pair = pair
+        if best_pair[0] and best_score >= 0.5:
+            return best_pair
+
+    return ("", "")
+
+
+def resolve_industry_funnel_from_config(
+    val: Any,
+    config_funnel_prompt: Optional[Dict[str, Any]] = None,
+    if_pred_prompt: str = "",
+) -> Tuple[str, str]:
+    """
+    Resolves Gemini IF output using Config Sheet's Live funnels as the single source of truth.
+    When Config Sheet live funnels are present, unconfigured/dropped funnels (including removed
+    ToPublish Funnels) are never resolved via stale hardcoded defaults.
+    """
+    if val is None:
+        return ("", "")
+    s = str(val).strip()
+    if not s:
+        return ("", "")
+
+    cfg = config_funnel_prompt if isinstance(config_funnel_prompt, dict) else {}
+    raw_name_map = cfg.get("FunnelNamePromptMap") or {}
+    raw_id_map = cfg.get("FunnelIdPromptMap") or {}
+    raw_num_map = cfg.get("FunnelNumPromptMap") or {}
+
+    has_live_config = bool(raw_name_map or raw_id_map or raw_num_map)
+    if not has_live_config:
+        return resolve_industry_funnel(s)
+
+    live_name_map: Dict[str, Tuple[str, str]] = {}
+    live_id_map: Dict[str, Tuple[str, str]] = {}
+    live_num_map: Dict[str, Tuple[str, str]] = {}
+
+    for k, row in raw_name_map.items():
+        if isinstance(row, (list, tuple)) and len(row) >= 2:
+            if len(row) >= 3 and str(row[2]).strip() and str(row[2]).strip().lower() != "live":
+                continue
+            name, fid = str(row[0]).strip(), str(row[1]).strip()
+            if name and fid:
+                live_name_map[name.lower()] = (name, fid)
+                live_id_map[fid] = (name, fid)
+                if len(row) > 7 and str(row[7]).strip():
+                    live_num_map.setdefault(str(row[7]).strip(), (name, fid))
+        elif k and isinstance(row, str):
+            live_name_map[str(k).strip().lower()] = (str(k).strip(), row.strip())
+
+    for fid, row in raw_id_map.items():
+        if isinstance(row, (list, tuple)) and len(row) >= 2:
+            if len(row) >= 3 and str(row[2]).strip() and str(row[2]).strip().lower() != "live":
+                continue
+            name, rfid = str(row[0]).strip(), str(row[1]).strip() or str(fid).strip()
+            if name and rfid:
+                live_id_map.setdefault(rfid, (name, rfid))
+                live_name_map.setdefault(name.lower(), (name, rfid))
+                if len(row) > 7 and str(row[7]).strip():
+                    live_num_map.setdefault(str(row[7]).strip(), (name, rfid))
+
+    for num_k, row in raw_num_map.items():
+        if isinstance(row, (list, tuple)) and len(row) >= 2:
+            if len(row) >= 3 and str(row[2]).strip() and str(row[2]).strip().lower() != "live":
+                continue
+            name, fid = str(row[0]).strip(), str(row[1]).strip()
+            if name and fid:
+                live_num_map[str(num_k).strip()] = (name, fid)
+                live_name_map.setdefault(name.lower(), (name, fid))
+                live_id_map.setdefault(fid, (name, fid))
+
+    prompt_cats = parse_if_prompt_categories(if_pred_prompt)
+    terminal_upper = {"MARKED_IRRELEVANT", "ESCALATED", "SNOOZED", "MARKED_FOR_LATER"}
+
+    if s.upper() in terminal_upper:
+        return ("", "")
+
+    # 1. Leading number prefix (e.g., "18", "18.", "20. Non Profit")
+    m = re.match(r"^(\d{1,3})(?:[.:)\s]|$)", s)
+    if m:
+        num_prefix = m.group(1)
+        if num_prefix in live_num_map:
+            return live_num_map[num_prefix]
+        prompt_label = prompt_cats.get(num_prefix, "")
+        if prompt_label:
+            if prompt_label.upper() in terminal_upper:
+                return ("", "")
+            matched = _match_label_in_live_map(prompt_label, live_name_map)
+            if matched[0] and matched[1]:
+                return matched
+        # Strip leading number and try trailing label text strictly against Live funnels
+        remainder = s[m.end():].strip(" .:-)")
+        if remainder:
+            if remainder.upper() in terminal_upper:
+                return ("", "")
+            return _match_label_in_live_map(remainder, live_name_map)
+        return ("", "")
+
+    # 2. Direct live Hex ID
+    if s in live_id_map:
+        return live_id_map[s]
+
+    # 3. Direct live name or prompt category label mapped back to its Config Sheet live funnel
+    direct = _match_label_in_live_map(s, live_name_map)
+    if direct[0] and direct[1]:
+        return direct
+
+    s_low = s.lower()
+    for num_str, cat_label in prompt_cats.items():
+        if cat_label.lower() == s_low or _singular_compact(cat_label) == _singular_compact(s_low):
+            if num_str in live_num_map:
+                return live_num_map[num_str]
+            matched = _match_label_in_live_map(cat_label, live_name_map)
+            if matched[0] and matched[1]:
+                return matched
+
+    return ("", "")
 
 
 def resolve_industry_funnel(val: Any) -> Tuple[str, str]:

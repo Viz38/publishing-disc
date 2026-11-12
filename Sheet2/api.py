@@ -48,10 +48,18 @@ from common import (
     FleetSummarizeRequest,
 )
 from common.local_cache import is_pid_alive
+from common.dashboard_metrics import build_sheet_status_payload
+from common.daily_lifecycle import (
+    append_carryover_backlog_sync,
+    coordinate_daily_eligible_export,
+    get_eligible_domains_payload,
+    get_sheet_num_from_dir,
+    snapshot_sheet_before_clear,
+)
 
 EXEC_STATE_FILE = os.path.join(BASE_DIR, ".execution_state.json")
 EXEC_TRACKER = ExecutionTracker(EXEC_STATE_FILE)
-BACKLOG_MANAGER = BacklogManager()
+BACKLOG_MANAGER = BacklogManager(os.path.join(BASE_DIR, ".scraped_backlog.json"))
 
 try:
     LOCAL_CACHE = LocalSheetCache(CACHE_FILE)
@@ -94,38 +102,42 @@ app.add_middleware(
 async def _daily_5am_ist_watchdog():
     """
     Background watchdog checking every 15 seconds:
-    At 11:30 PM IST daily (23:30:00 - 23:35:00 IST), daily sheet clearing and domain refresh occurs.
-    1. Immediately terminates any active pipeline running for this sheet to prevent writing stale results.
-    2. Resets state to 'idle' and cleans up lock/progress/stop/active files.
-    3. Archives the previous day's discovery_cache.csv into Logs/Cache/discovery_cache_YYYY-MM-DD.csv
-       and initializes a fresh discovery_cache.csv for the new daily domain set (once per day).
+    At 12:00 AM IST daily (00:00:00 - 00:04:59 IST), daily sheet clearing and domain refresh occurs.
+    1. Terminates any active pipeline running for this sheet to prevent writing stale results.
+    2. Snapshots eligible next-department domains & uncompleted carryover backlog before clear/rotation,
+       and exports consolidated fleet eligible domains to Discovery Daily Processing sheet.
+    3. Clears the Google Sheet (keeping rows 1 & 2) when online and rotates discovery_cache.csv.
+    4. Auto-triggers clear-and-fetch rollover once cutoff passes (00:05 - 00:59 IST).
     """
     last_rotated_date = None
     last_cleared_date = None
     last_auto_started_date = None
+    last_snapshot_date = None
+    local_eligible_recs = []
     FLUSH_FILE = os.path.join(BASE_DIR, ".flush_requested")
-    logger.info("🕒 Daily 11:30 PM IST Watchdog initialized (11:00 PM Pre-Cutoff Flush & Autonomous 11:35 PM Rollover enabled).")
+    sheet_num = get_sheet_num_from_dir(BASE_DIR)
+    logger.info("🕒 Daily 12:00 AM IST Watchdog initialized (11:30 PM Pre-Cutoff Flush & Autonomous 12:05 AM Rollover enabled).")
     while True:
         try:
             now_ist = get_now_ist()
             current_date_str = now_ist.strftime("%Y-%m-%d")
 
             if is_pre_cutoff_window(now_ist):
-                # 11:00 PM IST Pre-Cutoff Flush: Signal active pipeline to stop taking new scrapes
+                # 11:30 PM IST Pre-Cutoff Flush: Signal active pipeline to stop taking new scrapes
                 if not os.path.exists(FLUSH_FILE):
                     try:
                         with open(FLUSH_FILE, "w") as f:
                             f.write(f"flush_requested_at={now_ist.isoformat()}")
-                        logger.warning("🚨 [11:00 PM IST Watchdog] Created .flush_requested to trigger pre-cutoff flush!")
+                        logger.warning("🚨 [11:30 PM IST Watchdog] Created .flush_requested to trigger pre-cutoff flush!")
                     except Exception as fe:
                         logger.error(f"Error creating .flush_requested: {fe}")
 
-            # At 11:35 PM IST: Clear .flush_requested
-            if (now_ist.hour == 23 and now_ist.minute >= 35) or now_ist.hour == 0:
+            # Outside wind-down / cutoff (00:05 AM - 23:29 PM IST): Clear .flush_requested
+            if not is_pre_cutoff_window(now_ist) and not is_5am_ist_cutoff(now_ist):
                 if os.path.exists(FLUSH_FILE):
                     try:
                         os.remove(FLUSH_FILE)
-                        logger.info("Cleared .flush_requested after 11:30 PM cutoff window.")
+                        logger.info("Cleared .flush_requested after 12:00 AM cutoff window.")
                     except Exception:
                         pass
 
@@ -134,8 +146,8 @@ async def _daily_5am_ist_watchdog():
                 active_pid = state.get("active_pid")
                 if active_pid or state.get("status") in ("running", "stopping"):
                     logger.warning(
-                        f"⏰ 11:30 PM IST Daily Cutoff reached! Terminating active pipeline PID {active_pid} "
-                        "so Apps Script can refresh daily domains without conflict."
+                        f"⏰ 12:00 AM IST Daily Cutoff reached! Terminating active pipeline PID {active_pid} "
+                        "so daily domain refresh can run cleanly."
                     )
                     if active_pid:
                         try:
@@ -164,13 +176,50 @@ async def _daily_5am_ist_watchdog():
                         try: os.remove(ACTIVE_FILE)
                         except Exception: pass
 
-                # 2. When not in CSV-only mode, clear sheet keeping only row 1 and 2
+                target_sheet_id = settings.CF_SHEET_ID
+                target_sheet_name = getattr(settings, "CF_EXTRACTING_SHEET_NAME", "CF_IF_Engine_Database")
+                sync_gc = None
+                try:
+                    from common.advance_precrawl import get_gspread_client as get_sync_gspread_client
+                    sync_gc = await asyncio.to_thread(get_sync_gspread_client)
+                except Exception as sge:
+                    logger.warning(f"Could not init sync GSpread client during 12:00 AM cutoff: {sge}")
+
+                # 2a. BEFORE clear & cache rotation: snapshot eligible domains & uncompleted carryover backlog
+                if last_snapshot_date != current_date_str:
+                    try:
+                        local_eligible_recs = await asyncio.to_thread(
+                            snapshot_sheet_before_clear,
+                            base_dir=BASE_DIR,
+                            sync_gc=sync_gc,
+                            sheet_id=target_sheet_id,
+                            sheet_name=target_sheet_name,
+                            local_cache=LOCAL_CACHE,
+                            backlog_manager=BACKLOG_MANAGER,
+                            snapshot_date=current_date_str,
+                        )
+                        last_snapshot_date = current_date_str
+                    except Exception as se:
+                        logger.error(f"Error capturing 12:00 AM pre-clear snapshot: {se}")
+
+                # 2b. Consolidated fleet export to Discovery Daily Processing sheet
+                try:
+                    await coordinate_daily_eligible_export(
+                        base_dir=BASE_DIR,
+                        sync_gc=sync_gc,
+                        sheet_num=sheet_num,
+                        snapshot_date=current_date_str,
+                        local_records=local_eligible_recs,
+                        now_ist=now_ist,
+                    )
+                except Exception as ee:
+                    logger.error(f"Error coordinating 12:00 AM daily eligible export: {ee}")
+
+                # 2c. When not in CSV-only mode, clear sheet keeping only row 1 and 2
                 if last_cleared_date != current_date_str:
                     try:
                         from main import get_gspread_client
                         from common.bulk_pusher import handle_5am_sheet_cleanup
-                        target_sheet_id = settings.CF_SHEET_ID
-                        target_sheet_name = getattr(settings, "CF_EXTRACTING_SHEET_NAME", "CF_IF_Engine_Database")
                         primary_mgr = await get_gspread_client()
                         if primary_mgr and target_sheet_id:
                             gc = await primary_mgr.authorize()
@@ -182,34 +231,30 @@ async def _daily_5am_ist_watchdog():
                                 keep_rows=2
                             )
                             if cleared:
-                                logger.info(f"🧹 [11:30 PM Cutoff] Sheet {target_sheet_id} cleared (kept rows 1 & 2).")
+                                logger.info(f"🧹 [12:00 AM Cutoff] Sheet {target_sheet_id} cleared (kept rows 1 & 2).")
                                 async with state_lock:
                                     state["status"] = "idle"
                                     state["is_stopping"] = False
                                     state["active_pid"] = None
                                     state["current_task"] = None
                             else:
-                                logger.info(f"ℹ️ [11:30 PM Cutoff] Sheet cleanup skipped: {reason}")
+                                logger.info(f"ℹ️ [12:00 AM Cutoff] Sheet cleanup skipped: {reason}")
                         last_cleared_date = current_date_str
                     except Exception as ce:
-                        logger.error(f"Error during 11:30 PM sheet cleanup: {ce}")
+                        logger.error(f"Error during 12:00 AM sheet cleanup: {ce}")
 
-                # 3. Rotate daily cache once per day during the 11:30 PM window
+                # 3. Rotate daily cache once per day during the 12:00 AM window
                 if last_rotated_date != current_date_str and LOCAL_CACHE:
                     try:
                         archived = LOCAL_CACHE.rotate_daily_cache(ARCHIVE_CACHE_DIR, current_dt=now_ist)
                         last_rotated_date = current_date_str
-                        logger.info(f"📦 11:30 PM IST Daily Cache Rotation complete. Archived to {archived}, fresh cache active.")
+                        logger.info(f"📦 12:00 AM IST Daily Cache Rotation complete. Archived to {archived}, fresh cache active.")
                     except Exception as re:
                         logger.error(f"Error during daily cache rotation: {re}")
 
-            # 4. Autonomous Nightly Rollover & Clear-and-Fetch Auto-Start (11:35 PM - 12:45 AM IST)
-            # Once 11:30 PM cutoff passes, auto-trigger clear-and-fetch autonomously if not running
+            # 4. Autonomous Nightly Rollover & Clear-and-Fetch Auto-Start (12:05 AM - 12:59 AM IST)
             if last_auto_started_date != current_date_str:
-                is_rollover_window = (
-                    (now_ist.hour == 23 and now_ist.minute >= 35) or
-                    (now_ist.hour == 0 and now_ist.minute <= 45)
-                )
+                is_rollover_window = (now_ist.hour == 0 and now_ist.minute >= 5)
                 if is_rollover_window and state.get("status") in ("idle", "succeeded", "stopped") and not state.get("active_pid"):
                     logger.info(
                         f"🌟 [Autonomous Nightly Rollover] Auto-triggering clear-and-fetch for {current_date_str} "
@@ -581,7 +626,7 @@ def _get_status_response():
         tracxn_count = min(tracxn_count if tracxn_count is not None else 0, total_val)
         completed_count = min(completed_count, total_val)
 
-    return {
+    base_payload = {
         "status": current_status,
         "active": state["status"] in ("running", "stopping"),
         "is_stopping": is_stopping,
@@ -614,6 +659,9 @@ def _get_status_response():
         "device_active_sheets": active_sheets,
         "device_max_sheets": max_sheets
     }
+    if "eligible_completed" in prog:
+        base_payload["eligible_completed"] = prog["eligible_completed"]
+    return build_sheet_status_payload(BASE_DIR, raw_progress=base_payload, cache=LOCAL_CACHE)
 
 async def _cancel():
     if state["active_pid"]:
@@ -720,7 +768,7 @@ async def start_pipeline(req: RunRequest, background_tasks: BackgroundTasks):
     if is_5am_ist_cutoff():
         return {
             "status": "error",
-            "message": "Cannot start pipeline between 11:30 - 11:35 PM IST. Daily domain refresh in progress."
+            "message": "Cannot start pipeline between 12:00 - 12:05 AM IST. Daily domain refresh in progress."
         }
 
     if state["status"] in ("running", "stopping"):
@@ -772,6 +820,29 @@ async def run_clear_and_fetch_task(sheet_id: str):
             count = await asyncio.to_thread(ingestor.ingest_domains_for_sheet, sheet_cfg, clear_first=True)
             logger.info(f"✅ Live Ingestion completed for sheet {sheet_id}: {count} domains ingested.")
 
+        # Append up to 1,250 carry-over uncompleted domains (5,000 fleet-wide cap) after fresh batch load
+        try:
+            from common.advance_precrawl import get_gspread_client as get_sync_gspread_client
+            sync_gc = await asyncio.to_thread(get_sync_gspread_client)
+        except Exception:
+            sync_gc = None
+        try:
+            target_sheet_name = getattr(settings, "CF_EXTRACTING_SHEET_NAME", "CF_IF_Engine_Database")
+            carried_over = await asyncio.to_thread(
+                append_carryover_backlog_sync,
+                BACKLOG_MANAGER,
+                sync_gc,
+                sheet_id,
+                target_sheet_name,
+                BASE_DIR,
+                LOCAL_CACHE,
+            )
+            if carried_over > 0:
+                count = (count or 0) + carried_over
+                logger.info(f"🔁 Appended {carried_over} carry-over backlog domains (total sheet batch: {count}).")
+        except Exception as be:
+            logger.error(f"Error appending carry-over backlog for sheet {sheet_id}: {be}")
+
         if count and count > 0:
             init_prog = {
                 "current": 0,
@@ -783,6 +854,7 @@ async def run_clear_and_fetch_task(sheet_id: str):
                 "nim_count": 0,
                 "gemini_count": 0,
                 "tracxn_count": 0,
+                "eligible_completed": 0,
                 "phase": "Starting fresh daily batch",
                 "stage_details": f"Ingested {count} fresh domains",
                 "pending_tc": 0,
@@ -797,8 +869,8 @@ async def run_clear_and_fetch_task(sheet_id: str):
 
             if is_5am_ist_cutoff():
                 dt = get_now_ist()
-                wait_secs = max(5, (35 - dt.minute) * 60 - dt.second + 2)
-                logger.info(f"⏳ Clear & Fetch completed ({count} domains). Waiting {wait_secs}s for 11:35 PM IST cutoff window to pass before starting pipeline...")
+                wait_secs = max(5, (5 - dt.minute) * 60 - dt.second + 2)
+                logger.info(f"⏳ Clear & Fetch completed ({count} domains). Waiting {wait_secs}s for 12:05 AM IST cutoff window to pass before starting pipeline...")
                 await asyncio.sleep(wait_secs)
 
             # Post-Ingestion Fleet Deduplication Gate
@@ -963,6 +1035,24 @@ async def generate_job_ids_route():
         "sheet": folder_name,
         "message": "Background Tech Crawler Job ID generation dispatched"
     }
+
+@app.get("/fleet/eligible-domains", dependencies=[Depends(verify_token)])
+async def fleet_eligible_domains_route(date: Optional[str] = None):
+    try:
+        from common.advance_precrawl import get_gspread_client as get_sync_gspread_client
+        sync_gc = await asyncio.to_thread(get_sync_gspread_client)
+    except Exception:
+        sync_gc = None
+    target_sheet_name = getattr(settings, "CF_EXTRACTING_SHEET_NAME", "CF_IF_Engine_Database")
+    return await asyncio.to_thread(
+        get_eligible_domains_payload,
+        base_dir=BASE_DIR,
+        sync_gc=sync_gc,
+        sheet_id=settings.CF_SHEET_ID,
+        sheet_name=target_sheet_name,
+        local_cache=LOCAL_CACHE,
+        date_param=date,
+    )
 
 @app.post("/fleet/orchestrate-precrawl", dependencies=[Depends(verify_token)])
 async def orchestrate_precrawl_route():

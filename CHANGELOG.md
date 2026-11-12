@@ -1,6 +1,86 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-12] Streamline Gemini Terminal IF Categories (22 MARKED_IRRELEVANT & 23 ESCALATED)
+Files changed:
+- common/pipeline_engine.py
+- Temp_Test/test_terminal_if_marking.py
+Reason:
+1. Added `classify_terminal_if_action()` in `common/pipeline_engine.py` to normalize Gemini prompt categories `22` (`MARKED_IRRELEVANT`) and `23` (`ESCALATED`) case-insensitively and across punctuation variants (`"22"`, `"22."`, `"22. Non-business site"`, `"Marked_Irrelevant"`, `"23"`, `"23."`, `"Escalated"`) while avoiding substring false matches like `"122"` or `"230"`.
+2. Reused `classify_terminal_if_action()` across `Extract_AI_Engine_Output()`, `Execute_Phase4_Ingestion_Write_APIs()`, and `Process_Review_domain()`, adding the missing CF terminal-IF condition in `Execute_Phase4_Ingestion_Write_APIs()` when `Col AP` validation is blank and defaulting blank `Col C` (`source_funnel_id`) to `CENTRAL_FUNNEL_ID` in `Process_Review_domain()`.
+3. Updated `WriteAPI_Domain_Funnel_async()` so HTTP `422` (`UNASSIGNABLE`) returned by status actions (`ESCALATED`, `MARKED_IRRELEVANT`, `SNOOZED`, `MARKED_FOR_LATER`) returns `"SKIPPED_UNASSIGNABLE"` rather than `"FALSE"`, preventing infinite pre-cutoff retries.
+Related tests:
+- Temp_Test/test_terminal_if_marking.py (6 passed)
+- Full active suite: 53 passed in 7.44s
+
+## [2026-11-12] Dynamic Config-Sheet-Driven Industry Funnel Resolution & TPF Cleanup
+Files changed:
+- common/industry_funnel_map.py
+- common/pipeline_engine.py
+- Temp_Test/test_dynamic_config_funnel_resolution.py
+- Temp_Test/test_industry_funnel_map.py
+- Temp_Test/sync_sheets_remove_tpf_mapping.py
+- Config Sheet (`1JU-R-u4nV9azw43a4MqRM6OODsGwQmtcMu8OkB3dtlI` -> `Base_Prompt_FunnelWise (CF>>IF>>Feed)` rows 29–32)
+- Production Sheets 1–4 (`Funnel_Details` tabs)
+Reason:
+1. Made Config Sheet the Single Source of Truth for IF Prediction & Feed Resolution: Updated `load_or_refresh_run_config()` and `Return_Base_Prompt_FunnelWise()` in `common/pipeline_engine.py` to build `FunnelNumPromptMap` dynamically from `Col H` (`Industry Number (Mapped Output)`) strictly for `Status == "Live"` rows, and synced global `if_pred_base_prompt`, `config_funnel_*`, and `config_feed_*` on both startup and periodic cache hot-reload (`_run_periodic_cache_id_refresh_watcher`).
+2. Dynamic Resolution Without Code Changes & Guard Against Unconfigured TPFs: Added `parse_if_prompt_categories()` and `resolve_industry_funnel_from_config()` in `common/industry_funnel_map.py` and wired `_resolve_if_output_dynamically()` + `_lookup_feed_mapping_row()` in `Extract_AI_Engine_Output()`. When Config Sheet live funnels are present, resolution strictly uses Config Sheet (`Col H`, live names/IDs, and `D3` prompt categories including `"20. Non Profit"` -> `"Nonprofits"`) with zero fallback to stale `funnel_num_map` / `Funnel_Details` `ToPublish Funnel` entries, ensuring nothing routes to a TPF unless defined `Live` in Config Sheet while leaving already-populated smart-resume rows untouched.
+3. Updated Fallback Map & Live Google Sheets: Replaced deprecated `"18".."21"` `ToPublish Funnel` entries in `common/industry_funnel_map.py` (`INDUSTRY_FUNNELS_21`, `ALL_FUNNEL_ROWS`) with `Mining`, `Telecom`, `Nonprofits`, and `Public Administration`; marked deprecated rows `C29:C32` as `Drop` in Config Sheet `Base_Prompt_FunnelWise`; cleared 77 stale `18..21` mappings and appended the 4 active Industry Funnel rows in `Funnel_Details` across Sheets 1–4.
+Related tests:
+- Temp_Test/test_dynamic_config_funnel_resolution.py (7 passed)
+- Temp_Test/test_industry_funnel_map.py (6 passed)
+- Temp_Test/test_integration_snooze_and_funnel.py (3 passed)
+- Temp_Test/test_post_movement_hashtags.py (13 passed)
+- Temp_Test/test_sync_domain_hashtags.py (3 passed)
+- Temp_Test/test_eligible_next_dept_and_daily_export.py (7 passed)
+- Temp_Test/test_1130pm_cutoff.py (4 passed)
+- Temp_Test/test_dashboard_worker_and_completion_logic.py (4 passed)
+- Temp_Test/test_strict_waterfall_gates.py (5 passed)
+
+## [2026-11-12] Post-Movement Tracxn Hashtags, Multi-Token Retry Loop, and Exact Col AX Statuses
+Files changed:
+- common/pipeline_engine.py
+- common/local_cache.py
+- Temp_Test/test_post_movement_hashtags.py
+Reason:
+1. Post-Movement Hashtag Application & Both-Movements Rule (`sync_post_movement_hashtags_async`): Moved Tracxn hashtagging strictly after Funnel Write API confirmations across `Extract_AI_Engine_Output`, `Execute_Phase4_Ingestion_Write_APIs`, and `Process_Review_domain`. `bu_llm_industry_prediction` (Col BB) is added only when CF->IF moved to an Industry Funnel (`Col AX == "DONE"`), `bu_llm_feed_prediction` (Col BC) only when `Col AZ == "DONE"`, and `bu_llm_discovery_processing` (`Col BE == "yes"`) only when both `CF->IF == "DONE"` and `IF->PF == "DONE"` (`"no"` otherwise). Fixed smart-resume fall-through bug where `cf_if_status == "DONE"` re-entered the CF->IF block.
+2. Full-Token Hashtag Retry Loop & Cross-Pass Detection (`_get_all_available_tracxn_tokens`, `ensure_domain_hashtags_with_retry`, `is_row_hashtags_missing`): Cycles through every active Tracxn API token at least once when adding hashtags until `"YES"` (without resurrecting deactivated invalid tokens from env). Integrated `is_row_hashtags_missing()` into resume skipping, consumer `already_resolved`, and the pre-cutoff retry loop so any missing required hashtags are retried until added.
+3. Exact Terminal Statuses in Col AX: Non-IF funnel actions (`MARKED_IRRELEVANT`, `ESCALATED`, `SNOOZED`, `MARKED_FOR_LATER`) now write their respective status strings into Col AX instead of `"DONE"`; only actual `CF->IF` (`MOVED_OUT`) movements to an Industry Funnel write `"DONE"`. Updated `LocalSheetCache.build_57col_write_row()` so `Col BE` reflects `"yes"` only when both `Col AX` and `Col AZ` are `"DONE"`.
+Related tests:
+- Temp_Test/test_post_movement_hashtags.py (13 passed)
+- Temp_Test/test_sync_domain_hashtags.py (3 passed)
+- Temp_Test/test_eligible_next_dept_and_daily_export.py (7 passed)
+- Temp_Test/test_1130pm_cutoff.py (4 passed)
+- Temp_Test/test_dashboard_worker_and_completion_logic.py (4 passed)
+- Temp_Test/test_strict_waterfall_gates.py (5 passed)
+
+## [2026-11-12] Eligible Next-Dept Dashboard Counts, Daily 12 AM Export, Midnight Cutoff & 5K Carryover Fix
+Files changed:
+- common/dashboard_metrics.py
+- common/daily_eligible_exporter.py
+- common/daily_lifecycle.py
+- common/local_cache.py
+- common/backlog_manager.py
+- common/pipeline_engine.py
+- Sheet1/api.py
+- Sheet2/api.py
+- Sheet3/api.py
+- Sheet4/api.py
+- status_dashboard.gs
+- Temp_Test/test_eligible_next_dept_and_daily_export.py
+- Temp_Test/test_1130pm_cutoff.py
+Reason:
+1. Dashboard Col D (`Completed`) Next-Department Eligibility (`common/dashboard_metrics.py`, `common/pipeline_engine.py`, `Sheet1..4/api.py`, `status_dashboard.gs`): Added `is_row_eligible_for_next_dept()` (`Col AX == 'DONE'`, `Col AZ == 'DONE'`, `Col AU` starts with `'Publishing Funnel'`), exposed `eligible_completed` and `csv_only_mode` on `/discovery/status` across all 4 sheets, fixed `_flush_sheet_buffer()` in `common/pipeline_engine.py` to synchronize `pf_data` in memory for accurate `local_sheet.csv` persistence in CSV-only mode, and updated `status_dashboard.gs` Col D + Row 13 Col D while preserving `Progress %`, KPI `FLEET DOMAINS PROCESSED`, and Col J `Tracxn Movements`.
+2. Daily Consolidated Export (`common/daily_eligible_exporter.py`, `common/daily_lifecycle.py`, `Sheet1..4/api.py`): Added pre-clear per-sheet snapshotting, `/fleet/eligible-domains` endpoint, and coordinated export to `1DCKvQcAQgTKGnWquYNOH6SlGgCun8yq8HD8Zj0AIJ-Y` (`B1` red text `DD MMM YYYY`, `B4:D` `[Domain, Domain Profile ID, Publish Funnel Name]`) executed at daily clear and backfilled with Nov 11's eligible domains.
+3. Midnight 12:00 AM IST Clear Timing (`common/local_cache.py`, `Sheet1..4/api.py`): Shifted hard cutoff to `00:00:00–00:04:59 IST`, pre-cutoff flush/no-retry wind-down to `23:30:00–23:59:59 IST`, rollover auto-start to `00:05–00:59 IST`, and `get_cycle_date_ist()` to midnight IST alignment.
+4. 5K Carryover Backfill Fix (`common/backlog_manager.py`, `common/daily_lifecycle.py`, `Sheet1..4/api.py`): Updated `BacklogManager` from dead/62-col code to 57-col schema with CSV-only support and wired pre-clear extraction + post-ingest injection (`MAX_PER_SHEET_BACKLOG = 1250`, 5,000 fleet-wide cap).
+Related tests:
+- Temp_Test/test_eligible_next_dept_and_daily_export.py
+- Temp_Test/test_1130pm_cutoff.py
+- Temp_Test/test_api_status_logic.py
+- Temp_Test/test_status_dashboard_logic.py
+- Temp_Test/test_backlog_manager.py
+
 ## [2026-11-10] Fix Multi-Profile Leak Validation Blind Spots and Adaptive Timeout Retries
 Files changed:
 - common/domain_filter_validator.py

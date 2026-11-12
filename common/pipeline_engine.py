@@ -1,8 +1,12 @@
 import os
 import sys
 import csv
+import contextvars
 csv.field_size_limit(sys.maxsize)
 from typing import List, Dict, Tuple, Optional, Any
+
+_FORCE_EXPLICIT_TRACXN_TOKEN: contextvars.ContextVar[bool] = contextvars.ContextVar("_FORCE_EXPLICIT_TRACXN_TOKEN", default=False)
+_EXPLICIT_API_MAX_RETRIES: contextvars.ContextVar[Optional[int]] = contextvars.ContextVar("_EXPLICIT_API_MAX_RETRIES", default=None)
 
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 _ROOT_DIR = os.path.dirname(_BASE_DIR)
@@ -188,7 +192,9 @@ try:
 except Exception:
     pass
 
-def update_progress_file(current: int, total: int, success: int, fail: int, phase: str = "", stage_details: str = "", pending_tc: int = 0, mode: str = "", scraped_count: int = None, nim_count: int = None, gemini_count: int = None, tracxn_count: int = None, tc_success: int = None, active_workers: int = None, nim_workers: int = None, downstream_workers: int = None, fully_completed: int = None, pf_completed: int = None):
+from common.dashboard_metrics import is_row_eligible_for_next_dept
+
+def update_progress_file(current: int, total: int, success: int, fail: int, phase: str = "", stage_details: str = "", pending_tc: int = 0, mode: str = "", scraped_count: int = None, nim_count: int = None, gemini_count: int = None, tracxn_count: int = None, tc_success: int = None, active_workers: int = None, nim_workers: int = None, downstream_workers: int = None, fully_completed: int = None, pf_completed: int = None, eligible_completed: int = None):
     prev_prog = {}
     if os.path.exists(PROGRESS_FILE):
         try:
@@ -219,6 +225,7 @@ def update_progress_file(current: int, total: int, success: int, fail: int, phas
 
     live_fully_completed = fully_completed if fully_completed is not None else (tracxn_count if tracxn_count is not None else prev_prog.get('fully_completed', live_tracxn_count))
     live_pf_completed = pf_completed if pf_completed is not None else prev_prog.get('pf_completed', 0)
+    live_eligible_completed = eligible_completed if eligible_completed is not None else prev_prog.get('eligible_completed', 0)
 
     live_active_workers = active_workers if active_workers is not None else prev_prog.get('active_workers', 48)
     live_nim_workers = nim_workers if nim_workers is not None else prev_prog.get('nim_workers', 16)
@@ -240,6 +247,7 @@ def update_progress_file(current: int, total: int, success: int, fail: int, phas
         'tracxn_count': live_tracxn_count,
         'fully_completed': live_fully_completed,
         'pf_completed': live_pf_completed,
+        'eligible_completed': live_eligible_completed,
         'active_tc_keys': TRACXN_KEY_MANAGER.get_active_tokens_count() if 'TRACXN_KEY_MANAGER' in globals() else prev_prog.get('active_tc_keys', 11),
         'total_tc_keys': len(getattr(TRACXN_KEY_MANAGER, 'tokens', [])) if 'TRACXN_KEY_MANAGER' in globals() else prev_prog.get('total_tc_keys', 13),
         'active_nim_keys': NIM_KEY_MANAGER.get_active_keys_count() if ('NIM_KEY_MANAGER' in globals() and hasattr(NIM_KEY_MANAGER, 'get_active_keys_count')) else (len(getattr(NIM_KEY_MANAGER, 'keys', [])) if 'NIM_KEY_MANAGER' in globals() else prev_prog.get('active_nim_keys', 8)),
@@ -358,6 +366,44 @@ def is_row_fully_completed(row: list) -> bool:
         return True
 
     return is_row_tracxn_movement_completed(row)
+
+
+def is_row_hashtags_missing(row: list) -> bool:
+    """
+    Returns True if any required Tracxn hashtag for completed movements is missing or failed:
+      - CF->IF moved to IF (Col AX == 'DONE' and not terminal non-IF action) -> Col BB must be YES/TRUE
+      - IF->PF == 'DONE' (Col AZ) -> Col BC must be YES/TRUE
+      - BOTH CF->IF and IF->PF == 'DONE' -> Col BE must be YES/TRUE
+    """
+    if not row or not row[0] or not str(row[0]).strip():
+        return False
+
+    cf_st = str(row[49]).strip().upper() if len(row) > 49 else ""
+    pf_st = str(row[51]).strip().upper() if len(row) > 51 else ""
+    if_val = str(row[37]).strip().upper() if len(row) > 37 else ""
+    ind_id = str(row[39]).strip() if len(row) > 39 else ""
+
+    is_non_if_terminal = (
+        not ind_id
+        and (
+            any(term in if_val for term in ("22", "23", "IRRELEVANT", "ESCALATED", "SNOOZED", "MARKED"))
+            or not if_val
+        )
+    )
+    cf_moved_to_if = (cf_st == "DONE") and not is_non_if_terminal
+    pf_done = (pf_st == "DONE")
+
+    tag_if = str(row[53]).strip().upper() if len(row) > 53 else ""
+    tag_pf = str(row[54]).strip().upper() if len(row) > 54 else ""
+    tag_disc = str(row[56]).strip().upper() if len(row) > 56 else ""
+
+    if cf_moved_to_if and tag_if not in ("YES", "TRUE"):
+        return True
+    if pf_done and tag_pf not in ("YES", "TRUE"):
+        return True
+    if cf_moved_to_if and pf_done and tag_disc not in ("YES", "TRUE"):
+        return True
+    return False
 
 
 def is_eligible_for_tc_30min_recheck(row: list, active_waterfall_in_flight: Optional[set] = None) -> bool:
@@ -1558,6 +1604,7 @@ def load_or_refresh_run_config(gc, force_refresh=False):
 
             funnel_id_map = {}
             funnel_name_map = {}
+            funnel_num_map = {}
             feed_cache_id_map = {}
             feed_api_token_map = {}
             feed_model_map = {}
@@ -1567,10 +1614,16 @@ def load_or_refresh_run_config(gc, force_refresh=False):
             for row in bp_rows[7:]:
                 if len(row) < 3:
                     continue
-                f_name, f_num, status = row[0], row[1], row[2]
-                if status == "Live":
+                f_name = str(row[0]).strip()
+                f_id = str(row[1]).strip()
+                status = str(row[2]).strip()
+                f_num = str(row[7]).strip() if len(row) > 7 else ""
+                if status.lower() == "live" and f_name:
                     funnel_name_map[f_name] = row
-                    funnel_id_map[f_num] = row
+                    if f_id:
+                        funnel_id_map[f_id] = row
+                    if f_num:
+                        funnel_num_map[f_num] = row
                     if len(row) > 10:
                         feed_cache_id_map[f_name] = row[10]
                     if len(row) > 13:
@@ -1585,6 +1638,7 @@ def load_or_refresh_run_config(gc, force_refresh=False):
             funnel_prompts = {
                 "FunnelIdPromptMap": funnel_id_map,
                 "FunnelNamePromptMap": funnel_name_map,
+                "FunnelNumPromptMap": funnel_num_map,
                 "Feed_cache_Id": feed_cache_id_map,
                 "Feed_cache_Info_API_Token": feed_api_token_map,
                 "Feed_cache_Info_Model": feed_model_map,
@@ -1601,8 +1655,11 @@ def load_or_refresh_run_config(gc, force_refresh=False):
             for row in feed_rows[3:]:
                 if len(row) < 3:
                     continue
-                number_key = f"{row[0]}$${row[1]}"
-                name_key = f"{row[0]}$${row[2]}"
+                if_col = str(row[0]).strip()
+                sl_col = str(row[1]).strip()
+                feed_col = str(row[2]).strip()
+                number_key = f"{if_col}$${sl_col}"
+                name_key = f"{if_col}$${feed_col}"
                 feed_num_map[number_key] = row
                 feed_name_map_dict[name_key] = row
 
@@ -1638,6 +1695,7 @@ def load_or_refresh_run_config(gc, force_refresh=False):
                 "funnel_prompts": {
                     "FunnelIdPromptMap": funnel_id_map,
                     "FunnelNamePromptMap": funnel_name_map,
+                    "FunnelNumPromptMap": funnel_num_map,
                     "Feed_cache_Id": feed_cache_id_map,
                     "Feed_cache_Info_API_Token": {k: "" for k in feed_api_token_map},
                     "Feed_cache_Info_Model": feed_model_map,
@@ -1738,6 +1796,7 @@ def Return_Base_Prompt_FunnelWise(client, funnel_id="", funnel_name=""):
     result_map = {
         "FunnelIdPromptMap": {},
         "FunnelNamePromptMap": {},
+        "FunnelNumPromptMap": {},
         "inputResult": [],
         "Feed_cache_Id": {},
         "Validation_cache_Id": {},
@@ -1761,34 +1820,39 @@ def Return_Base_Prompt_FunnelWise(client, funnel_id="", funnel_name=""):
 
         funnel_id_prompt_map = {}
         funnel_name_prompt_map = {}
+        funnel_num_prompt_map = {}
 
         for row in base_prompt_database:
-            funnelName = row[0]
-            funnelNum  = row[1]
-            funnelCached_Validation_Prompt  = row[8]
-            funnelCached_Feed_Prompt  = row[9]
-            funnelCached_Feed_Prompt_Cache_ID  = row[10]
-            funnelCached_Feed_Prompt_API_Token  = row[13]
-            funnelCached_Feed_Prompt_Model  = row[15]
-            funnelCached_Feed_Prompt_Cache_Gen_Date  = row[16]
-            funnelCached_Feed_Prompt_Cache_Final_Status  = row[21]
+            if len(row) < 3:
+                continue
+            funnelName = str(row[0]).strip()
+            funnelId = str(row[1]).strip()
+            funnelNumCol = str(row[7]).strip() if len(row) > 7 else ""
+            funnelCached_Feed_Prompt_Cache_ID = row[10] if len(row) > 10 else ""
+            funnelCached_Feed_Prompt_API_Token = row[13] if len(row) > 13 else ""
+            funnelCached_Feed_Prompt_Model = row[15] if len(row) > 15 else ""
+            funnelCached_Feed_Prompt_Cache_Gen_Date = row[16] if len(row) > 16 else ""
+            funnelCached_Feed_Prompt_Cache_Final_Status = row[21] if len(row) > 21 else ""
 
-            if len(row) >= 3 and row[2] == "Live":
-                if row[0] not in funnel_name_prompt_map:
+            if str(row[2]).strip().lower() == "live" and funnelName:
+                if funnelName not in funnel_name_prompt_map:
                     funnel_name_prompt_map[funnelName] = row
 
                     if funnelName not in result_map["Feed_cache_Id"]:
                         result_map["Feed_cache_Id"][funnelName] = funnelCached_Feed_Prompt_Cache_ID
-                        result_map["Feed_cache_Info_API_Token"][funnelName] = funnelCached_Feed_Prompt_API_Token 
-                        result_map["Feed_cache_Info_Model"][funnelName] = funnelCached_Feed_Prompt_Model 
-                        result_map["Feed_cache_Info_Gen_Date"][funnelName] = funnelCached_Feed_Prompt_Cache_Gen_Date 
-                        result_map["Feed_cache_Info_Final_Status"][funnelName] = funnelCached_Feed_Prompt_Cache_Final_Status 
+                        result_map["Feed_cache_Info_API_Token"][funnelName] = funnelCached_Feed_Prompt_API_Token
+                        result_map["Feed_cache_Info_Model"][funnelName] = funnelCached_Feed_Prompt_Model
+                        result_map["Feed_cache_Info_Gen_Date"][funnelName] = funnelCached_Feed_Prompt_Cache_Gen_Date
+                        result_map["Feed_cache_Info_Final_Status"][funnelName] = funnelCached_Feed_Prompt_Cache_Final_Status
 
-                if row[1] not in funnel_id_prompt_map:
-                    funnel_id_prompt_map[row[1]] = row
+                if funnelId and funnelId not in funnel_id_prompt_map:
+                    funnel_id_prompt_map[funnelId] = row
+                if funnelNumCol and funnelNumCol not in funnel_num_prompt_map:
+                    funnel_num_prompt_map[funnelNumCol] = row
 
         result_map["FunnelIdPromptMap"] = funnel_id_prompt_map
         result_map["FunnelNamePromptMap"] = funnel_name_prompt_map
+        result_map["FunnelNumPromptMap"] = funnel_num_prompt_map
 
         if funnel_id and funnel_id in funnel_id_prompt_map:
             result_map["inputResult"] = funnel_id_prompt_map[funnel_id]
@@ -1845,8 +1909,11 @@ def Return_Funnel_FeedWise(Client, feed_num="", feed_name=""):
             if len(row) < 3:
                 continue
 
-            number_key = f"{row[0]}$${row[1]}"
-            name_key = f"{row[0]}$${row[2]}"
+            if_col = str(row[0]).strip()
+            sl_col = str(row[1]).strip()
+            feed_col = str(row[2]).strip()
+            number_key = f"{if_col}$${sl_col}"
+            name_key = f"{if_col}$${feed_col}"
 
             if name_key not in feed_name_funnel_map:
                 feed_name_funnel_map[name_key] = row
@@ -2236,9 +2303,15 @@ async def get_api_result_async(payload=None, api_url="https://platform.tracxn.co
         active_sess = aiohttp.ClientSession()
         close_sess = True
 
+    override_retries = _EXPLICIT_API_MAX_RETRIES.get()
+    effective_retries = override_retries if override_retries is not None else max_retries
+    force_explicit = _FORCE_EXPLICIT_TRACXN_TOKEN.get()
+
     try:
-        for attempt in range(max_retries):
-            if attempt > 0 and 'TRACXN_KEY_MANAGER' in globals() and TRACXN_KEY_MANAGER is not None:
+        for attempt in range(effective_retries):
+            if force_explicit and token and str(token).strip():
+                tok = str(token).strip()
+            elif attempt > 0 and 'TRACXN_KEY_MANAGER' in globals() and TRACXN_KEY_MANAGER is not None:
                 tok = await TRACXN_KEY_MANAGER.acquire() if hasattr(TRACXN_KEY_MANAGER, "acquire") else TRACXN_KEY_MANAGER.get_token()
             elif token and str(token).strip() and token != Tracxn_API_Token:
                 tok = str(token).strip()
@@ -2410,6 +2483,177 @@ async def Domain_HashTag_async(domain, newtag='NO', token=None, session: aiohttp
         return 'NO'
     else:
         return 'YES'
+
+
+def _get_all_available_tracxn_tokens(preferred_token: Optional[str] = None) -> List[str]:
+    """Collects all unique valid Tracxn tokens across configured key managers/env."""
+    seen = set()
+    ordered: List[str] = []
+
+    def _add(tok: Any):
+        s = str(tok).strip() if tok else ""
+        if s and s != "NO" and s not in seen:
+            seen.add(s)
+            ordered.append(s)
+
+    if preferred_token:
+        _add(preferred_token)
+
+    km = globals().get("TRACXN_KEY_MANAGER")
+    if km is not None and hasattr(km, "tokens"):
+        try:
+            tok_list = list(km.tokens or [])
+        except Exception:
+            tok_list = []
+        for t in tok_list:
+            _add(t)
+
+    tc = globals().get("TRACXN_CLIENT")
+    if tc is not None:
+        rot = getattr(tc, "token_rotator", None)
+        if rot is not None and hasattr(rot, "tokens"):
+            try:
+                for t in list(rot.tokens or []):
+                    _add(t)
+            except Exception:
+                pass
+        if getattr(tc, "token", None):
+            _add(tc.token)
+
+    # Fall back to env/default tokens ONLY if no active tokens came from KeyManager/Client
+    # (prevents resurrecting expired 401/403 tokens that TracxnKeyManager already deactivated).
+    if not ordered or (len(ordered) == 1 and preferred_token and ordered[0] == str(preferred_token).strip()):
+        env_multi = os.getenv("TRACXN_API_TOKENS", "")
+        if env_multi:
+            for t in env_multi.split(","):
+                _add(t)
+        _add(os.getenv("TRACXN_API_TOKEN", ""))
+        _add(globals().get("Tracxn_API_Token"))
+    return ordered
+
+
+async def ensure_domain_hashtags_with_retry(
+    domain: str,
+    newtag,
+    token: Optional[str] = None,
+    session: aiohttp.ClientSession = None,
+    delay_sec: float = 0.25,
+) -> str:
+    """
+    Retries adding hashtag(s) until 'YES', cycling through every available Tracxn token
+    at least once (and at least 3 total attempts if fewer than 3 tokens are configured).
+    """
+    if not domain or not newtag or newtag == "NO":
+        return "NO"
+
+    tokens = _get_all_available_tracxn_tokens(preferred_token=token)
+    if not tokens:
+        tokens = [token] if token else [None]
+
+    attempts = list(tokens)
+    while len(attempts) < max(len(tokens), 3):
+        attempts.extend(tokens)
+    attempts = attempts[:max(len(tokens), 3)]
+
+    tok_flag = _FORCE_EXPLICIT_TRACXN_TOKEN.set(True)
+    retry_flag = _EXPLICIT_API_MAX_RETRIES.set(1)
+    try:
+        for idx, tok in enumerate(attempts):
+            if os.path.exists(STOP_FILE):
+                break
+            try:
+                res = await Domain_HashTag_async(domain, newtag, token=tok, session=session)
+                if str(res).strip().upper() in ("YES", "TRUE"):
+                    return "YES"
+            except Exception as err:
+                logging.warning(f"Hashtag retry {idx + 1}/{len(attempts)} failed for {domain} ({newtag}): {err}")
+            if idx < len(attempts) - 1 and delay_sec > 0:
+                await asyncio.sleep(delay_sec)
+        return "NO"
+    finally:
+        _FORCE_EXPLICIT_TRACXN_TOKEN.reset(tok_flag)
+        _EXPLICIT_API_MAX_RETRIES.reset(retry_flag)
+
+
+async def sync_post_movement_hashtags_async(
+    domain: str,
+    cf_if_status: str,
+    if_pf_status: str,
+    tag_status_if: str,
+    tag_status_pf: str,
+    tag_status_discovery: str,
+    *,
+    industry_funnel_id: str = "",
+    output_data_if: str = "",
+    token: Optional[str] = None,
+    session: aiohttp.ClientSession = None,
+    is_moved: Optional[bool] = None,
+) -> Tuple[str, str, str, str]:
+    """
+    Post-movement hashtag synchronization & retry helper:
+      1. CF->IF == 'DONE' (moved to Industry Funnel) -> add bu_llm_industry_prediction (Col BB).
+      2. IF->PF == 'DONE' -> add bu_llm_feed_prediction (Col BC).
+      3. BOTH CF->IF == 'DONE' and IF->PF == 'DONE' -> add bu_llm_discovery_processing and Col BE='yes', else 'no'/''.
+    Returns (tag_status_if, tag_status_pf, tag_status_discovery, discovery_bq).
+    """
+    valid_movement_terminals = {
+        "DONE", "YES", "TRUE", "MOVED", "MOVED_OUT",
+        "SNOOZED", "MARKED_IRRELEVANT", "MARKED_FOR_LATER", "ESCALATED", "SKIPPED_UNASSIGNABLE"
+    }
+    cf_up = safe_str(cf_if_status).strip().upper()
+    pf_up = safe_str(if_pf_status).strip().upper()
+    ind_id = safe_str(industry_funnel_id).strip()
+    if_val = safe_str(output_data_if).strip().upper()
+
+    is_non_if_terminal = (
+        cf_up in ("MARKED_IRRELEVANT", "ESCALATED", "SNOOZED", "MARKED_FOR_LATER", "SKIPPED_UNASSIGNABLE")
+        or (
+            not ind_id
+            and (
+                any(term in if_val for term in ("22", "23", "IRRELEVANT", "ESCALATED", "SNOOZED", "MARKED"))
+                or not if_val
+            )
+        )
+    )
+    cf_moved_to_if = (cf_up == "DONE") and not is_non_if_terminal
+    pf_moved_done = (pf_up == "DONE")
+    both_done = cf_moved_to_if and pf_moved_done
+
+    tag_name_if = "bu_llm_industry_prediction"
+    tag_name_pf = "bu_llm_feed_prediction"
+
+    cur_tag_if = safe_str(tag_status_if).strip()
+    cur_tag_pf = safe_str(tag_status_pf).strip()
+    cur_tag_disc = safe_str(tag_status_discovery).strip()
+
+    if cf_moved_to_if and cur_tag_if.upper() not in ("YES", "TRUE"):
+        cur_tag_if = await ensure_domain_hashtags_with_retry(domain, tag_name_if, token=token, session=session)
+
+    need_pf = pf_moved_done and (cur_tag_pf.upper() not in ("YES", "TRUE"))
+    need_disc = both_done and (cur_tag_disc.upper() not in ("YES", "TRUE"))
+
+    if need_pf and need_disc:
+        batch_res = await ensure_domain_hashtags_with_retry(
+            domain, [tag_name_pf, Discovery_Processing_TAG_NAME], token=token, session=session
+        )
+        cur_tag_pf = batch_res
+        cur_tag_disc = batch_res
+    else:
+        if need_pf:
+            cur_tag_pf = await ensure_domain_hashtags_with_retry(domain, tag_name_pf, token=token, session=session)
+        if need_disc:
+            cur_tag_disc = await ensure_domain_hashtags_with_retry(domain, Discovery_Processing_TAG_NAME, token=token, session=session)
+
+    if both_done:
+        discovery_bq = "yes" if safe_str(cur_tag_disc).strip().upper() in ("YES", "TRUE") else "no"
+    else:
+        cur_tag_disc = ""
+        moved_any = is_moved if is_moved is not None else (
+            cf_up in valid_movement_terminals or pf_up in valid_movement_terminals
+        )
+        discovery_bq = "no" if moved_any else ""
+
+    return cur_tag_if, cur_tag_pf, cur_tag_disc, discovery_bq
 
 
 #**************************** Tag Remove ***********************************
@@ -2591,7 +2835,11 @@ async def WriteAPI_Domain_Funnel_async(domainProfileId, source_funnelID, filterG
                     ret = await TRACXN_CLIENT.mark_domain_irrelevant(
                         active_sess, domainProfileId, effective_source_funnel, filterGroupId, filterId, comments, token=tok
                     )
-                return 'TRUE' if ret == 'YES' else 'FALSE'
+                if ret == 'YES':
+                    return 'TRUE'
+                if ret == 'UNASSIGNABLE':
+                    return 'SKIPPED_UNASSIGNABLE'
+                return 'FALSE'
         else:
             await Domain_Funnel_Assign_async(domainProfileId, effective_source_funnel, filterGroupId, filterId, comments, tok, session=active_sess)
             await asyncio.sleep(0.5)
@@ -3139,7 +3387,103 @@ replacable_char_Domain = "[Extract_Domain]"
 summery_base_prompt = ""
 if_pred_base_prompt = ""
 if_pred_base_prompt_cache = ""
-from common.industry_funnel_map import build_default_funnel_maps, resolve_industry_funnel
+from common.industry_funnel_map import (
+    build_default_funnel_maps,
+    resolve_industry_funnel,
+    resolve_industry_funnel_from_config,
+)
+
+
+def classify_terminal_if_action(output_data_if: Any) -> str:
+    """Normalizes Gemini IF terminal outputs (22 / MARKED_IRRELEVANT, 23 / ESCALATED)."""
+    s = safe_str(output_data_if).strip()
+    if not s:
+        return ""
+    up = s.upper()
+    if "MARKED_IRRELEVANT" in up or re.match(r"^22(?:[.:)\s-]|$)", up):
+        return "MARKED_IRRELEVANT"
+    if "ESCALATED" in up or re.match(r"^23(?:[.:)\s-]|$)", up):
+        return "ESCALATED"
+    return ""
+
+
+def _resolve_if_output_dynamically(
+    raw_output: str,
+    config_funnel_prompt=None,
+    config_funnel_name_prompt=None,
+    config_funnel_id_prompt=None,
+    if_prompt_text: str = "",
+):
+    """
+    Resolves Gemini IF output using live Config Sheet maps as the single source of truth.
+    Only falls back to static defaults when no Config Sheet funnel maps are loaded at all.
+    """
+    merged_cfg = dict(config_funnel_prompt) if isinstance(config_funnel_prompt, dict) else {}
+    if config_funnel_name_prompt and not merged_cfg.get("FunnelNamePromptMap"):
+        merged_cfg["FunnelNamePromptMap"] = config_funnel_name_prompt
+    if config_funnel_id_prompt and not merged_cfg.get("FunnelIdPromptMap"):
+        merged_cfg["FunnelIdPromptMap"] = config_funnel_id_prompt
+
+    has_live_cfg = bool(
+        merged_cfg.get("FunnelNamePromptMap")
+        or merged_cfg.get("FunnelIdPromptMap")
+        or merged_cfg.get("FunnelNumPromptMap")
+    )
+    if has_live_cfg:
+        return resolve_industry_funnel_from_config(
+            raw_output,
+            config_funnel_prompt=merged_cfg,
+            if_pred_prompt=if_prompt_text or globals().get("if_pred_base_prompt", ""),
+        )
+
+    res_name, res_id = resolve_industry_funnel(raw_output)
+    if res_name and res_id:
+        return res_name, res_id
+    if raw_output in funnel_num_map:
+        return funnel_num_map[raw_output][0], funnel_num_map[raw_output][1]
+    if raw_output in funnel_name_map:
+        return funnel_name_map[raw_output][0], funnel_name_map[raw_output][1]
+    if raw_output in funnel_id_map:
+        return funnel_id_map[raw_output][0], funnel_id_map[raw_output][1]
+    return "", ""
+
+
+def _lookup_feed_mapping_row(
+    if_name: str,
+    feed_output: str,
+    feed_num_map: dict,
+    feed_name_map: dict,
+):
+    """Looks up the Feed_Mapping_PF row by exact name, exact number, case-insensitive name, or digit regex."""
+    if not if_name or not feed_output:
+        return None
+    if_clean = str(if_name).strip()
+    feed_clean = str(feed_output).strip()
+    key_exact = f"{if_clean}$${feed_clean}"
+
+    if key_exact in feed_name_map:
+        return feed_name_map[key_exact]
+    if key_exact in feed_num_map:
+        return feed_num_map[key_exact]
+
+    # Case-insensitive / whitespace-tolerant match on name key
+    key_low = key_exact.lower()
+    for k, row in feed_name_map.items():
+        if str(k).strip().lower() == key_low:
+            return row
+
+    # Punctuation / digit extraction fallback (e.g., "3." or "3) Mining Equipment" -> "3")
+    feed_num_match = re.search(r"\b(\d+)\b", feed_clean)
+    if feed_num_match:
+        num_key = f"{if_clean}$${feed_num_match.group(1)}"
+        if num_key in feed_num_map:
+            return feed_num_map[num_key]
+        num_key_low = num_key.lower()
+        for k, row in feed_num_map.items():
+            if str(k).strip().lower() == num_key_low:
+                return row
+
+    return None
 funnel_name_map, funnel_id_map, funnel_num_map = build_default_funnel_maps()
 config_funnel_prompt = {"FunnelIdPromptMap": {}, "FunnelNamePromptMap": {}, "Feed_cache_Id": {}, "Feed_cache_Info_API_Token": {}, "Feed_cache_Info_Model": {}, "Feed_cache_Info_Gen_Date": {}, "Feed_cache_Info_Final_Status": {}}
 config_funnel_id_prompt = {}
@@ -3452,6 +3796,17 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
                 output_data_if_name = safe_str(row[38]).strip()
             if len(row) > 39 and safe_str(row[39]).strip():
                 output_data_if_id = safe_str(row[39]).strip()
+            if not output_data_if_name or not output_data_if_id:
+                res_name, res_id = _resolve_if_output_dynamically(
+                    output_data_if,
+                    config_funnel_prompt=config_funnel_prompt,
+                    config_funnel_name_prompt=config_funnel_name_prompt,
+                    config_funnel_id_prompt=config_funnel_id_prompt,
+                    if_prompt_text=if_pred_base_prompt,
+                )
+                if res_name and res_id:
+                    output_data_if_name = output_data_if_name or res_name
+                    output_data_if_id = output_data_if_id or res_id
             logging.info(f"Smart resume: reusing existing IF prediction for {domain}: {output_data_if}")
         elif output_data_summery:
             if not base_prompt_for_if:
@@ -3517,23 +3872,19 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
 
             # logging.info(f"Second Gemini Result OUTPUT IF - {output_data_if}")
 
-            # Config - Funnel Map
+            # Config - Funnel Map (Single Source of Truth: Config Sheet Live Funnels)
             if output_data_if:
                 output_data_if = output_data_if.strip()
-
-                res_name, res_id = resolve_industry_funnel(output_data_if)
+                res_name, res_id = _resolve_if_output_dynamically(
+                    output_data_if,
+                    config_funnel_prompt=config_funnel_prompt,
+                    config_funnel_name_prompt=config_funnel_name_prompt,
+                    config_funnel_id_prompt=config_funnel_id_prompt,
+                    if_prompt_text=if_pred_base_prompt,
+                )
                 if res_name and res_id:
                     output_data_if_name = res_name
                     output_data_if_id = res_id
-                elif output_data_if in funnel_num_map:
-                    output_data_if_name = funnel_num_map[output_data_if][0]
-                    output_data_if_id = funnel_num_map[output_data_if][1]
-                elif output_data_if in funnel_name_map:
-                    output_data_if_name = funnel_name_map[output_data_if][0]
-                    output_data_if_id = funnel_name_map[output_data_if][1]
-                elif output_data_if in funnel_id_map:
-                    output_data_if_name = funnel_id_map[output_data_if][0]
-                    output_data_if_id = funnel_id_map[output_data_if][1]
 
         # logging.info(f"Second Gemini Result OUTPUT IF with Name - {output_data_if_name}")
         # logging.info(f"Second Gemini Result OUTPUT IF with ID - {output_data_if_id}")
@@ -3802,7 +4153,6 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
     global config_feed_num_funnel_map, config_feed_name_funnel_map
     if output_data_feed:
         output_data_feed = output_data_feed.strip()
-        key_feed = output_data_if_name + "$$" + output_data_feed
 
         # Fallback to _RUN_CACHE or run_cache.json if global maps are not populated
         if not config_feed_num_funnel_map or not config_feed_name_funnel_map:
@@ -3827,27 +4177,21 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
                 if not config_feed_name_funnel_map and _rc_fm.get("FeedNameFunnelMap"):
                     config_feed_name_funnel_map = _rc_fm["FeedNameFunnelMap"]
 
-        if key_feed in config_feed_name_funnel_map:
-            final_feed_name = config_feed_name_funnel_map[key_feed][2]
-            final_feed_id = config_feed_name_funnel_map[key_feed][3]
-            final_pub_funnel_name = config_feed_name_funnel_map[key_feed][5]
-            final_pub_funnel_id = config_feed_name_funnel_map[key_feed][6] if len(config_feed_name_funnel_map[key_feed]) > 6 and config_feed_name_funnel_map[key_feed][6] is not None else ""
-        elif key_feed in config_feed_num_funnel_map:
-            final_feed_name = config_feed_num_funnel_map[key_feed][2]
-            final_feed_id = config_feed_num_funnel_map[key_feed][3]
-            final_pub_funnel_name = config_feed_num_funnel_map[key_feed][5]
-            final_pub_funnel_id = config_feed_num_funnel_map[key_feed][6] if len(config_feed_num_funnel_map[key_feed]) > 6 and config_feed_num_funnel_map[key_feed][6] is not None else ""
-        else:
-            # Punctuation/digit extraction fallback (e.g., "3." -> "3", "3) Foundations" -> "3")
-            feed_num_match = re.search(r"\b(\d+)\b", output_data_feed)
-            if feed_num_match:
-                extracted_num = feed_num_match.group(1)
-                num_key_feed = f"{output_data_if_name}$${extracted_num}"
-                if num_key_feed in config_feed_num_funnel_map:
-                    final_feed_name = config_feed_num_funnel_map[num_key_feed][2]
-                    final_feed_id = config_feed_num_funnel_map[num_key_feed][3]
-                    final_pub_funnel_name = config_feed_num_funnel_map[num_key_feed][5]
-                    final_pub_funnel_id = config_feed_num_funnel_map[num_key_feed][6] if len(config_feed_num_funnel_map[num_key_feed]) > 6 and config_feed_num_funnel_map[num_key_feed][6] is not None else ""
+        matched_feed_row = _lookup_feed_mapping_row(
+            output_data_if_name,
+            output_data_feed,
+            config_feed_num_funnel_map,
+            config_feed_name_funnel_map,
+        )
+        if matched_feed_row:
+            final_feed_name = matched_feed_row[2] if len(matched_feed_row) > 2 else ""
+            final_feed_id = matched_feed_row[3] if len(matched_feed_row) > 3 else ""
+            final_pub_funnel_name = matched_feed_row[5] if len(matched_feed_row) > 5 else ""
+            final_pub_funnel_id = (
+                matched_feed_row[6]
+                if len(matched_feed_row) > 6 and matched_feed_row[6] is not None
+                else ""
+            )
 
         # logging.info("Output of Feed  :" + final_feed_name)
         # logging.info("Output of Publish Funnel  :" + final_pub_funnel_name)
@@ -3882,79 +4226,47 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
         elif 'TRACXN_KEY_MANAGER' in globals() and TRACXN_KEY_MANAGER is not None:
             token = await TRACXN_KEY_MANAGER.acquire() if hasattr(TRACXN_KEY_MANAGER, "acquire") else TRACXN_KEY_MANAGER.get_token()
 
-        if cf_if_status == "DONE":
-            logging.info(f"Smart resume: CF->IF write API already completed for {domain}")
+        terminal_action = classify_terminal_if_action(output_data_if)
+        cf_terminal_set = {"DONE", "MARKED_IRRELEVANT", "ESCALATED", "SNOOZED", "MARKED_FOR_LATER", "SKIPPED_UNASSIGNABLE"}
+        cf_st_upper = safe_str(cf_if_status).strip().upper()
+        if cf_st_upper in cf_terminal_set:
+            if cf_st_upper == "DONE":
+                cf_if_status = "DONE"
+            logging.info(f"Smart resume: CF->IF write API already resolved ({cf_if_status}) for {domain}")
         elif EXTRACTING_SHEET_NAME == CF_EXTRACTING_SHEET_NAME and output_data_if_validation and "Yes" not in output_data_if_validation:
-                tag_status_if = await Domain_HashTag_async(domain, Wrong_Validated_IF_Tag_Name, token)  
-
-                print("Validation Came NO with Tag Status : " ,tag_status_if)
-
+            if source_funnel_id:
+                cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id, filter_id, source_funnel_id, "MARKED_FOR_LATER", Wrong_Validation_COMMENT, token, session=session)
                 cf_if_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
-
                 if cf_if_status == "TRUE":
-                    cf_if_status = "DONE"
-                elif source_funnel_id :
-                    # logging.info(f"This Domain will be escalated as in ESCALATED, Result :- {output_data_if}")
-
-                    # cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id,filter_id,source_funnel_id, "ESCALATED", comment, Wrong_Validation_COMMENT, session=session) 
-
-                    cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id,filter_id,source_funnel_id, "MARKED_FOR_LATER", Wrong_Validation_COMMENT,token, session=session)  
-
-                    cf_if_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
-
-                    if cf_if_status == "TRUE":
-                        cf_if_status = "DONE"
-
-        if EXTRACTING_SHEET_NAME == IF_EXTRACTING_SHEET_NAME and output_data_if_validation == "Different IF Found" :
-                tag_status_if = await Domain_HashTag_async(domain, Wrong_Validated_Feed_Tag_Name, token)  
-
+                    cf_if_status = "MARKED_FOR_LATER"
+                    tag_status_if = await ensure_domain_hashtags_with_retry(domain, Wrong_Validated_IF_Tag_Name, token=token, session=session)
+                    print("Validation Came NO with Tag Status : ", tag_status_if)
+        elif EXTRACTING_SHEET_NAME == IF_EXTRACTING_SHEET_NAME and output_data_if_validation == "Different IF Found":
+            if source_funnel_id or industry_funnel_id:
+                cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, industry_funnel_id, None, None, industry_funnel_id, "MARKED_FOR_LATER", Wrong_Validation_COMMENT, token, session=session)
                 cf_if_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
-
                 if cf_if_status == "TRUE":
-                    cf_if_status = "DONE"
-                elif source_funnel_id :
-                    # logging.info(f"This Domain will be escalated as in ESCALATED, Result :- {output_data_if}")
-
-                    cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, industry_funnel_id, None, None, industry_funnel_id, "MARKED_FOR_LATER", Wrong_Validation_COMMENT, token, session=session) #DiscoveryCentralFunctions.WriteAPI_Domain_Funnel_With_Tab(domain_profile_id, source_funnel_id,source_funnel_id, filter_group_id, filter_id, "ESCALATED", comment, token, 10)  #Need to define/implement
-                    cf_if_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
-
-                    if cf_if_status == "TRUE":
-                        cf_if_status = "DONE"
-
-
-
-        if (EXTRACTING_SHEET_NAME == CF_EXTRACTING_SHEET_NAME and  "Yes" in output_data_if_validation) or (EXTRACTING_SHEET_NAME == IF_EXTRACTING_SHEET_NAME and output_data_if_validation != "Different IF Found" ) :
-
+                    cf_if_status = "MARKED_FOR_LATER"
+                    tag_status_if = await ensure_domain_hashtags_with_retry(domain, Wrong_Validated_Feed_Tag_Name, token=token, session=session)
+        elif (
+            (EXTRACTING_SHEET_NAME == CF_EXTRACTING_SHEET_NAME and "Yes" in output_data_if_validation)
+            or (EXTRACTING_SHEET_NAME == IF_EXTRACTING_SHEET_NAME and output_data_if_validation != "Different IF Found")
+            or (
+                EXTRACTING_SHEET_NAME == CF_EXTRACTING_SHEET_NAME
+                and not industry_funnel_id
+                and bool(terminal_action)
+            )
+        ):
             if source_funnel_id and industry_funnel_id:
-                # print("Domain For HashTag : ",domain)
-                tag_status_if = await Domain_HashTag_async(domain, tag_name_if, token)  
-                # DiscoveryCentralFunctions.Domain_HashTag(domain, tag_name_if, token) #Need to define/implement
-                # logging.info(f"This Domain will Sucessfully Move to this Funnel :- {output_data_if_name}")
-
-                cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id,filter_id,industry_funnel_id, "MOVED_OUT", comment, token, session=session)
-                #DiscoveryCentralFunctions.WriteAPI_Domain_Funnel_With_Tab(domain_profile_id, source_funnel_id,industry_funnel_id, filter_group_id, filter_id, cf_if_action, comment, token, 10) #Need to define/implement
+                cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id, filter_id, industry_funnel_id, "MOVED_OUT", comment, token, session=session)
                 cf_if_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
-
                 if cf_if_status == "TRUE":
                     cf_if_status = "DONE"
-            elif source_funnel_id and (not industry_funnel_id and (output_data_if == "22" or "MARKED_IRRELEVANT" in output_data_if)):
-                # logging.info(f"This Domain will be Rejected as in MARKED_IRRELEVANT, Result :- {output_data_if}")
-
-                cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id,filter_id,source_funnel_id, "MARKED_IRRELEVANT", comment, token, session=session)
-                #DiscoveryCentralFunctions.WriteAPI_Domain_Funnel_With_Tab(domain_profile_id, source_funnel_id,source_funnel_id, filter_group_id, filter_id, "MARKED_IRRELEVANT", comment, token, 10) #Need to define/implement
-
+            elif source_funnel_id and not industry_funnel_id and terminal_action:
+                cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id, filter_id, source_funnel_id, terminal_action, comment, token, session=session)
                 cf_if_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
-
                 if cf_if_status == "TRUE":
-                    cf_if_status = "DONE"
-            elif source_funnel_id and (not industry_funnel_id and (output_data_if == "23" or "ESCALATED" in output_data_if)):
-                # logging.info(f"This Domain will be escalated as in ESCALATED, Result :- {output_data_if}")
-
-                cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id,filter_id,source_funnel_id, "ESCALATED", comment, token, session=session) #DiscoveryCentralFunctions.WriteAPI_Domain_Funnel_With_Tab(domain_profile_id, source_funnel_id,source_funnel_id, filter_group_id, filter_id, "ESCALATED", comment, token, 10)  #Need to define/implement
-                cf_if_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
-
-                if cf_if_status == "TRUE":
-                    cf_if_status = "DONE"
+                    cf_if_status = terminal_action
             else:
                 # User directive: DO NOT SNOOZE unmapped/unresolved predictions.
                 # Keep for retry when there are no more new domains to process.
@@ -3964,29 +4276,28 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
 
         #********************************************* Write API - Publish Funnel ************************************************
 
-        if if_pf_status == "DONE":
+        if safe_str(if_pf_status).strip().upper() == "DONE":
+            if_pf_status = "DONE"
             logging.info(f"Smart resume: IF->PF write API already completed for {domain}")
         elif industry_funnel_id and publish_funnel_id:
-            # Combined hashtag batch: sync both bu_llm_feed_prediction and bu_llm_discovery_processing in 1 call
-            combined_tags = [tag_name_pf, Discovery_Processing_TAG_NAME]
-            batch_tag_res = await Domain_HashTag_async(domain, combined_tags, token, session=session)
-            tag_status_pf = batch_tag_res
-            tag_status_discovery = batch_tag_res
-
-            if_pf_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, industry_funnel_id, None, None, publish_funnel_id, if_pf_action, comment, token, session=session, is_pf_move=True) 
+            if_pf_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, industry_funnel_id, None, None, publish_funnel_id, if_pf_action, comment, token, session=session, is_pf_move=True)
             if_pf_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
-
             if if_pf_status == "TRUE":
                 if_pf_status = "DONE"
-        else:
-            tag_status_discovery = ""
 
-        # Fallback if discovery tag not yet assigned
-        if not tag_status_discovery:
-            if str(tag_status_pf).strip().upper() in ("YES", "TRUE"):
-                tag_status_discovery = await Domain_HashTag_async(domain, Discovery_Processing_TAG_NAME, token, session=session)
-            else:
-                tag_status_discovery = ""
+        #********************************************* Post-Movement Hashtags Sync (With Full Token Retries) *******************
+        tag_status_if, tag_status_pf, tag_status_discovery, _ = await sync_post_movement_hashtags_async(
+            domain,
+            cf_if_status,
+            if_pf_status,
+            tag_status_if,
+            tag_status_pf,
+            tag_status_discovery,
+            industry_funnel_id=industry_funnel_id,
+            output_data_if=output_data_if,
+            token=token,
+            session=session,
+        )
 
     # inbetween_sheet.update_acell("B7", dstart + i) #Save point for next execution.
 
@@ -4429,11 +4740,14 @@ async def Integrated_Process_domain(
                 _is_valid_ts_movement(if_pf_time)
             )
 
-            # User rule: ONLY for cases where Publish Funnel (bu_llm_feed_prediction) is YES should Hashtag (bu_llm_discovery_processing) be added
-            if str(tag_status_pf).strip().upper() in ("YES", "TRUE"):
-                discovery_bq = "yes" if str(tag_status_discovery).upper() in ("YES", "TRUE") else "no"
+            both_movements_done = (
+                str(cf_if_status).strip().upper() == "DONE"
+                and str(if_pf_status).strip().upper() == "DONE"
+            )
+            if both_movements_done:
+                discovery_bq = "yes" if str(tag_status_discovery).strip().upper() in ("YES", "TRUE") else "no"
             elif is_moved:
-                # SNOOZED, MARKED_IRRELEVANT, ESCALATED, or PF not YES -> mark 'no'
+                # Single movement, SNOOZED, MARKED_IRRELEVANT, ESCALATED, etc. -> mark 'no'
                 discovery_bq = "no"
             else:
                 discovery_bq = ""
@@ -5069,6 +5383,7 @@ async def Integrated_Extract_domains(
 
     pre_completed = sum(1 for r in pf_data if is_row_tracxn_movement_completed(r))
     pre_pf_completed = sum(1 for r in pf_data if (len(r) > 51 and safe_str(r[51]).strip().upper() in ("DONE", "YES", "TRUE", "MOVED", "MOVED_OUT")) or (len(r) > 52 and len(safe_str(r[52]).strip()) >= 8))
+    pre_eligible_completed = sum(1 for r in pf_data if is_row_eligible_for_next_dept(r))
 
     processed = 0
     success_count = pre_tc_scraped
@@ -5078,6 +5393,7 @@ async def Integrated_Extract_domains(
     gemini_completed_count = pre_gemini_completed
     tracxn_completed_count = pre_completed
     pf_completed_count = pre_pf_completed
+    eligible_completed_count = pre_eligible_completed
     phase_title = f"Phase 1: Initial Crawl & Predictions ({mode})" if mode == "full" else f"Mode: {mode.upper()}"
     update_progress_file(
         tracxn_completed_count, total_domains, success_count, fail_count,
@@ -5090,7 +5406,8 @@ async def Integrated_Extract_domains(
         gemini_count=gemini_completed_count,
         tracxn_count=tracxn_completed_count,
         fully_completed=tracxn_completed_count,
-        pf_completed=pf_completed_count
+        pf_completed=pf_completed_count,
+        eligible_completed=eligible_completed_count
     )
 
     semaphore = asyncio.Semaphore(MAX_WORKERS)
@@ -5121,9 +5438,25 @@ async def Integrated_Extract_domains(
                 return v[:49000]
             return v
 
+        def _apply_buf_to_pf_data(buf_items):
+            for r_num, c_num, val in buf_items:
+                idx = r_num - start_row_num
+                if 0 <= idx < len(pf_data):
+                    row_ref = pf_data[idx]
+                    c_idx = c_num - 1
+                    vals_list = val if isinstance(val, list) else [val]
+                    needed_len = max(57, c_idx + len(vals_list))
+                    if len(row_ref) < needed_len:
+                        row_ref.extend([""] * (needed_len - len(row_ref)))
+                    for offset, cell_val in enumerate(vals_list):
+                        row_ref[c_idx + offset] = _sanitize_val(cell_val)
+
         async def _flush_sheet_buffer(buf):
             if not buf:
                 return
+
+            # Keep in-memory pf_data synchronized so local_sheet.csv reflects every queued update
+            _apply_buf_to_pf_data(buf)
 
             # If Google Sheets is in document-too-large circuit breaker state, skip GSheet writes and record to pending sync
             if GSHEET_CIRCUIT_BREAKER.should_skip_gsheet():
@@ -5361,7 +5694,7 @@ async def Integrated_Extract_domains(
                     domain_queue.task_done()
                     continue
 
-                if is_row_fully_completed(row):
+                if is_row_fully_completed(row) and not is_row_hashtags_missing(row):
                     await summarized_queue.put((idx, row, None, True))
                     domain_queue.task_done()
                     continue
@@ -5476,7 +5809,7 @@ async def Integrated_Extract_domains(
 
         # Stage 2: Paced Gemini Predictions & Tracxn Movements Consumer
         async def downstream_consumer_worker():
-            nonlocal processed, success_count, fail_count, gemini_completed_count, tracxn_completed_count, pf_completed_count
+            nonlocal processed, success_count, fail_count, gemini_completed_count, tracxn_completed_count, pf_completed_count, eligible_completed_count
             while True:
                 if is_5am_ist_cutoff() or os.path.exists(STOP_FILE) or (is_pre_cutoff_window() and summarized_queue.empty()):
                     break
@@ -5607,8 +5940,8 @@ async def Integrated_Extract_domains(
                                     cf_st = str(final_write_data[32]).strip().upper() if len(final_write_data) > 32 else ""
                                     if_pf_st = str(final_write_data[34]).strip().upper() if len(final_write_data) > 34 else ""
                                     already_resolved = (
-                                        (cf_st in ("DONE", "TRUE", "MOVED", "MOVED_OUT") and (if_pf_st == "DONE" or tag_pf == "YES")) or
-                                        (tag_if == "YES" or tag_pf == "YES" or tag_rev == "YES")
+                                        (cf_st == "DONE" and if_pf_st == "DONE" and str(final_write_data[39] if len(final_write_data) > 39 else "").strip().lower() == "yes") or
+                                        cf_st in ("MARKED_IRRELEVANT", "ESCALATED", "SNOOZED", "MARKED_FOR_LATER", "SKIPPED_UNASSIGNABLE")
                                     )
                                     if not already_resolved:
                                         rev_res = await Process_Review_domain(
@@ -5648,6 +5981,8 @@ async def Integrated_Extract_domains(
                                 updated_row = list(row)
                                 s_idx = actual_start_col - 1
                                 updated_row[s_idx : s_idx + len(final_write_data)] = final_write_data
+                                if is_row_eligible_for_next_dept(updated_row) and not is_row_eligible_for_next_dept(row):
+                                    eligible_completed_count = min(total_domains, eligible_completed_count + 1)
                                 if is_row_tracxn_movement_completed(updated_row):
                                     if not is_row_tracxn_movement_completed(row):
                                         tracxn_completed_count = min(total_domains, tracxn_completed_count + 1)
@@ -5675,7 +6010,8 @@ async def Integrated_Extract_domains(
                             nim_workers=num_nim_workers,
                             downstream_workers=num_downstream_workers,
                             fully_completed=tracxn_completed_count,
-                            pf_completed=pf_completed_count
+                            pf_completed=pf_completed_count,
+                            eligible_completed=eligible_completed_count
                         )
                         trim_memory()
                     summarized_queue.task_done()
@@ -5771,6 +6107,27 @@ async def Integrated_Extract_domains(
                         try:
                             new_cfg = await asyncio.to_thread(load_or_refresh_run_config, g_client, True)
                             if new_cfg:
+                                # Keep IF prompt, live funnel maps, and feed mappings dynamically synced with Config Sheet
+                                global if_pred_base_prompt, config_feed_num_funnel_map, config_feed_name_funnel_map
+                                new_bc = new_cfg.get("basic_config") or {}
+                                if new_bc.get("Basic_Prompt_IF_Predctn"):
+                                    if_pred_base_prompt = new_bc["Basic_Prompt_IF_Predctn"]
+                                fp_refresh = new_cfg.get("funnel_prompts") or {}
+                                if fp_refresh.get("FunnelNamePromptMap"):
+                                    if isinstance(config_funnel_prompt, dict):
+                                        config_funnel_prompt.update(fp_refresh)
+                                    if isinstance(config_funnel_id_prompt, dict) and fp_refresh.get("FunnelIdPromptMap"):
+                                        config_funnel_id_prompt.clear()
+                                        config_funnel_id_prompt.update(fp_refresh["FunnelIdPromptMap"])
+                                    if isinstance(config_funnel_name_prompt, dict):
+                                        config_funnel_name_prompt.clear()
+                                        config_funnel_name_prompt.update(fp_refresh["FunnelNamePromptMap"])
+                                fm_refresh = new_cfg.get("feed_mappings") or {}
+                                if fm_refresh.get("FeedNumFunnelMap"):
+                                    config_feed_num_funnel_map = fm_refresh["FeedNumFunnelMap"]
+                                if fm_refresh.get("FeedNameFunnelMap"):
+                                    config_feed_name_funnel_map = fm_refresh["FeedNameFunnelMap"]
+
                                 new_cache_id = new_cfg.get("cache_id_IF_Prediction")
                                 new_date = new_cfg.get("date_IF_Prediction")
                                 new_status = new_cfg.get("status_IF_Prediction")
@@ -5993,7 +6350,10 @@ async def Process_Review_domain(session, row, row_number, client, semaphore, SHE
             domain_profile_id = row[10]
             filter_group_id = row[4]
             filter_id = row[6]
+            cf_central_fid = getattr(TRACXN_CLIENT, "CENTRAL_FUNNEL_ID", "5dc559138787070a80be21ba") if 'TRACXN_CLIENT' in globals() and TRACXN_CLIENT is not None else "5dc559138787070a80be21ba"
             source_funnel_id = row[2]
+            if not source_funnel_id or safe_str(source_funnel_id).strip() in ("", "-"):
+                source_funnel_id = cf_central_fid
 
             output_data_if = row[37] if len(row) > 37 else ""
             industry_funnel_id = row[39] if len(row) > 39 else ""
@@ -6012,35 +6372,32 @@ async def Process_Review_domain(session, row, row_number, client, semaphore, SHE
             raw_data_val = str(row[raw_idx]).strip() if len(row) > raw_idx else ""
             is_truly_unscrapable = (tc_status_val == "FAILED" and not raw_data_val)
 
-            tag_status_review = ""
-            if is_row_fully_completed(row):
+            terminal_action = classify_terminal_if_action(output_data_if)
+            tag_status_review = tagStatusForReview
+            cf_terminal_set = {"DONE", "MARKED_IRRELEVANT", "ESCALATED", "SNOOZED", "MARKED_FOR_LATER", "SKIPPED_UNASSIGNABLE"}
+            cf_up_init = str(cf_if_status).strip().upper()
+            if is_row_fully_completed(row) and not is_row_hashtags_missing(row):
                 pass
-            elif tagStatusForIF == "YES" or tagStatusForPF == "YES" or tagStatusForReview == "YES":
+            elif cf_up_init in cf_terminal_set or str(tagStatusForIF).strip().upper() == "YES" or str(tagStatusForPF).strip().upper() == "YES" or str(tagStatusForReview).strip().upper() == "YES":
                 pass
             elif is_truly_unscrapable:
                 # User directive: Domains should be snoozed ONLY on valid failure cases:
                 # unable to scrape website when both TC and waterfall scraper fails.
-                tag_status_review = await Domain_HashTag_async(domain, To_Review_TAG_NAME, TOKEN)
-                cf_if_status = await WriteAPI_Domain_Funnel_async( domain_profile_id, source_funnel_id, filter_group_id, filter_id,source_funnel_id, "SNOOZED", COMMENT, TOKEN, session=session)
+                cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id, filter_id, source_funnel_id, "SNOOZED", COMMENT, TOKEN, session=session)
                 cf_if_time = get_ist_timestamp()
                 if cf_if_status == "TRUE":
-                    cf_if_status = "DONE"
-            elif source_funnel_id and ("22" in output_data_if or "MARKED_IRRELEVANT" in output_data_if):
-                cf_if_status = await WriteAPI_Domain_Funnel_async( domain_profile_id, source_funnel_id, filter_group_id, filter_id,source_funnel_id, "MARKED_IRRELEVANT", COMMENT, TOKEN, session=session)
+                    cf_if_status = "SNOOZED"
+                    tag_status_review = await ensure_domain_hashtags_with_retry(domain, To_Review_TAG_NAME, token=TOKEN, session=session)
+            elif source_funnel_id and terminal_action:
+                cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id, filter_id, source_funnel_id, terminal_action, COMMENT, TOKEN, session=session)
                 cf_if_time = get_ist_timestamp()
                 if cf_if_status == "TRUE":
-                    cf_if_status = "DONE"
-            elif source_funnel_id and ("23" in output_data_if or "ESCALATED" in output_data_if):
-                cf_if_status = await WriteAPI_Domain_Funnel_async( domain_profile_id, source_funnel_id, filter_group_id, filter_id,source_funnel_id, "ESCALATED", COMMENT, TOKEN, session=session)
-                cf_if_time = get_ist_timestamp()
-                if cf_if_status == "TRUE":
-                    cf_if_status = "DONE"
+                    cf_if_status = terminal_action
             else:
                 # Domain was scraped successfully, in-flight, or had transient write API error:
                 # DO NOT SNOOZE! Preserve for retry.
                 logging.info(f"Process_Review_Caller: Preserving {domain} for retry (not unscrapable). Bypassing snooze.")
 
-            tag_status_discovery = ""
             valid_movement_terminals = {"DONE", "YES", "TRUE", "MOVED", "MOVED_OUT", "SNOOZED", "MARKED_IRRELEVANT", "MARKED_FOR_LATER", "ESCALATED", "SKIPPED_UNASSIGNABLE"}
             def _is_valid_ts_movement(s: str) -> bool:
                 s = str(s).strip()
@@ -6055,18 +6412,22 @@ async def Process_Review_domain(session, row, row_number, client, semaphore, SHE
                 _is_valid_ts_movement(if_pf_time)
             )
 
-            ind_id = industry_funnel_id
-            pub_id = publish_funnel_id
-            out_check = str(output_data_if).strip().upper()
-
-            # User rule: ONLY for cases where Publish Funnel (bu_llm_feed_prediction) is YES should Hashtag (bu_llm_discovery_processing) be added
-            if str(tagStatusForPF).strip().upper() in ("YES", "TRUE"):
-                tag_status_discovery = await Domain_HashTag_async(domain, Discovery_Processing_TAG_NAME, TOKEN)
-                discovery_bq = "yes" if str(tag_status_discovery).upper() in ("YES", "TRUE") else "no"
-            elif is_moved_row:
-                discovery_bq = "no"
-            else:
-                discovery_bq = row[56] if len(row) > 56 else ""
+            existing_disc = row[56] if len(row) > 56 else ""
+            tagStatusForIF, tagStatusForPF, tag_status_discovery, discovery_bq = await sync_post_movement_hashtags_async(
+                domain,
+                cf_if_status,
+                if_pf_status,
+                tagStatusForIF,
+                tagStatusForPF,
+                existing_disc,
+                industry_funnel_id=industry_funnel_id,
+                output_data_if=output_data_if,
+                token=TOKEN,
+                session=session,
+                is_moved=is_moved_row,
+            )
+            if not discovery_bq and existing_disc and not is_moved_row:
+                discovery_bq = existing_disc
 
             # Prepare output data
             existing_prefix = list(row[17:49]) if len(row) > 17 else []
@@ -6312,45 +6673,52 @@ async def Execute_Phase4_Ingestion_Write_APIs(client, mainheaders, SHEET_ID, EXT
                     tag_name_pf = "bu_llm_feed_prediction"
                     if_pf_action = "MOVED_OUT"
 
-                    # If already done, skip calling Tracxn APIs
-                    if cf_if_status == "DONE" and if_pf_status == "DONE":
-                        return [cf_if_status, cf_if_time, if_pf_status, if_pf_time, tag_status_if, tag_status_pf, "", tag_status_discovery]
+                    # If already fully moved AND all required hashtags are present, skip calling Tracxn APIs
+                    cf_terminal_set = {"DONE", "MARKED_IRRELEVANT", "ESCALATED", "SNOOZED", "MARKED_FOR_LATER", "SKIPPED_UNASSIGNABLE"}
+                    cf_st_up = str(cf_if_status).strip().upper()
+                    pf_st_up = str(if_pf_status).strip().upper()
 
-                    # CF -> IF Write API & Tagging
-                    if EXTRACTING_SHEET_NAME == CF_EXTRACTING_SHEET_NAME and output_data_if_validation and "Yes" not in output_data_if_validation:
-                        tag_status_if = await Domain_HashTag_async(domain, Wrong_Validated_IF_Tag_Name, token)
-                        cf_if_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
+                    if (cf_st_up in cf_terminal_set or cf_st_up == "DONE") and (pf_st_up == "DONE" or not publish_funnel_id) and not is_row_hashtags_missing(row):
+                        return [cf_if_status, cf_if_time, if_pf_status, if_pf_time, tag_status_if, tag_status_pf, tag_status_review, tag_status_discovery]
+
+                    terminal_action = classify_terminal_if_action(output_data_if)
+
+                    # CF -> IF Write API
+                    if cf_st_up in cf_terminal_set:
+                        if cf_st_up == "DONE":
+                            cf_if_status = "DONE"
+                    elif EXTRACTING_SHEET_NAME == CF_EXTRACTING_SHEET_NAME and output_data_if_validation and "Yes" not in output_data_if_validation:
                         if source_funnel_id:
                             cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id, filter_id, source_funnel_id, "MARKED_FOR_LATER", Wrong_Validation_COMMENT, token, session=session)
                             cf_if_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
                             if cf_if_status == "TRUE":
-                                cf_if_status = "DONE"
-                    elif (EXTRACTING_SHEET_NAME == CF_EXTRACTING_SHEET_NAME and "Yes" in output_data_if_validation) or (EXTRACTING_SHEET_NAME != CF_EXTRACTING_SHEET_NAME):
+                                cf_if_status = "MARKED_FOR_LATER"
+                                tag_status_if = await ensure_domain_hashtags_with_retry(domain, Wrong_Validated_IF_Tag_Name, token=token, session=session)
+                    elif (
+                        (EXTRACTING_SHEET_NAME == CF_EXTRACTING_SHEET_NAME and "Yes" in output_data_if_validation)
+                        or (EXTRACTING_SHEET_NAME != CF_EXTRACTING_SHEET_NAME)
+                        or (EXTRACTING_SHEET_NAME == CF_EXTRACTING_SHEET_NAME and not industry_funnel_id and bool(terminal_action))
+                    ):
                         if source_funnel_id and industry_funnel_id:
-                            tag_status_if = await Domain_HashTag_async(domain, tag_name_if, token)
                             cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id, filter_id, industry_funnel_id, "MOVED_OUT", comment, token, session=session)
                             cf_if_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
                             if cf_if_status == "TRUE":
                                 cf_if_status = "DONE"
-                        elif source_funnel_id and (not industry_funnel_id and (output_data_if == "22" or "MARKED_IRRELEVANT" in output_data_if)):
-                            cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id, filter_id, source_funnel_id, "MARKED_IRRELEVANT", comment, token, session=session)
+                        elif source_funnel_id and not industry_funnel_id and terminal_action:
+                            cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id, filter_id, source_funnel_id, terminal_action, comment, token, session=session)
                             cf_if_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
                             if cf_if_status == "TRUE":
-                                cf_if_status = "DONE"
-                        elif source_funnel_id and (not industry_funnel_id and (output_data_if == "23" or "ESCALATED" in output_data_if)):
-                            cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id, filter_id, source_funnel_id, "ESCALATED", comment, token, session=session)
-                            cf_if_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
-                            if cf_if_status == "TRUE":
-                                cf_if_status = "DONE"
+                                cf_if_status = terminal_action
                         elif source_funnel_id:
                             cf_if_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, source_funnel_id, filter_group_id, filter_id, source_funnel_id, "SNOOZED", comment, token, session=session)
                             cf_if_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
                             if cf_if_status == "TRUE":
-                                cf_if_status = "DONE"
+                                cf_if_status = "SNOOZED"
 
-                    # IF -> PF Write API & Tagging
-                    if industry_funnel_id and publish_funnel_id:
-                        tag_status_pf = await Domain_HashTag_async(domain, tag_name_pf, token)
+                    # IF -> PF Write API
+                    if str(if_pf_status).strip().upper() == "DONE":
+                        if_pf_status = "DONE"
+                    elif industry_funnel_id and publish_funnel_id:
                         if_pf_status = await WriteAPI_Domain_Funnel_async(domain_profile_id, industry_funnel_id, None, None, publish_funnel_id, if_pf_action, comment, token, session=session, is_pf_move=True)
                         if_pf_time = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
                         if if_pf_status == "TRUE":
@@ -6370,15 +6738,20 @@ async def Execute_Phase4_Ingestion_Write_APIs(client, mainheaders, SHEET_ID, EXT
                         _is_valid_ts_movement(if_pf_time)
                     )
 
-                    out_check = str(output_data_if).strip().upper()
-                    # User rule: ONLY for cases where Publish Funnel (bu_llm_feed_prediction) is YES should Hashtag (bu_llm_discovery_processing) be added
-                    if str(tag_status_pf).strip().upper() in ("YES", "TRUE"):
-                        tag_status_discovery = await Domain_HashTag_async(domain, Discovery_Processing_TAG_NAME, token, session=session)
-                        discovery_bq = "yes" if str(tag_status_discovery).upper() in ("YES", "TRUE") else "no"
-                    elif is_moved_ingest:
-                        discovery_bq = "no"
-                    else:
-                        discovery_bq = ""
+                    # Post-movement hashtags sync (with full token retries)
+                    tag_status_if, tag_status_pf, tag_status_discovery, discovery_bq = await sync_post_movement_hashtags_async(
+                        domain,
+                        cf_if_status,
+                        if_pf_status,
+                        tag_status_if,
+                        tag_status_pf,
+                        tag_status_discovery,
+                        industry_funnel_id=industry_funnel_id,
+                        output_data_if=output_data_if,
+                        token=token,
+                        session=session,
+                        is_moved=is_moved_ingest,
+                    )
                     res_write = [cf_if_status, cf_if_time, if_pf_status, if_pf_time, tag_status_if, tag_status_pf, tag_status_review, discovery_bq]
                     LOCAL_CACHE.save_record(domain, {
                         "cf_if_status": cf_if_status,
@@ -6474,15 +6847,18 @@ async def _run_pipeline_core(start_row: int = None, mode: str = None, sheet_id: 
         # Initialize Once-Per-Run Local Config Cache (downloads config once from Google Sheets)
         run_cfg = load_or_refresh_run_config(gc, force_refresh=True)
 
-        # Bind runtime multi-token replacement configs
-        global replacable_char, replacable_char_Domain
+        # Bind runtime multi-token replacement configs and IF base prompt from live Config Sheet
+        global replacable_char, replacable_char_Domain, if_pred_base_prompt
         if run_cfg.get("basic_config"):
             cfg_rc = run_cfg["basic_config"].get("Replacable_Charecter")
             cfg_rc_dom = run_cfg["basic_config"].get("Replacable_Charecter_Domain")
+            cfg_if_prompt = run_cfg["basic_config"].get("Basic_Prompt_IF_Predctn")
             if cfg_rc:
                 replacable_char = cfg_rc
             if cfg_rc_dom:
                 replacable_char_Domain = cfg_rc_dom
+            if cfg_if_prompt:
+                if_pred_base_prompt = cfg_if_prompt
             logging.info(f"Loaded multi-token configs: replacable_char='{replacable_char}', replacable_char_Domain='{replacable_char_Domain}'")
 
         cache_id_IF_Prediction = run_cfg.get("cache_id_IF_Prediction")
@@ -6601,7 +6977,7 @@ async def _run_pipeline_core(start_row: int = None, mode: str = None, sheet_id: 
 
             failed_candidates = 0
             for r in pf_retry:
-                if not r or not r[0] or is_row_fully_completed(r):
+                if not r or not r[0] or (is_row_fully_completed(r) and not is_row_hashtags_missing(r)):
                     continue
                 tc_st = safe_str(r[23]).strip().upper()
                 raw_d = safe_str(r[29]).strip()
@@ -6614,7 +6990,7 @@ async def _run_pipeline_core(start_row: int = None, mode: str = None, sheet_id: 
                 gemini_feed = safe_str(r[43]).strip()
                 write_st = safe_str(r[49]).strip().upper()
 
-                if nim_st == "FAILED" or len(nim_sum) <= 10 or not gemini_feed or gemini_feed in ("FAILED", "ERROR") or write_st in ("FALSE", "ERROR", ""):
+                if nim_st == "FAILED" or len(nim_sum) <= 10 or not gemini_feed or gemini_feed in ("FAILED", "ERROR") or write_st in ("FALSE", "ERROR", "") or is_row_hashtags_missing(r):
                     failed_candidates += 1
 
             if failed_candidates == 0:
@@ -6658,12 +7034,14 @@ async def _run_pipeline_core(start_row: int = None, mode: str = None, sheet_id: 
             fin_gem = min(fin_nim_succ, max(fin_gem_if, fin_gem_feed))
 
             fin_tracxn = min(fin_gem, sum(1 for r in pf_final if is_row_fully_completed(r)))
+            fin_eligible = sum(1 for r in pf_final if is_row_eligible_for_next_dept(r))
             fin_total = len(pf_final)
         except Exception:
             fin_tc = tc_completed_count if 'tc_completed_count' in locals() else 0
             fin_nim = nim_completed_count if 'nim_completed_count' in locals() else 0
             fin_gem = gemini_completed_count if 'gemini_completed_count' in locals() else 0
             fin_tracxn = tracxn_completed_count if 'tracxn_completed_count' in locals() else 0
+            fin_eligible = eligible_completed_count if 'eligible_completed_count' in locals() else 0
             fin_total = total_domains if 'total_domains' in locals() else 0
 
         update_progress_file(
@@ -6676,7 +7054,8 @@ async def _run_pipeline_core(start_row: int = None, mode: str = None, sheet_id: 
             tc_success=fin_tc_scraped if 'fin_tc_scraped' in locals() else fin_tc,
             nim_count=fin_nim,
             gemini_count=fin_gem,
-            tracxn_count=fin_tracxn
+            tracxn_count=fin_tracxn,
+            eligible_completed=fin_eligible
         )
         try:
             EXEC_TRACKER.record_completion()

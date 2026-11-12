@@ -1,20 +1,35 @@
+import csv
 import os
 import json
 import logging
 import tempfile
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Sequence
+
+from common.dashboard_metrics import (
+    IDX_DOMAIN,
+    IDX_TC_JOB_ID,
+    IDX_TC_STATUS,
+    IDX_RAW_DATA,
+    IDX_NIM_STATUS,
+    IDX_CF_IF_STATUS,
+    IDX_IF_PF_STATUS,
+    _DONE_STATUSES,
+    hydrate_row_from_cache,
+    normalize_domain,
+)
+from common.gsheet_circuit_breaker import is_csv_only_mode
 
 logger = logging.getLogger(__name__)
 
 class BacklogManager:
     """
-    Manages `.scraped_backlog.json` to persist domains that completed scraping
-    prior to the 5:00 AM cutoff but did not finish NIM summarization.
-    Strictly caps cumulative appended backlog domains at 5,000 domains.
+    Manages `.scraped_backlog.json` to persist uncompleted/scraped domains prior to the
+    midnight cutoff and carry them forward (capped at 5,000 fleet-wide / 1,250 per sheet).
     """
 
     DEFAULT_BACKLOG_FILENAME = ".scraped_backlog.json"
     MAX_CUMULATIVE_BACKLOG = 5000
+    MAX_PER_SHEET_BACKLOG = 1250
 
     def __init__(self, backlog_filepath: Optional[str] = None):
         if backlog_filepath:
@@ -97,50 +112,189 @@ class BacklogManager:
         self._atomic_write(remaining)
         logger.info(f"Cleared {len(injected_domains)} items from backlog. Remaining: {len(remaining)}")
 
-    async def append_backlog_to_sheet(
+    def extract_uncompleted_items_from_rows(
+        self,
+        rows: Sequence[Sequence[Any]],
+        cache_map: Optional[Dict[str, Dict[str, Any]]] = None,
+        max_cap: int = MAX_PER_SHEET_BACKLOG,
+    ) -> List[Dict[str, Any]]:
+        """
+        Extracts uncompleted domains from 57-col rows prior to daily cleanup/rotation,
+        prioritizing scraped-but-uncompleted rows first, capped at max_cap.
+        """
+        scraped_pending: List[Dict[str, Any]] = []
+        unscraped_pending: List[Dict[str, Any]] = []
+        seen = set()
+
+        for raw_row in rows:
+            if not raw_row or not str(raw_row[0] or "").strip():
+                continue
+            row = hydrate_row_from_cache(raw_row, cache_map=cache_map)
+            dom = row[IDX_DOMAIN].strip()
+            norm_d = normalize_domain(dom)
+            if not norm_d or norm_d in seen:
+                continue
+
+            nim_s = row[IDX_NIM_STATUS].strip().upper()
+            ax = row[IDX_CF_IF_STATUS].strip().upper()
+            az = row[IDX_IF_PF_STATUS].strip().upper()
+            tc_s = row[IDX_TC_STATUS].strip().upper()
+
+            # Skip terminal / finished rows
+            if nim_s == "NO_CONTENT" or ax in _DONE_STATUSES or az in _DONE_STATUSES:
+                continue
+
+            rec = cache_map.get(norm_d, {}) if cache_map else {}
+            raw_content = str(rec.get("scrappingBeautySoup", "") or "").strip()
+            if not raw_content:
+                cell_raw = row[IDX_RAW_DATA].strip()
+                if cell_raw and cell_raw != "Raw Data Appended - csv only" and not cell_raw.startswith(("Error", "FAILED", "N/A")):
+                    raw_content = cell_raw
+
+            # Skip terminal TC failures with no usable content
+            if tc_s == "FAILED" and not raw_content:
+                continue
+
+            seen.add(norm_d)
+            clean_57 = list(row[:17]) + [""] * 40
+            tc_job_id = row[IDX_TC_JOB_ID].strip()
+            if tc_job_id:
+                clean_57[IDX_TC_JOB_ID] = tc_job_id
+            if tc_s == "SUCCESS" or raw_content:
+                clean_57[IDX_TC_STATUS] = "SUCCESS"
+            if raw_content:
+                clean_57[IDX_RAW_DATA] = "Raw Data Appended - csv only"
+
+            item = {
+                "domain": dom,
+                "raw_content": raw_content[:49500] if raw_content else "",
+                "tc_job_id": tc_job_id,
+                "row_57": clean_57,
+            }
+            if tc_s == "SUCCESS" or raw_content:
+                scraped_pending.append(item)
+            else:
+                unscraped_pending.append(item)
+
+        combined = scraped_pending + unscraped_pending
+        cap = min(max_cap, self.MAX_CUMULATIVE_BACKLOG)
+        return combined[:cap]
+
+    def _build_57_row_from_item(self, item: Dict[str, Any], cache: Any = None) -> List[str]:
+        base = item.get("row_57")
+        if isinstance(base, list) and len(base) >= 17:
+            row = [str(x) if x is not None else "" for x in base[:57]]
+            if len(row) < 57:
+                row.extend([""] * (57 - len(row)))
+        else:
+            row = [""] * 57
+
+        domain = str(item.get("domain", "") or row[0]).strip()
+        raw_data = str(item.get("raw_content", "") or "").strip()
+        tc_job_id = str(item.get("tc_job_id", "") or row[IDX_TC_JOB_ID]).strip()
+        row[0] = domain
+        if tc_job_id:
+            row[IDX_TC_JOB_ID] = tc_job_id
+        if tc_job_id or raw_data:
+            row[IDX_TC_STATUS] = "SUCCESS"
+        if raw_data:
+            row[IDX_RAW_DATA] = "Raw Data Appended - csv only"
+            if cache is not None and domain:
+                try:
+                    cache.save_record(domain, {
+                        "tc_job_id": tc_job_id,
+                        "tc_status": "SUCCESS",
+                        "scrappingBeautySoup": raw_data[:49500],
+                    })
+                except Exception as ce:
+                    logger.warning(f"Could not hydrate carry-over raw data to cache for {domain}: {ce}")
+        return row
+
+    def append_backlog_to_sheet_or_csv(
         self,
         gspread_client: Any,
         sheet_id: str,
         sheet_name: str,
-        max_cap: int = MAX_CUMULATIVE_BACKLOG,
+        sheet_dir: Optional[str] = None,
+        cache: Any = None,
+        max_cap: int = MAX_PER_SHEET_BACKLOG,
     ) -> int:
         """
-        Appends up to max_cap backlog domains to the end of the new daily sheet.
+        Appends up to max_cap carry-over backlog domains in exact 57-col format
+        to either Google Sheet or local_sheet.csv (when CSV-only mode is active).
         """
         items_to_inject = self.get_backlog_for_injection(max_cap=max_cap)
         if not items_to_inject:
             logger.info("No scraped backlog domains available to append.")
             return 0
 
+        use_csv_only = (bool(sheet_dir) and is_csv_only_mode(sheet_dir)) or (gspread_client is None)
+        existing_domains = set()
+
+        if use_csv_only and sheet_dir:
+            local_csv = os.path.join(sheet_dir, "local_sheet.csv")
+            if os.path.exists(local_csv):
+                try:
+                    with open(local_csv, "r", encoding="utf-8", newline="", errors="ignore") as f:
+                        for r in csv.reader(f):
+                            if r and r[0]:
+                                existing_domains.add(normalize_domain(r[0]))
+                except Exception:
+                    pass
+            filtered_items = [it for it in items_to_inject if normalize_domain(it.get("domain", "")) not in existing_domains]
+            append_rows = [self._build_57_row_from_item(it, cache=cache) for it in filtered_items]
+            if append_rows:
+                with open(local_csv, "a", encoding="utf-8", newline="") as f:
+                    csv.writer(f).writerows(append_rows)
+                logger.info(f"📂 [CSV-Only] Appended {len(append_rows)} carry-over backlog domains to {local_csv}")
+            self.clear_injected(items_to_inject)
+            return len(append_rows)
+
         try:
             spreadsheet = gspread_client.open_by_key(sheet_id)
             worksheet = spreadsheet.worksheet(sheet_name)
-            all_vals = worksheet.get_all_values()
-            last_row = len(all_vals)
+            col_a = worksheet.col_values(1)
+            for v in col_a[2:]:
+                nd = normalize_domain(v)
+                if nd:
+                    existing_domains.add(nd)
+            last_row = max(2, len(col_a))
 
-            # Build rows to append. Column 1: Domain, Col 24 (index 23): tc_job_id, Col 32 (index 31): raw_content
-            append_rows = []
-            for item in items_to_inject:
-                domain = item.get("domain", "")
-                raw_data = item.get("raw_content", "")
-                tc_job_id = item.get("tc_job_id", "")
-                row = [""] * 62
-                row[0] = domain
-                if tc_job_id:
-                    row[23] = tc_job_id
-                    row[25] = "SUCCESS"
-                if raw_data:
-                    row[31] = raw_data[:49500]
-                append_rows.append(row)
-
-            start_row = last_row + 1
-            from common.local_cache import safe_str
-            # Batch update worksheet
-            worksheet.update(f"A{start_row}:BJ{start_row + len(append_rows) - 1}", append_rows)
-            logger.info(f"Appended {len(append_rows)} backlog domains to {sheet_name} starting at row {start_row}")
+            filtered_items = [it for it in items_to_inject if normalize_domain(it.get("domain", "")) not in existing_domains]
+            append_rows = [self._build_57_row_from_item(it, cache=cache) for it in filtered_items]
+            if append_rows:
+                start_row = last_row + 1
+                end_row = start_row + len(append_rows) - 1
+                if getattr(worksheet, "row_count", 0) < end_row + 5:
+                    worksheet.resize(rows=end_row + 10, cols=57)
+                CHUNK = 500
+                for idx in range(0, len(append_rows), CHUNK):
+                    chunk = append_rows[idx : idx + CHUNK]
+                    cs = start_row + idx
+                    ce = cs + len(chunk) - 1
+                    worksheet.update(range_name=f"A{cs}:BE{ce}", values=chunk)
+                logger.info(f"Appended {len(append_rows)} 57-col carry-over backlog domains to {sheet_name} at row {start_row}")
 
             self.clear_injected(items_to_inject)
             return len(append_rows)
         except Exception as e:
             logger.error(f"Failed to append backlog domains to sheet {sheet_id}: {e}")
             return 0
+
+    async def append_backlog_to_sheet(
+        self,
+        gspread_client: Any,
+        sheet_id: str,
+        sheet_name: str,
+        max_cap: int = MAX_CUMULATIVE_BACKLOG,
+        sheet_dir: Optional[str] = None,
+        cache: Any = None,
+    ) -> int:
+        return self.append_backlog_to_sheet_or_csv(
+            gspread_client=gspread_client,
+            sheet_id=sheet_id,
+            sheet_name=sheet_name,
+            sheet_dir=sheet_dir,
+            cache=cache,
+            max_cap=max_cap,
+        )
