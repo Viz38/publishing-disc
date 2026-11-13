@@ -20,6 +20,7 @@ IDX_NIM_SUMMARY = 35           # Col AJ
 IDX_GEMINI_IF = 37             # Col AL
 IDX_GEMINI_FEED = 43           # Col AR
 IDX_PUB_FUNNEL_NAME = 46       # Col AU
+IDX_PUB_FUNNEL_ID = 47         # Col AV
 IDX_CF_IF_STATUS = 49          # Col AX
 IDX_IF_PF_STATUS = 51          # Col AZ
 
@@ -73,6 +74,7 @@ def hydrate_row_from_cache(
         ("output_data_if", IDX_GEMINI_IF),
         ("output_data_feed", IDX_GEMINI_FEED),
         ("final_pub_funnel_name", IDX_PUB_FUNNEL_NAME),
+        ("final_pub_funnel_id", IDX_PUB_FUNNEL_ID),
         ("cf_if_status", IDX_CF_IF_STATUS),
         ("if_pf_status", IDX_IF_PF_STATUS),
     )
@@ -80,12 +82,14 @@ def hydrate_row_from_cache(
         cval = str(rec.get(key, "") or "").strip()
         if cval and not padded[idx].strip():
             padded[idx] = cval
-        elif key in ("final_pub_funnel_name", "cf_if_status", "if_pf_status") and cval:
+        elif key in ("final_pub_funnel_name", "final_pub_funnel_id", "cf_if_status", "if_pf_status") and cval:
             # Prefer terminal/DONE cache status when cache has progressed past an in-progress row value
             c_up = cval.upper()
             p_up = padded[idx].strip().upper()
             if not p_up or (c_up == "DONE" and p_up != "DONE") or (
                 key == "final_pub_funnel_name" and cval.lower().startswith("publishing funnel")
+            ) or (
+                key == "final_pub_funnel_id" and cval
             ):
                 padded[idx] = cval
     return padded
@@ -111,7 +115,7 @@ def extract_eligible_domain_records(
     cache_map: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> List[List[str]]:
     """
-    Returns deduplicated [[domain, domain_profile_id, publish_funnel_name], ...]
+    Returns deduplicated [[domain, domain_profile_id, publish_funnel_name, publish_funnel_id], ...]
     for all rows eligible to move to the next department.
     """
     seen = set()
@@ -131,6 +135,7 @@ def extract_eligible_domain_records(
             dom,
             row[IDX_PROFILE_ID].strip(),
             row[IDX_PUB_FUNNEL_NAME].strip(),
+            row[IDX_PUB_FUNNEL_ID].strip() if len(row) > IDX_PUB_FUNNEL_ID else "",
         ])
     return records
 

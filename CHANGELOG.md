@@ -1,6 +1,20 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-13] Add Publish Funnel ID (Col AV) to Daily Processing Sheet Export
+Files changed:
+- common/dashboard_metrics.py
+- common/daily_eligible_exporter.py
+- Temp_Test/test_eligible_next_dept_and_daily_export.py
+- Google Sheet `1DCKvQcAQgTKGnWquYNOH6SlGgCun8yq8HD8Zj0AIJ-Y` (Col E)
+Reason:
+1. Backfilled `Publish Funnel ID` (Col AV / index 47 in the 57-column master schema) into Column E for all 35,717 domains in the Daily Processing sheet (`1DCKvQcAQgTKGnWquYNOH6SlGgCun8yq8HD8Zj0AIJ-Y`), with header `E3 = "Publish Funnel ID"`.
+2. Updated `common/dashboard_metrics.py` to define `IDX_PUB_FUNNEL_ID = 47`, include `("final_pub_funnel_id", IDX_PUB_FUNNEL_ID)` in cache hydration, and return 4-element tuples `[domain, profile_id, pub_funnel_name, pub_funnel_id]` in `extract_eligible_domain_records()`.
+3. Updated `common/daily_eligible_exporter.py` (`export_eligible_domains_to_gsheet` and `collect_fleet_eligible_records`) to clear `B4:E`, maintain header row `B3:E3` including `"Publish Funnel ID"`, and write 4 columns `B{start}:E{end}` in rate-limited chunks of 2,500 during automated 12:00 AM IST daily exports.
+Related tests:
+- Temp_Test/test_eligible_next_dept_and_daily_export.py (7 passed)
+
+
 ## [2026-11-12] Streamline Gemini Terminal IF Categories (22 MARKED_IRRELEVANT & 23 ESCALATED)
 Files changed:
 - common/pipeline_engine.py

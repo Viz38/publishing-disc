@@ -34,7 +34,7 @@ def save_sheet_eligible_snapshot(
     records: List[List[str]],
     snapshot_date: str,
 ) -> str:
-    """Atomically persists per-sheet eligible [domain, profile_id, pub_funnel_name] before midnight clear."""
+    """Atomically persists per-sheet eligible [domain, profile_id, pub_funnel_name, pub_funnel_id] before midnight clear."""
     path = get_snapshot_filepath(sheet_dir, snapshot_date)
     payload = {
         "date": snapshot_date,
@@ -119,8 +119,9 @@ def export_eligible_domains_to_gsheet(
     gid: int = DAILY_PROCESSING_GID,
 ) -> int:
     """
-    Clears B4:D on Discovery Daily Processing sheet, updates B1 with DD MMM YYYY in red text,
-    and writes [Domain, Domain Profile ID, Publish Funnel Name] starting at Row 4 (B4:D).
+    Clears B4:E on Discovery Daily Processing sheet, updates B1 with DD MMM YYYY in red text,
+    ensures B3:E3 headers, and writes [Domain, Domain Profile ID, Publish Funnel Name, Publish Funnel ID]
+    starting at Row 4 (B4:E).
     """
     if updated_dt is None:
         dt = get_now_ist()
@@ -142,7 +143,8 @@ def export_eligible_domains_to_gsheet(
         seen.add(nd)
         prof_id = str(r[1]).strip() if len(r) > 1 and r[1] is not None else ""
         funnel_name = str(r[2]).strip() if len(r) > 2 and r[2] is not None else ""
-        clean_rows.append([dom, prof_id, funnel_name])
+        funnel_id = str(r[3]).strip() if len(r) > 3 and r[3] is not None else ""
+        clean_rows.append([dom, prof_id, funnel_name, funnel_id])
 
     ss = gc.open_by_key(spreadsheet_id)
     try:
@@ -156,7 +158,14 @@ def export_eligible_domains_to_gsheet(
     if isinstance(cur_rows, int) and 0 < cur_rows < needed_rows:
         ws.resize(rows=needed_rows, cols=max(5, cur_cols if isinstance(cur_cols, int) else 5))
 
-    ws.batch_clear(["B4:D"])
+    ws.batch_clear(["B4:E"])
+
+    # Ensure header row 3 has all 4 columns
+    ws.update(
+        range_name="B3:E3",
+        values=[["Domains", "Domain Profile ID", "Publish Funnel Name", "Publish Funnel ID"]],
+        value_input_option="USER_ENTERED",
+    )
 
     # Update B1 date in DD MMM YYYY with red text (#FF0000)
     ws.update(range_name="B1", values=[[date_str]], value_input_option="USER_ENTERED")
@@ -180,7 +189,7 @@ def export_eligible_domains_to_gsheet(
             chunk = clean_rows[idx : idx + CHUNK]
             start_r = 4 + idx
             end_r = start_r + len(chunk) - 1
-            ws.update(range_name=f"B{start_r}:D{end_r}", values=chunk, value_input_option="RAW")
+            ws.update(range_name=f"B{start_r}:E{end_r}", values=chunk, value_input_option="RAW")
             if idx + CHUNK < len(clean_rows):
                 time.sleep(0.5)
 
@@ -217,6 +226,7 @@ def collect_fleet_eligible_records(
                     str(r[0]).strip(),
                     str(r[1]).strip() if len(r) > 1 and r[1] is not None else "",
                     str(r[2]).strip() if len(r) > 2 and r[2] is not None else "",
+                    str(r[3]).strip() if len(r) > 3 and r[3] is not None else "",
                 ])
 
     if local_records is not None:
