@@ -1,6 +1,22 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-13] Fix Tech Crawler Periodic Recheck NameError & Restore Waterfall Scraper Fallback Execution
+Files changed:
+- common/__init__.py
+- common/pipeline_engine.py
+- Temp_Test/test_tc_recheck_and_waterfall_fix.py
+Reason:
+1. Exported `extract_tc_error_details` from `common.tech_crawler` in `common/__init__.py` and imported it in `common/pipeline_engine.py`, resolving the critical `NameError: name 'extract_tc_error_details' is not defined` that caused the startup sweep and 30-minute recheck task to fail on non-success crawl statuses.
+2. Un-nested the `# 4. Mandatory Waterfall Scraper Fallback` block in `Integrated_Process_domain` out of the `else:` branch, ensuring Waterfall Scraper (`WaterfallScraper().scrape_domain()`) actually executes on all domains where `home_body` is empty (< 50 chars), including when `tc_error_code` or `tc_error_reason` is set.
+3. Updated `is_eligible_for_tc_30min_recheck()` to treat rows stamped with `"extract_tc_error_details"` in Col AH as unclassified and eligible for rechecking.
+4. Updated `reconcile_existing_tech_crawler_jobs()` to properly retain `< 3-hour` in-flight jobs in `pending_tech_crawler_jobs` (returning `("RETAIN", ...)`), preventing them from being prematurely marked `FAILED` before their 3-hour crawl window expires.
+5. Cleared `tc_error_code` and `tc_error_reason` in `Integrated_Process_domain` when Waterfall Scraper successfully recovers a domain.
+Related tests:
+- Temp_Test/test_tc_recheck_and_waterfall_fix.py (4 passed)
+- Temp_Test/test_final_publish_and_sameas_filter.py (3 passed)
+- Temp_Test/test_eligible_next_dept_and_daily_export.py (7 passed)
+
 ## [2026-11-13] Pre-Export Live Tracxn API Check for Published and SameAs Status
 Files changed:
 - common/domain_filter_validator.py

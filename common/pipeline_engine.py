@@ -48,6 +48,7 @@ from common import (
     is_nim_dead_domain,
     is_57_col_schema,
     is_valid_s3_url,
+    extract_tc_error_details,
     bulk_sync_cache_to_sheet,
     clean_tc_markdown,
 )
@@ -428,6 +429,10 @@ def is_eligible_for_tc_30min_recheck(row: list, active_waterfall_in_flight: Opti
 
     col_ag = str(row[32]).strip() if len(row) > 32 else ""
     col_ah = str(row[33]).strip() if len(row) > 33 else ""
+    # If Col AH contains the transient agent NameError, treat as unclassified so it can be rechecked
+    if "extract_tc_error_details" in col_ah:
+        col_ag = ""
+        col_ah = ""
     if col_ag or col_ah:
         return False
 
@@ -4480,28 +4485,30 @@ async def Integrated_Process_domain(
                         if home_body and len(home_body.strip()) >= 50:
                             scrappingBeautySoup = home_body
 
-                # 4. Mandatory Waterfall Scraper Fallback:
-                # If home_body is still empty or unusable (whether TC was in PROCESSING, FAILED, or SUCCESS with empty S3),
-                # Waterfall Scraper MUST attempt scraping at least once!
-                if not home_body or len(home_body.strip()) < 50:
-                    logging.info(
-                        f"Tech Crawler yielded no usable raw data for {domain} (TC Status: {tc_status}). "
-                        "Executing mandatory Waterfall Scraper fallback..."
-                    )
-                    waterfall_scraper = WaterfallScraper()
-                    wf_body, scrape_method = await waterfall_scraper.scrape_domain(session, domain)
-                    if wf_body and len(wf_body.strip()) >= 50:
-                        home_body = wf_body
-                        scrappingBeautySoup = wf_body
-                        tc_status = "SUCCESS"
-                        tc_signals = f"WATERFALL_{scrape_method}"
-                        logging.info(f"✅ Waterfall Scraper recovered {domain} via {scrape_method} (length: {len(home_body)})")
-                    else:
-                        home_body = ""
-                        scrappingBeautySoup = ""
-                        tc_status = "FAILED"
-                        tc_signals = f"WATERFALL_FAILED_{scrape_method}"
-                        logging.warning(f"❌ Both Tech Crawler and Waterfall Scraper failed for {domain} ({scrape_method}). Marking Phase 1 FAILED.")
+            # 4. Mandatory Waterfall Scraper Fallback:
+            # If home_body is still empty or unusable (whether TC was skipped due to AG/AH, in PROCESSING, FAILED, or SUCCESS with empty S3),
+            # Waterfall Scraper MUST attempt scraping at least once!
+            if not home_body or len(home_body.strip()) < 50:
+                logging.info(
+                    f"Tech Crawler yielded no usable raw data for {domain} (TC Status: {tc_status}). "
+                    "Executing mandatory Waterfall Scraper fallback..."
+                )
+                waterfall_scraper = WaterfallScraper()
+                wf_body, scrape_method = await waterfall_scraper.scrape_domain(session, domain)
+                if wf_body and len(wf_body.strip()) >= 50:
+                    home_body = wf_body
+                    scrappingBeautySoup = wf_body
+                    tc_status = "SUCCESS"
+                    tc_signals = f"WATERFALL_{scrape_method}"
+                    tc_error_code = ""
+                    tc_error_reason = ""
+                    logging.info(f"✅ Waterfall Scraper recovered {domain} via {scrape_method} (length: {len(home_body)})")
+                else:
+                    home_body = ""
+                    scrappingBeautySoup = ""
+                    tc_status = "FAILED"
+                    tc_signals = f"WATERFALL_FAILED_{scrape_method}"
+                    logging.warning(f"❌ Both Tech Crawler and Waterfall Scraper failed for {domain} ({scrape_method}). Marking Phase 1 FAILED.")
 
             body_results = home_body if home_body else ""
 
@@ -5063,10 +5070,22 @@ async def reconcile_existing_tech_crawler_jobs(
                                 ]
                                 return ("SUCCESS", r_num, sheet_slice, row_data)
 
-                    # Extract error details
+                    # If still in PROCESSING and not yet timed out (< 3 hours old):
+                    # Retain in pending_tech_crawler_jobs for periodic monitoring loop
+                    if status in ("", "PROCESSING") and not is_over_3hr:
+                        return ("RETAIN", r_num, None, {
+                            "domain": domain,
+                            "row": r_num,
+                            "tc_job_id": job_id,
+                            "tc_job_gen_time": tc_job_gen_time,
+                            "created_timestamp": c_ts,
+                            "rowData": row_data
+                        })
+
+                    # Otherwise, job is terminal FAILED or has timed out (>= 3 hours):
                     err_c, err_r = extract_tc_error_details(track_res)
                     err_code = err_c or "FAILED"
-                    err_reason = err_r or "NO_USABLE_CONTENT"
+                    err_reason = err_r or ("TIMEOUT_3HR" if is_over_3hr else "NO_USABLE_CONTENT")
                     row_data[20] = "DONE"
                     row_data[23] = "FAILED"
                     row_data[32] = err_code
