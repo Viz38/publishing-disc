@@ -14,6 +14,7 @@ from common.dashboard_metrics import (
     load_local_sheet_rows,
     normalize_domain,
 )
+from common.domain_filter_validator import filter_unpublished_non_sameas_domains
 from common.gsheet_circuit_breaker import is_csv_only_mode
 from common.local_cache import IST_TZ, get_now_ist
 
@@ -117,11 +118,12 @@ def export_eligible_domains_to_gsheet(
     updated_dt: Optional[datetime.datetime] = None,
     spreadsheet_id: str = DAILY_PROCESSING_SHEET_ID,
     gid: int = DAILY_PROCESSING_GID,
+    verify_live_tracxn: bool = True,
 ) -> int:
     """
     Clears B4:E on Discovery Daily Processing sheet, updates B1 with DD MMM YYYY in red text,
-    ensures B3:E3 headers, and writes [Domain, Domain Profile ID, Publish Funnel Name, Publish Funnel ID]
-    starting at Row 4 (B4:E).
+    ensures B3:E3 headers, runs live Tracxn API check to exclude published & sameAs domains,
+    and writes [Domain, Domain Profile ID, Publish Funnel Name, Publish Funnel ID] starting at Row 4 (B4:E).
     """
     if updated_dt is None:
         dt = get_now_ist()
@@ -131,6 +133,22 @@ def export_eligible_domains_to_gsheet(
         dt = updated_dt.astimezone(IST_TZ)
 
     date_str = dt.strftime("%d %b %Y")
+
+    # Live Tracxn API validation: verify published & sameAs status directly from platform API
+    cand_domains = [str(r[0]).strip() for r in records if r and str(r[0] or "").strip()]
+    accepted_domains = None
+    if verify_live_tracxn and cand_domains:
+        try:
+            accepted_domains, rejected = filter_unpublished_non_sameas_domains(cand_domains)
+            pub_cnt = sum(1 for r in rejected.values() if r == "published")
+            same_cnt = sum(1 for r in rejected.values() if r == "sameAs")
+            logger.info(
+                f"🛡️ [Live Tracxn API Check] Evaluated {len(cand_domains)} candidate domains: "
+                f"{len(accepted_domains)} accepted, {len(rejected)} excluded ({pub_cnt} published, {same_cnt} sameAs)"
+            )
+        except Exception as e:
+            logger.error(f"Error during live Tracxn API validation in daily export: {e}")
+
     clean_rows: List[List[str]] = []
     seen = set()
     for r in records:
@@ -139,6 +157,8 @@ def export_eligible_domains_to_gsheet(
         dom = str(r[0]).strip()
         nd = normalize_domain(dom)
         if not nd or nd in seen:
+            continue
+        if accepted_domains is not None and nd not in accepted_domains:
             continue
         seen.add(nd)
         prof_id = str(r[1]).strip() if len(r) > 1 and r[1] is not None else ""

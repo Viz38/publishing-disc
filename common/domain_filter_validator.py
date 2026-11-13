@@ -89,6 +89,47 @@ def is_domain_leaked(item: Dict[str, Any]) -> Tuple[bool, str]:
     return False, ""
 
 
+def is_domain_published_or_sameas(item: Dict[str, Any]) -> Tuple[bool, str]:
+    """
+    Evaluates a single Tracxn company/domain item dictionary for publish and sameAs status.
+    Returns:
+        (True, "published") if status, companyPublishStatus, or globalPublishedStatus is PUBLISHED.
+        (True, "sameAs") if sameAs is present and non-empty.
+        (False, "") if clean/unpublished and not sameAs.
+    """
+    if not isinstance(item, dict):
+        return False, ""
+
+    # 1. Criteria 1: sameAs == yes (aliased or redirect domain)
+    s_as = item.get("sameAs")
+    if s_as is not None:
+        if isinstance(s_as, (dict, list)):
+            if len(s_as) > 0:
+                return True, "sameAs"
+        elif isinstance(s_as, bool):
+            if s_as is True:
+                return True, "sameAs"
+        elif isinstance(s_as, str):
+            clean_val = s_as.strip().lower()
+            if clean_val and clean_val not in ("no", "false", "null", "none", "t_null", ""):
+                return True, "sameAs"
+
+    # 2. Criteria 2: status == "PUBLISHED"
+    st = str(item.get("status") or "").strip().upper()
+    if st == "PUBLISHED":
+        return True, "published"
+
+    gst = str(item.get("globalPublishedStatus") or "").strip().upper()
+    if gst == "PUBLISHED":
+        return True, "published"
+
+    cst = str(item.get("companyPublishStatus") or "").strip().upper()
+    if cst == "PUBLISHED":
+        return True, "published"
+
+    return False, ""
+
+
 def _apply_validation_items(
     items: List[Dict[str, Any]],
     results: Dict[str, Tuple[bool, str]],
@@ -265,4 +306,163 @@ async def batch_validate_domains_async(
             await asyncio.gather(*tasks)
 
     return results
+
+
+def filter_unpublished_non_sameas_domains(
+    domains: List[str],
+    token: Optional[str] = None,
+    chunk_size: int = 100
+) -> Tuple[Set[str], Dict[str, str]]:
+    """
+    Queries live Tracxn API (dataset 'tracxn', fallback 'internal') to verify
+    exact publish and sameAs status for candidate domains.
+    Returns:
+        (accepted_domains_set, rejected_domains_dict {domain: reason})
+    """
+    if not domains:
+        return set(), {}
+
+    clean_domains = list(dict.fromkeys(d.strip().lower() for d in domains if d and d.strip()))
+    rejected: Dict[str, str] = {}
+    km, static_token = _get_key_manager_or_token(token)
+
+    def _query_dataset(chunk: List[str], dataset: str) -> Set[str]:
+        seen: Set[str] = set()
+        offset = 0
+        while True:
+            payload = {"dataset": dataset, "filter": {"domain": chunk}, "from": offset, "size": 100}
+            fetched_page = False
+            for _ in range(5):
+                tok = km.get_next_token() if km else static_token
+                if not tok:
+                    break
+                try:
+                    resp = requests.post(
+                        TRACXN_DOMAINS_API_URL,
+                        json=payload,
+                        headers=_build_tracxn_headers(tok),
+                        timeout=25
+                    )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        items = data.get("result", [])
+                        total = data.get("total_count", len(items))
+                        for it in items:
+                            dom = (it.get("domain") or it.get("name") or "").strip().lower()
+                            if not dom:
+                                continue
+                            seen.add(dom)
+                            is_bad, reason = is_domain_published_or_sameas(it)
+                            if is_bad and dom not in rejected:
+                                rejected[dom] = reason
+                        fetched_page = True
+                        if not items or offset + len(items) >= total:
+                            return seen
+                        offset += len(items)
+                        break
+                    if km:
+                        km.handle_http_error(tok, resp.status_code)
+                    logger.warning(f"Filter live API ({dataset}) status {resp.status_code}: {resp.text[:100]}")
+                    time.sleep(1.5 if resp.status_code == 429 else 0.5)
+                except Exception as e:
+                    logger.error(f"Filter live API ({dataset}) request exception: {e}")
+                    time.sleep(1.0)
+            if not fetched_page:
+                return seen
+
+    for i in range(0, len(clean_domains), chunk_size):
+        chunk = clean_domains[i:i + chunk_size]
+        seen_tracxn = _query_dataset(chunk, "tracxn")
+        missing = [d for d in chunk if d not in seen_tracxn]
+        if missing:
+            _query_dataset(missing, "internal")
+
+    accepted = set(clean_domains) - set(rejected.keys())
+    return accepted, rejected
+
+
+async def filter_unpublished_non_sameas_domains_async(
+    domains: List[str],
+    token: Optional[str] = None,
+    session: Optional[aiohttp.ClientSession] = None,
+    chunk_size: int = 100
+) -> Tuple[Set[str], Dict[str, str]]:
+    """
+    Asynchronously queries live Tracxn API to verify exact publish and sameAs status.
+    Returns:
+        (accepted_domains_set, rejected_domains_dict {domain: reason})
+    """
+    if not domains:
+        return set(), {}
+
+    clean_domains = list(dict.fromkeys(d.strip().lower() for d in domains if d and d.strip()))
+    rejected: Dict[str, str] = {}
+    lock = asyncio.Lock()
+    km, static_token = _get_key_manager_or_token(token)
+
+    async def _query_dataset_async(sess: aiohttp.ClientSession, chunk: List[str], dataset: str) -> Set[str]:
+        seen: Set[str] = set()
+        offset = 0
+        while True:
+            payload = {"dataset": dataset, "filter": {"domain": chunk}, "from": offset, "size": 100}
+            fetched_page = False
+            for _ in range(5):
+                tok = km.get_next_token() if km else static_token
+                if not tok:
+                    break
+                try:
+                    async with sess.post(
+                        TRACXN_DOMAINS_API_URL,
+                        json=payload,
+                        headers=_build_tracxn_headers(tok),
+                        timeout=aiohttp.ClientTimeout(total=25)
+                    ) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            items = data.get("result", [])
+                            total = data.get("total_count", len(items))
+                            async with lock:
+                                for it in items:
+                                    dom = (it.get("domain") or it.get("name") or "").strip().lower()
+                                    if not dom:
+                                        continue
+                                    seen.add(dom)
+                                    is_bad, reason = is_domain_published_or_sameas(it)
+                                    if is_bad and dom not in rejected:
+                                        rejected[dom] = reason
+                            fetched_page = True
+                            if not items or offset + len(items) >= total:
+                                return seen
+                            offset += len(items)
+                            break
+                        if km:
+                            km.handle_http_error(tok, resp.status)
+                        text = await resp.text()
+                        logger.warning(f"Async live filter ({dataset}) status {resp.status}: {text[:100]}")
+                        await asyncio.sleep(1.5 if resp.status == 429 else 0.5)
+                except Exception as e:
+                    logger.error(f"Async live filter ({dataset}) error: {e}")
+                    await asyncio.sleep(1.0)
+            if not fetched_page:
+                return seen
+
+    async def _check_chunk(sess: aiohttp.ClientSession, chunk: List[str]):
+        seen_tracxn = await _query_dataset_async(sess, chunk, "tracxn")
+        missing = [d for d in chunk if d not in seen_tracxn]
+        if missing:
+            await _query_dataset_async(sess, missing, "internal")
+
+    chunks = [clean_domains[i:i + chunk_size] for i in range(0, len(clean_domains), chunk_size)]
+    if session is not None:
+        tasks = [_check_chunk(session, c) for c in chunks]
+        await asyncio.gather(*tasks)
+    else:
+        connector = aiohttp.TCPConnector(limit=10)
+        async with aiohttp.ClientSession(connector=connector) as new_session:
+            tasks = [_check_chunk(new_session, c) for c in chunks]
+            await asyncio.gather(*tasks)
+
+    accepted = set(clean_domains) - set(rejected.keys())
+    return accepted, rejected
+
 

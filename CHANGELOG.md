@@ -1,6 +1,20 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-13] Pre-Export Live Tracxn API Check for Published and SameAs Status
+Files changed:
+- common/domain_filter_validator.py
+- common/daily_eligible_exporter.py
+- Temp_Test/test_final_publish_and_sameas_filter.py
+Reason:
+1. Implemented `is_domain_published_or_sameas()` and `filter_unpublished_non_sameas_domains()` (with both sync and async variants) in `common/domain_filter_validator.py` to query Tracxn's live API (`https://platform.tracxn.com/api/2.2/domains`) directly with active token rotation across `TracxnKeyManager`.
+2. Verified live publish status (`status`, `companyPublishStatus`, `globalPublishedStatus` == `"PUBLISHED"`) and `sameAs` alias/redirect status directly from Tracxn's database (completely bypassing sheet columns), without rejecting accepted leads based on feed assignments.
+3. Integrated this live Tracxn API check as a mandatory pre-export gate inside `export_eligible_domains_to_gsheet()` in `common/daily_eligible_exporter.py`, ensuring all future 12:00 AM IST daily exports write only verified unpublished and non-sameAs domains to the Discovery Daily Processing sheet (`1DCKvQcAQgTKGnWquYNOH6SlGgCun8yq8HD8Zj0AIJ-Y`).
+Related tests:
+- Temp_Test/test_final_publish_and_sameas_filter.py (3 passed)
+- Temp_Test/test_eligible_next_dept_and_daily_export.py (7 passed)
+
+
 ## [2026-11-13] Add Publish Funnel ID (Col AV) to Daily Processing Sheet Export
 Files changed:
 - common/dashboard_metrics.py
