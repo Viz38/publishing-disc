@@ -175,10 +175,11 @@ def export_eligible_domains_to_gsheet(
     needed_rows = max(1000, len(clean_rows) + 10)
     cur_rows = getattr(ws, "row_count", 0)
     cur_cols = getattr(ws, "col_count", 5)
-    if isinstance(cur_rows, int) and 0 < cur_rows < needed_rows:
-        ws.resize(rows=needed_rows, cols=max(5, cur_cols if isinstance(cur_cols, int) else 5))
+    max_clear_row = max(cur_rows if isinstance(cur_rows, int) else 0, needed_rows, 50000)
+    ws.batch_clear([f"B4:E{max_clear_row}"])
 
-    ws.batch_clear(["B4:E"])
+    if isinstance(cur_rows, int) and cur_rows != needed_rows:
+        ws.resize(rows=needed_rows, cols=max(5, cur_cols if isinstance(cur_cols, int) else 5))
 
     # Ensure header row 3 has all 4 columns
     ws.update(

@@ -1,6 +1,35 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-14] Fix Daily Eligible Exporter Stranded Cells and Resizing on Sheet Grid
+Files changed:
+- common/daily_eligible_exporter.py
+- Google Sheet: https://docs.google.com/spreadsheets/d/1DCKvQcAQgTKGnWquYNOH6SlGgCun8yq8HD8Zj0AIJ-Y/edit (Discovery Daily Processing)
+Reason:
+1. Replaced unbounded Google Sheets batchClear range ("B4:E") with explicit row-bounded range (B4:E{max_clear_row}), ensuring that when an export has fewer rows than the preceding day, trailing rows from prior runs (e.g. Column E Publish Funnel ID) are completely purged.
+2. Added bidirectional sheet grid resizing (ws.resize(rows=needed_rows)) so the sheet grid automatically shrinks or expands to match the exact row count of newly exported domains plus header rows.
+3. Cleaned 1,012 trailing leftover Column E cells and resized Discovery Daily Processing sheet to exactly 34,715 rows (34,705 domains for 14 Nov 2026).
+4. Deployed patched exporter to production worker hosts Desktop-5080 and Desktop-5321.
+Related tests:
+- Temp_Test/investigate_nov13_14_counts.py (verified 35,717 on 13 Nov, 34,705 on 14 Nov across fleet nodes)
+
+## [2026-11-13] Bright Data Set 2 Google Sheet Deduplication and Full 100,728 Reconciliation
+Files changed:
+- Google Sheet: https://docs.google.com/spreadsheets/d/1wQmFXAcAfb8bEHSoSqfn4yenzSI8dKdv9kmv6rbNpbM/edit (Bright Data Set 2)
+  - Worksheets: Rejected, Stuck at Disc, Failed (Success & Summary preserved)
+- Temp_Test/upload_bd_100728_sheets.py
+- Temp_Test/verify_final_live_workbook.py
+Reason:
+1. Reconciled all 100,728 unique Bright Data Set 2 domains across the 4 workbook categories without altering Summary sheet structure or formulas.
+2. Removed 458 duplicate rows in Rejected tab that were incorrectly assigned from Stuck at Disc (ToPublish Funnel destinations), bringing Stuck at Disc to exactly 2,814 unique domains.
+3. Updated Rejected tab with all 5,015 unique domains matching rejection criteria (MARKED_IRRELEVANT, ESCALATED, or feed/funnel 22/23), formatted to exact 49-column schema (Cols A-AW).
+4. Updated Stuck at Disc tab with all 2,814 unique domains (moved to ToPublish Funnel or CF done without PF done), formatted to exact 49-column schema (Cols A-AW).
+5. Updated Failed tab with all 3,873 unique scraper failure domains, formatted to exact 34-column schema (Cols A-AH).
+6. Preserved Success tab with all 89,026 completed domains intact across 59 columns.
+7. Verified zero cross-tab overlaps and zero internal duplicates across the workbook, with the grand total summing to exactly 100,728 domains.
+Related tests:
+- Temp_Test/verify_final_live_workbook.py (all assertions passed, 100,728 verified)
+
 ## [2026-11-13] Fix Tech Crawler Periodic Recheck NameError & Restore Waterfall Scraper Fallback Execution
 Files changed:
 - common/__init__.py
