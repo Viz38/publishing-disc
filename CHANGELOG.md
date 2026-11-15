@@ -1,6 +1,16 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-15] Support Graceful Fallback for Missing or Expired Gemini Cache ID
+Files changed:
+- common/pipeline_engine.py
+Reason:
+1. Updated startup cache ID check in `Integrated_Process_domain` to inspect if an active cache ID exists in the Config Sheet and is marked 'Success'.
+2. If active, the engine utilizes cached prompt inference; if missing or inactive, it logs a warning and seamlessly proceeds with direct `Gemini_API_ASYNC` predictions instead of prematurely aborting execution with `return`.
+3. Ensures continuous operation while the background `Cache Poller` watches for newly generated cache IDs and hot-reloads them dynamically.
+Related tests:
+- Temp_Test/test_cache_id_fallback.py (verified fallback logic and active detection)
+
 ## [2026-11-15] Fix TracxnKeyManager and NIMKeyManager Lock Reentrancy Deadlock
 Files changed:
 - common/key_manager.py

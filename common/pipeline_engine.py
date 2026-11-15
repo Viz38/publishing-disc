@@ -6887,11 +6887,12 @@ async def _run_pipeline_core(start_row: int = None, mode: str = None, sheet_id: 
         exp_date_IF_Prediction = run_cfg.get("exp_date_IF_Prediction")
 
         logging.info("***************** IF Prediction - Cache ID Retrieved *******************")
-        logging.info(f"Cache ID: {cache_id_IF_Prediction}")
+        logging.info(f"Cache ID: {cache_id_IF_Prediction} (Status: {status_IF_Prediction}, Date: {date_IF_Prediction})")
         
-        if not cache_id_IF_Prediction:
-            logging.warning("Cache ID not found. Stopping pipeline execution.")
-            return
+        if cache_id_IF_Prediction and str(status_IF_Prediction).strip().lower() in ("sucess", "success"):
+            logging.info(f"✅ Active Gemini Cache ID found in Config Sheet: {cache_id_IF_Prediction}. Will utilize cached prompt inference.")
+        else:
+            logging.warning("⚠️ No valid/active Cache ID in Config Sheet. Seamlessly continuing with direct Gemini_API_ASYNC predictions (Cache Poller will hot-reload once populated).")
 
         # Config - Funnel Wise Prompts
         config_funnel_prompt = Return_Base_Prompt_FunnelWise(gc)
