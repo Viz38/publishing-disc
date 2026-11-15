@@ -1,6 +1,16 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-15] Fix TracxnKeyManager and NIMKeyManager Lock Reentrancy Deadlock
+Files changed:
+- common/key_manager.py
+Reason:
+1. Replaced non-reentrant `threading.Lock()` with `threading.RLock()` in `TracxnKeyManager` and `NIMKeyManager` to support safe reentrant acquisition by the same thread.
+2. Implemented `_get_next_token_unlocked(self, now=None)` in `TracxnKeyManager` and updated `acquire_sync()` and `acquire()` to call the unlocked helper when the lock is already held.
+3. Resolved the critical deadlock in Uvicorn API servers on production workers (e.g. ports 8771 and 8772 on Desktop-5321) where background `/fleet/generate-job-ids` encountered expired/invalid tokens (HTTP 401) and deadlocked the main event loop thread when acquiring a candidate token within `with self._lock:`.
+Related tests:
+- Temp_Test/test_key_manager_lock.py (verified reentrancy and async token acquisition without deadlocks)
+
 ## [2026-11-14] Fix Daily Eligible Exporter Stranded Cells and Resizing on Sheet Grid
 Files changed:
 - common/daily_eligible_exporter.py

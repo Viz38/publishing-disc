@@ -42,7 +42,7 @@ class TracxnKeyManager:
         self.max_rate_per_sec = max_rate_per_sec
         self.max_rate_per_min = max_rate_per_min
         self._call_history: Dict[str, deque] = defaultdict(deque)
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
     def get_active_tokens_count(self) -> int:
         now = time.time()
@@ -297,11 +297,11 @@ class TracxnKeyManager:
                     continue
 
             with self._lock:
+                now = time.time()
                 if tok in self.invalid_tokens or tok not in self.tokens:
-                    tok = self.get_next_token()
+                    tok = self._get_next_token_unlocked(now)
                     if not tok:
                         continue
-                now = time.time()
                 penalty_until = self._penalties.get(tok, 0)
                 if penalty_until > now:
                     wait_time = max(0.05, penalty_until - now)
@@ -354,11 +354,11 @@ class TracxnKeyManager:
                     continue
 
             with self._lock:
+                now = time.time()
                 if tok in self.invalid_tokens or tok not in self.tokens:
-                    tok = self.get_next_token()
+                    tok = self._get_next_token_unlocked(now)
                     if not tok:
                         continue
-                now = time.time()
                 penalty_until = self._penalties.get(tok, 0)
                 if penalty_until > now:
                     wait_time = max(0.05, penalty_until - now)
@@ -387,44 +387,51 @@ class TracxnKeyManager:
 
             await asyncio.sleep(min(wait_time, 0.5))
 
+    def _get_next_token_unlocked(self, now: Optional[float] = None) -> str:
+        """
+        Returns the next available token in round-robin order without acquiring lock.
+        Caller must hold self._lock.
+        """
+        if not self.tokens:
+            return ""
+
+        now = now if now is not None else time.time()
+        n = len(self.tokens)
+
+        # 1. Prefer unpenalized and unsaturated token
+        for _ in range(n):
+            token = self.tokens[self._index % n]
+            self._index = (self._index + 1) % n
+
+            if token not in self.invalid_tokens and self._penalties.get(token, 0) <= now:
+                self._prune_history(token, now)
+                q = self._call_history[token]
+                if len(q) < self.max_rate_per_min:
+                    calls_in_1s = sum(1 for t in reversed(q) if t > now - 1.0)
+                    if calls_in_1s < self.max_rate_per_sec:
+                        return token
+
+        # 2. Fallback to unpenalized (even if near saturation)
+        for _ in range(n):
+            token = self.tokens[self._index % n]
+            self._index = (self._index + 1) % n
+            if token not in self.invalid_tokens and self._penalties.get(token, 0) <= now:
+                return token
+
+        # 3. Fallback to earliest penalized valid token
+        valid_candidates = [t for t in self.tokens if t not in self.invalid_tokens]
+        if not valid_candidates:
+            return ""
+        earliest_token = min(valid_candidates, key=lambda t: self._penalties.get(t, 0))
+        return earliest_token
+
     def get_next_token(self) -> str:
         """
         Returns the next available token in round-robin order.
         Prioritizes tokens that are not penalized, not invalid, and not currently saturated.
         """
         with self._lock:
-            if not self.tokens:
-                return ""
-
-            now = time.time()
-            n = len(self.tokens)
-
-            # 1. Prefer unpenalized and unsaturated token
-            for _ in range(n):
-                token = self.tokens[self._index % n]
-                self._index = (self._index + 1) % n
-
-                if token not in self.invalid_tokens and self._penalties.get(token, 0) <= now:
-                    self._prune_history(token, now)
-                    q = self._call_history[token]
-                    if len(q) < self.max_rate_per_min:
-                        calls_in_1s = sum(1 for t in reversed(q) if t > now - 1.0)
-                        if calls_in_1s < self.max_rate_per_sec:
-                            return token
-
-            # 2. Fallback to unpenalized (even if near saturation)
-            for _ in range(n):
-                token = self.tokens[self._index % n]
-                self._index = (self._index + 1) % n
-                if token not in self.invalid_tokens and self._penalties.get(token, 0) <= now:
-                    return token
-
-            # 3. Fallback to earliest penalized valid token
-            valid_candidates = [t for t in self.tokens if t not in self.invalid_tokens]
-            if not valid_candidates:
-                return ""
-            earliest_token = min(valid_candidates, key=lambda t: self._penalties.get(t, 0))
-            return earliest_token
+            return self._get_next_token_unlocked()
 
     def get_token(self) -> str:
         return self.get_next_token()
@@ -490,7 +497,7 @@ class NIMKeyManager:
         self._in_flight: Dict[str, int] = {}
         self._last_used: Dict[str, float] = {}
         self._min_interval: float = 0.25  # seconds between calls on the SAME key
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._async_lock: Optional[asyncio.Lock] = None
         self._async_condition: Optional[asyncio.Condition] = None
 
