@@ -13,6 +13,7 @@ from common.daily_eligible_exporter import (
     DAILY_PROCESSING_SHEET_ID,
     collect_fleet_eligible_records,
     export_eligible_domains_to_gsheet,
+    export_fleet_eligible_sequential,
     load_sheet_eligible_snapshot,
     save_sheet_eligible_snapshot,
 )
@@ -140,22 +141,18 @@ async def coordinate_daily_eligible_export(
             logger.warning(f"Sheet3 HA fallback check failed: {ce}")
 
     try:
-        fleet_recs = await asyncio.to_thread(
-            collect_fleet_eligible_records,
+        exported_cnt = await asyncio.to_thread(
+            export_fleet_eligible_sequential,
+            gc=sync_gc,
             snapshot_date=snapshot_date,
             local_sheet_num=sheet_num,
             local_records=local_records,
-        )
-        exported_cnt = await asyncio.to_thread(
-            export_eligible_domains_to_gsheet,
-            sync_gc,
-            fleet_recs,
-            updated_dt=now_ist,
+            now_ist=now_ist,
         )
         with open(done_marker, "w") as mf:
             mf.write(f"exported={exported_cnt},date={expected_b1}")
         logger.info(
-            f"✅ [12:00 AM Export] Sheet{sheet_num} exported {exported_cnt} eligible fleet domains "
+            f"✅ [12:00 AM Export] Sheet{sheet_num} executed sequential export of {exported_cnt} eligible fleet domains "
             f"to {DAILY_PROCESSING_SHEET_ID} (B1={expected_b1})."
         )
         return True

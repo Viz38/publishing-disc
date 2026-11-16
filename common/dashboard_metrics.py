@@ -113,6 +113,7 @@ def is_row_eligible_for_next_dept(row: Sequence[Any]) -> bool:
 def extract_eligible_domain_records(
     rows: Iterable[Sequence[Any]],
     cache_map: Optional[Dict[str, Dict[str, Any]]] = None,
+    name_to_id_map: Optional[Dict[str, str]] = None,
 ) -> List[List[str]]:
     """
     Returns deduplicated [[domain, domain_profile_id, publish_funnel_name, publish_funnel_id], ...]
@@ -131,11 +132,15 @@ def extract_eligible_domain_records(
         if not norm_d or norm_d in seen:
             continue
         seen.add(norm_d)
+        pf_name = row[IDX_PUB_FUNNEL_NAME].strip()
+        pf_id = row[IDX_PUB_FUNNEL_ID].strip() if len(row) > IDX_PUB_FUNNEL_ID else ""
+        if not pf_id and pf_name and name_to_id_map and pf_name in name_to_id_map:
+            pf_id = name_to_id_map[pf_name]
         records.append([
             dom,
             row[IDX_PROFILE_ID].strip(),
-            row[IDX_PUB_FUNNEL_NAME].strip(),
-            row[IDX_PUB_FUNNEL_ID].strip() if len(row) > IDX_PUB_FUNNEL_ID else "",
+            pf_name,
+            pf_id,
         ])
     return records
 

@@ -1,6 +1,25 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-16] Sequential Sheet-by-Sheet Daily Export, 24hr Dynamic Gemini Cache Auto-Creation & Token Pruning
+Files changed:
+- common/daily_eligible_exporter.py
+- common/daily_lifecycle.py
+- common/dashboard_metrics.py
+- common/pipeline_engine.py
+- .env
+- Google Sheet: `1DCKvQcAQgTKGnWquYNOH6SlGgCun8yq8HD8Zj0AIJ-Y` (Discovery Daily Processing)
+- Google Sheet: `1JU-R-u4nV9azw43a4MqRM6OODsGwQmtcMu8OkB3dtlI` (Config Sheet)
+Reason:
+1. Implemented sequential sheet-by-sheet daily export (`export_fleet_eligible_sequential`): Sheet 1 completely clears the full sheet of all data, sets `B1` date in red, writes headers `B3:E3`, and writes Sheet 1's records starting at Row 4. Sheets 2, 3, and 4 append their respective deduplicated records in sequence.
+2. Backfilled 14,159 missing Publish Funnel IDs into Column E of `1DCKvQcAQgTKGnWquYNOH6SlGgCun8yq8HD8Zj0AIJ-Y` and added bulletproof `name_to_id` fallback in `dashboard_metrics.py` and `daily_eligible_exporter.py` ensuring no domain can ever be written with a blank Publish Funnel ID.
+3. Generated fresh 24hr Gemini Cache ID for Industry Funnel (`cachedContents/puv152mo9mvj4sx7ygeuva8iqd8f85gfghoorkk0`) and populated Config Sheet row 3. Added automatic dynamic 24hr cache creation fallback in `pipeline_engine.py` whenever an active Cache ID is missing or expired.
+4. Pruned 6 expired/revoked Tracxn tokens (returning HTTP 401) from `.env` across local, Desktop-5080, and Desktop-5321, leaving 9 fully verified active tokens.
+5. Restored daily advance pre-crawl crontab schedule to 11:05 PM IST (`5 23 * * *`) on both Desktop-5080 and Desktop-5321.
+Related tests:
+- Temp_Test/test_sequential_export.py (passed)
+- Temp_Test/test_eligible_next_dept_and_daily_export.py (7 passed)
+
 ## [2026-11-15] Support Graceful Fallback for Missing or Expired Gemini Cache ID
 Files changed:
 - common/pipeline_engine.py

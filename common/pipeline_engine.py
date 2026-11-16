@@ -6892,7 +6892,30 @@ async def _run_pipeline_core(start_row: int = None, mode: str = None, sheet_id: 
         if cache_id_IF_Prediction and str(status_IF_Prediction).strip().lower() in ("sucess", "success"):
             logging.info(f"✅ Active Gemini Cache ID found in Config Sheet: {cache_id_IF_Prediction}. Will utilize cached prompt inference.")
         else:
-            logging.warning("⚠️ No valid/active Cache ID in Config Sheet. Seamlessly continuing with direct Gemini_API_ASYNC predictions (Cache Poller will hot-reload once populated).")
+            logging.warning("⚠️ No valid/active Cache ID in Config Sheet. Attempting dynamic 24hr Gemini cache creation...")
+            gemini_tok = token_IF_Prediction or getattr(settings, "GEMINI_TOKEN", "") or getattr(settings, "GEMINI_API_KEY", "") or os.getenv("GEMINI_API_KEY", "")
+            if gemini_tok and if_pred_base_prompt:
+                try:
+                    new_cache_name = Create_Daily_Cache_Non_ASYNC(gemini_tok, if_pred_base_prompt)
+                    if new_cache_name:
+                        cache_id_IF_Prediction = new_cache_name
+                        status_IF_Prediction = "Success"
+                        now_ist = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=5, minutes=30)))
+                        date_IF_Prediction = now_ist.strftime("%d/%b/%Y %H:%M:%S")
+                        logging.info(f"🎉 Dynamically created 24hr Gemini Cache: {cache_id_IF_Prediction}")
+                        try:
+                            cfg_sheet = open_sheet_with_fallback(gc, Config_Sheet_ID)
+                            ws_bp = cfg_sheet.worksheet("Base_Prompt_FunnelWise (CF>>IF>>Feed)")
+                            ws_bp.update(range_name="F3", values=[[cache_id_IF_Prediction]], value_input_option="RAW")
+                            ws_bp.update(range_name="K3:M3", values=[["models/gemini-3.1-flash-lite", date_IF_Prediction, "Success"]], value_input_option="USER_ENTERED")
+                            ws_bp.update(range_name="Q3", values=[["Success"]], value_input_option="USER_ENTERED")
+                            logging.info("✅ Persisted dynamic Gemini Cache ID to Config Sheet row 3.")
+                        except Exception as persist_err:
+                            logging.warning(f"Failed persisting dynamic Cache ID to Config Sheet: {persist_err}")
+                except Exception as c_err:
+                    logging.error(f"Failed dynamic Gemini cache creation: {c_err}")
+            if not cache_id_IF_Prediction:
+                logging.warning("⚠️ Falling back to direct Gemini_API_ASYNC predictions (Cache Poller will hot-reload once populated).")
 
         # Config - Funnel Wise Prompts
         config_funnel_prompt = Return_Base_Prompt_FunnelWise(gc)

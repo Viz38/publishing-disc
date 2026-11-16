@@ -151,6 +151,7 @@ def export_eligible_domains_to_gsheet(
 
     clean_rows: List[List[str]] = []
     seen = set()
+    name_to_id = load_funnel_name_to_id_map(gc)
     for r in records:
         if not r or not str(r[0] or "").strip():
             continue
@@ -164,6 +165,8 @@ def export_eligible_domains_to_gsheet(
         prof_id = str(r[1]).strip() if len(r) > 1 and r[1] is not None else ""
         funnel_name = str(r[2]).strip() if len(r) > 2 and r[2] is not None else ""
         funnel_id = str(r[3]).strip() if len(r) > 3 and r[3] is not None else ""
+        if not funnel_id and funnel_name and funnel_name in name_to_id:
+            funnel_id = name_to_id[funnel_name]
         clean_rows.append([dom, prof_id, funnel_name, funnel_id])
 
     ss = gc.open_by_key(spreadsheet_id)
@@ -216,6 +219,193 @@ def export_eligible_domains_to_gsheet(
 
     logger.info(f"📤 Exported {len(clean_rows)} eligible domains to Daily Processing sheet ({spreadsheet_id}), B1={date_str}")
     return len(clean_rows)
+
+
+def load_funnel_name_to_id_map(gc: Any = None) -> Dict[str, str]:
+    if gc is None:
+        return {}
+    try:
+        from common.pipeline_engine import Return_Funnel_FeedWise
+        cfg = Return_Funnel_FeedWise(gc)
+        feed_map = cfg.get("FeedNumFunnelMap", {})
+        mapping = {}
+        for k, row in feed_map.items():
+            if len(row) > 6:
+                pf_name = str(row[5]).strip()
+                pf_id = str(row[6]).strip()
+                if pf_name and pf_id:
+                    mapping[pf_name] = pf_id
+        return mapping
+    except Exception as e:
+        logger.warning(f"Failed loading name_to_id map: {e}")
+        return {}
+
+
+def fetch_peer_sheet_records(
+    sheet_num: int,
+    snapshot_date: Optional[str] = None,
+    auth_token: Optional[str] = None,
+) -> List[List[str]]:
+    import requests
+    from common.fleet_orchestrator import get_node_url
+
+    token = auth_token or os.getenv("SERVICE_AUTH_TOKEN", "")
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    url = f"{get_node_url(sheet_num).rstrip('/')}/fleet/eligible-domains"
+    if snapshot_date:
+        url = f"{url}?date={snapshot_date}"
+    try:
+        resp = requests.get(url, headers=headers, timeout=30)
+        if resp.status_code == 200:
+            return resp.json().get("records", [])
+        else:
+            logger.warning(f"Peer Sheet{sheet_num} /fleet/eligible-domains returned HTTP {resp.status_code}")
+    except Exception as e:
+        logger.warning(f"Failed fetching eligible domains from Sheet{sheet_num} ({url}): {e}")
+
+    # Fallback to local disk snapshot file if accessible
+    if snapshot_date:
+        snap = load_sheet_eligible_snapshot(f"Sheet{sheet_num}", snapshot_date)
+        if snap:
+            logger.info(f"Loaded {len(snap)} records from local disk snapshot for Sheet{sheet_num}")
+            return snap
+    return []
+
+
+def export_fleet_eligible_sequential(
+    gc: Any,
+    snapshot_date: Optional[str] = None,
+    local_sheet_num: Optional[int] = None,
+    local_records: Optional[List[List[str]]] = None,
+    now_ist: Optional[datetime.datetime] = None,
+    spreadsheet_id: str = DAILY_PROCESSING_SHEET_ID,
+    gid: int = DAILY_PROCESSING_GID,
+    verify_live_tracxn: bool = True,
+    auth_token: Optional[str] = None,
+    peer_fetcher: Optional[Any] = None,
+    name_to_id_map: Optional[Dict[str, str]] = None,
+) -> int:
+    """
+    Exports eligible domains to Discovery Daily Processing sheet ONE SHEET AT A TIME:
+      1. Sheet 1: Clears B4:E completely to the bottom, sets B1 date (red), ensures B3:E3 headers,
+         and writes Sheet 1's eligible domains starting at row 4.
+      2. Sheet 2: Fetches Sheet 2's eligible domains, deduplicates against Sheet 1, and appends below Sheet 1.
+      3. Sheet 3: Fetches Sheet 3's eligible domains, deduplicates, and appends below Sheet 2.
+      4. Sheet 4: Fetches Sheet 4's eligible domains, deduplicates, and appends below Sheet 3.
+    """
+    if now_ist is None:
+        dt = get_now_ist()
+    elif now_ist.tzinfo is None:
+        dt = now_ist.replace(tzinfo=IST_TZ)
+    else:
+        dt = now_ist.astimezone(IST_TZ)
+
+    date_str = dt.strftime("%d %b %Y")
+
+    if name_to_id_map is None:
+        name_to_id_map = load_funnel_name_to_id_map(gc)
+
+    fetch_fn = peer_fetcher or (lambda s_num: fetch_peer_sheet_records(s_num, snapshot_date=snapshot_date, auth_token=auth_token))
+
+    ss = gc.open_by_key(spreadsheet_id)
+    try:
+        ws = ss.get_worksheet_by_id(gid)
+    except Exception:
+        ws = ss.worksheet("Sheet1")
+
+    # Step 1: Sheet 1 initial setup & clearing full sheet
+    cur_rows = getattr(ws, "row_count", 0)
+    cur_cols = getattr(ws, "col_count", 5)
+    max_clear_row = max(cur_rows if isinstance(cur_rows, int) else 0, 50000)
+    ws.batch_clear([f"B4:E{max_clear_row}"])
+
+    # Ensure header row 3 has all 4 columns
+    ws.update(
+        range_name="B3:E3",
+        values=[["Domains", "Domain Profile ID", "Publish Funnel Name", "Publish Funnel ID"]],
+        value_input_option="USER_ENTERED",
+    )
+
+    # Update B1 date in DD MMM YYYY with red text (#FF0000)
+    ws.update(range_name="B1", values=[[date_str]], value_input_option="USER_ENTERED")
+    ws.format(
+        "B1",
+        {
+            "textFormat": {
+                "foregroundColor": {"red": 1.0, "green": 0.0, "blue": 0.0},
+                "bold": True,
+            },
+            "numberFormat": {
+                "type": "DATE",
+                "pattern": "dd mmm yyyy",
+            },
+        },
+    )
+
+    seen = set()
+    current_row = 4
+
+    for sheet_num in [1, 2, 3, 4]:
+        raw_recs: List[List[str]] = []
+        if local_sheet_num == sheet_num and local_records is not None:
+            raw_recs = local_records
+        else:
+            raw_recs = fetch_fn(sheet_num)
+
+        if not raw_recs:
+            logger.info(f"ℹ️ Sheet {sheet_num}: 0 eligible records found.")
+            continue
+
+        cand_domains = [str(r[0]).strip() for r in raw_recs if r and str(r[0] or "").strip()]
+        accepted_domains = None
+        if verify_live_tracxn and cand_domains:
+            try:
+                accepted_domains, rejected = filter_unpublished_non_sameas_domains(cand_domains)
+            except Exception as e:
+                logger.error(f"Error during live Tracxn API check for Sheet {sheet_num}: {e}")
+
+        sheet_clean_rows: List[List[str]] = []
+        for r in raw_recs:
+            if not r or not str(r[0] or "").strip():
+                continue
+            dom = str(r[0]).strip()
+            nd = normalize_domain(dom)
+            if not nd or nd in seen:
+                continue
+            if accepted_domains is not None and nd not in accepted_domains:
+                continue
+            seen.add(nd)
+            prof_id = str(r[1]).strip() if len(r) > 1 and r[1] is not None else ""
+            funnel_name = str(r[2]).strip() if len(r) > 2 and r[2] is not None else ""
+            funnel_id = str(r[3]).strip() if len(r) > 3 and r[3] is not None else ""
+            if not funnel_id and funnel_name and funnel_name in name_to_id_map:
+                funnel_id = name_to_id_map[funnel_name]
+            sheet_clean_rows.append([dom, prof_id, funnel_name, funnel_id])
+
+        if not sheet_clean_rows:
+            logger.info(f"ℹ️ Sheet {sheet_num}: 0 clean records to append after deduplication/filtering.")
+            continue
+
+        needed_total_rows = current_row + len(sheet_clean_rows) + 10
+        cur_ws_rows = getattr(ws, "row_count", 0)
+        if isinstance(cur_ws_rows, int) and cur_ws_rows < needed_total_rows:
+            ws.resize(rows=needed_total_rows, cols=max(5, cur_cols if isinstance(cur_cols, int) else 5))
+
+        CHUNK = 2500
+        for idx in range(0, len(sheet_clean_rows), CHUNK):
+            chunk = sheet_clean_rows[idx : idx + CHUNK]
+            start_r = current_row + idx
+            end_r = start_r + len(chunk) - 1
+            ws.update(range_name=f"B{start_r}:E{end_r}", values=chunk, value_input_option="RAW")
+            if idx + CHUNK < len(sheet_clean_rows):
+                time.sleep(0.5)
+
+        logger.info(f"📤 Sheet {sheet_num}: Wrote {len(sheet_clean_rows)} domains to B{current_row}:E{current_row + len(sheet_clean_rows) - 1}")
+        current_row += len(sheet_clean_rows)
+
+    total_exported = current_row - 4
+    logger.info(f"🎉 Completed sequential export: Total {total_exported} domains written to {spreadsheet_id}, B1={date_str}")
+    return total_exported
 
 
 def collect_fleet_eligible_records(
