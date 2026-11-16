@@ -1,6 +1,20 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-16] Proactive Gemini Cache TTL Validation & Automatic 24h Regeneration
+Files changed:
+- common/pipeline_engine.py
+Reason:
+1. Implemented proactive Gemini cache health & TTL inspection (`get_gemini_cache_validity_hours`): directly queries Gemini API `GET https://generativelanguage.googleapis.com/v1beta/{cache_name}` to extract `expireTime` and calculate precise remaining TTL in hours.
+2. Implemented proactive auto-regeneration (`ensure_valid_gemini_cache`): if the cache ID found in Config Sheet is missing, invalid, expired (HTTP 404/400), or has fewer than 18.0-20.0 hours remaining when fetched, the engine immediately creates a brand new 24-hour cache (`ttl="86400s"`, `model="gemini-3.1-flash-lite"`) via `Create_Daily_Cache_Non_ASYNC`.
+3. The newly generated cache ID, model, timestamp, and status are instantly persisted to Row 3 of the Config Sheet (`Base_Prompt_FunnelWise (CF>>IF>>Feed)`) and hot-reloaded across the engine.
+4. If cached contents are too small (<1,024 tokens, as with individual feed prompts), the engine gracefully falls back to direct inference without blocking or failing.
+5. In `open_sheet_with_fallback`, added fallback to `client.open_by_key(sheet_id)` when standard credentials are not configured, improving testability and resilience.
+Related tests:
+- Temp_Test/test_gemini_cache_proactive_refresh.py (5 passed)
+- Temp_Test/test_sequential_export.py (passed)
+- Temp_Test/test_eligible_next_dept_and_daily_export.py (7 passed)
+
 ## [2026-11-16] Sequential Sheet-by-Sheet Daily Export, 24hr Dynamic Gemini Cache Auto-Creation & Token Pruning
 Files changed:
 - common/daily_eligible_exporter.py

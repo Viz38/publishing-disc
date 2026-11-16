@@ -683,6 +683,8 @@ def open_sheet_with_fallback(client, sheet_id: str):
 
     if first_client:
         return first_client.open_by_key(sheet_id)
+    if client and hasattr(client, "open_by_key"):
+        return client.open_by_key(sheet_id)
     raise ValueError(f"Unable to open sheet {sheet_id}: No valid credentials available.")
 
 
@@ -1475,6 +1477,120 @@ async def Delete_All_Caches(cache_data, token):
             await Delete_Cache(cache_id, token)
         else:
             print(f"? Skipping {sector} (No cache ID found)")
+
+
+def get_gemini_cache_validity_hours(cache_name: str, Gemini_Token: str):
+    """
+    Directly queries Gemini API: GET https://generativelanguage.googleapis.com/v1beta/{cache_name}?key={token}
+    Returns: (is_valid: bool, remaining_hours: float, metadata: dict or None)
+    """
+    if not cache_name or not Gemini_Token:
+        return False, 0.0, None
+
+    clean_name = cache_name.strip()
+    if not clean_name.startswith("cachedContents/"):
+        clean_name = f"cachedContents/{clean_name}"
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/{clean_name}?key={Gemini_Token}"
+    try:
+        response = requests.get(url, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            exp_str = data.get("expireTime", "")
+            if exp_str:
+                clean_exp = exp_str.split(".")[0].replace("Z", "")
+                exp_dt = datetime.datetime.fromisoformat(clean_exp).replace(tzinfo=datetime.timezone.utc)
+                now_utc = datetime.datetime.now(datetime.timezone.utc)
+                remaining_secs = (exp_dt - now_utc).total_seconds()
+                remaining_hours = remaining_secs / 3600.0
+                if remaining_hours > 0:
+                    return True, remaining_hours, data
+                else:
+                    return False, 0.0, data
+            return True, 0.0, data
+        else:
+            return False, 0.0, None
+    except Exception as e:
+        logging.warning(f"Error checking Gemini Cache validity for {clean_name}: {e}")
+        return False, 0.0, None
+
+
+def ensure_valid_gemini_cache(
+    gc: Any,
+    current_cache_id: Optional[str],
+    prompt_text: str,
+    gemini_token: str,
+    min_hours_required: float = 20.0,
+):
+    """
+    Validates current_cache_id against Gemini API.
+    If missing, invalid, or remaining_hours < min_hours_required:
+      - Immediately creates a brand new 24hr cache (ttl="86400s", model="gemini-3.1-flash-lite").
+      - Persists new Cache ID, model, creation date, and expiration time to Config Sheet Row 3.
+      - Returns (new_cache_id, True).
+    If healthy and remaining_hours >= min_hours_required:
+      - Returns (current_cache_id, False).
+    """
+    tok = (
+        gemini_token
+        or getattr(settings, "GEMINI_TOKEN", "")
+        or getattr(settings, "GEMINI_API_KEY", "")
+        or os.getenv("GEMINI_API_KEY", "")
+    )
+
+    if current_cache_id and tok:
+        is_valid, remaining_h, meta = get_gemini_cache_validity_hours(current_cache_id, tok)
+        if is_valid and remaining_h >= min_hours_required:
+            logging.info(
+                f"✅ Gemini Cache ID {current_cache_id} is healthy with {remaining_h:.1f} hours remaining "
+                f"(>= {min_hours_required:.1f}h requirement). Utilizing existing cache."
+            )
+            return current_cache_id, False
+        else:
+            if not is_valid:
+                logging.warning(f"⚠️ Gemini Cache ID {current_cache_id} is INVALID or EXPIRED in Gemini API.")
+            else:
+                logging.warning(
+                    f"⚠️ Gemini Cache ID {current_cache_id} has only {remaining_h:.1f} hours remaining "
+                    f"(below required {min_hours_required:.1f}h). Proactively creating fresh 24h cache..."
+                )
+
+    if not tok or not prompt_text:
+        logging.error("Cannot regenerate Gemini Cache: missing Gemini token or prompt text.")
+        return current_cache_id or "", False
+
+    logging.info("🚀 Creating fresh 24-hour Gemini Cache (ttl=86400s, model=gemini-3.1-flash-lite)...")
+    new_cache_name = Create_Daily_Cache_Non_ASYNC(tok, prompt_text)
+    if not new_cache_name:
+        logging.error("❌ Failed creating new 24-hour Gemini Cache.")
+        return current_cache_id or "", False
+
+    now_ist = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=5, minutes=30)))
+    date_str = now_ist.strftime("%d/%b/%Y %H:%M:%S")
+
+    # Persist to Config Sheet Row 3
+    cfg_id = (
+        Config_Sheet_ID
+        or getattr(settings, "CF_CONFIG_SHEET_ID", "")
+        or getattr(settings, "Config_Sheet_ID", "")
+        or os.getenv("Config_Sheet_ID", "")
+        or "1JU-R-u4nV9azw43a4MqRM6OODsGwQmtcMu8OkB3dtlI"
+    )
+    if gc and cfg_id:
+        try:
+            try:
+                cfg_sheet = gc.open_by_key(cfg_id)
+            except Exception:
+                cfg_sheet = open_sheet_with_fallback(gc, cfg_id)
+            ws_bp = cfg_sheet.worksheet("Base_Prompt_FunnelWise (CF>>IF>>Feed)")
+            ws_bp.update(range_name="F3", values=[[new_cache_name]], value_input_option="RAW")
+            ws_bp.update(range_name="K3:M3", values=[["models/gemini-3.1-flash-lite", date_str, "Success"]], value_input_option="USER_ENTERED")
+            ws_bp.update(range_name="Q3", values=[["Success"]], value_input_option="USER_ENTERED")
+            logging.info(f"✅ Persisted fresh 24h Gemini Cache ID {new_cache_name} to Config Sheet row 3.")
+        except Exception as persist_err:
+            logging.warning(f"Failed persisting fresh Cache ID to Config Sheet: {persist_err}")
+
+    return new_cache_name, True
 
 #*************************** Replace Response with Replacable charecter Data **************************** */
 
@@ -6148,20 +6264,28 @@ async def Integrated_Extract_domains(
                                     config_feed_name_funnel_map = fm_refresh["FeedNameFunnelMap"]
 
                                 new_cache_id = new_cfg.get("cache_id_IF_Prediction")
-                                new_date = new_cfg.get("date_IF_Prediction")
-                                new_status = new_cfg.get("status_IF_Prediction")
+                                new_token = new_cfg.get("token_IF_Prediction")
 
-                                if new_cache_id and new_cache_id != last_known_cache_id and new_status in ("Sucess", "Success"):
+                                # Proactively validate with Gemini API: if at midnight window and < 20h remaining, or invalid, generate fresh 24h cache!
+                                min_req = 20.0 if is_window else 12.0
+                                fresh_cache_id, was_regen = await asyncio.to_thread(
+                                    ensure_valid_gemini_cache,
+                                    gc=g_client,
+                                    current_cache_id=new_cache_id,
+                                    prompt_text=if_pred_base_prompt,
+                                    gemini_token=new_token,
+                                    min_hours_required=min_req,
+                                )
+
+                                if fresh_cache_id and (fresh_cache_id != last_known_cache_id or was_regen):
                                     logging.info(
-                                        f"🎉 [Cache Poller] NEW Gemini Cache ID detected and hot-reloaded! "
-                                        f"Old: {last_known_cache_id} -> New: {new_cache_id} (Date: {new_date})"
+                                        f"🎉 [Cache Poller] Fresh Gemini Cache ID active and hot-reloaded! "
+                                        f"Old: {last_known_cache_id} -> New: {fresh_cache_id}"
                                     )
-                                    cache_id_IF_Prediction = new_cache_id
-                                    token_IF_Prediction = new_cfg.get("token_IF_Prediction")
-                                    date_IF_Prediction = new_date
-                                    status_IF_Prediction = new_status
-                                    exp_date_IF_Prediction = new_cfg.get("exp_date_IF_Prediction")
-                                    last_known_cache_id = new_cache_id
+                                    cache_id_IF_Prediction = fresh_cache_id
+                                    token_IF_Prediction = new_token
+                                    status_IF_Prediction = "Success"
+                                    last_known_cache_id = fresh_cache_id
 
                                     fp = new_cfg.get("funnel_prompts", {})
                                     if fp.get("Feed_cache_Id"):
@@ -6889,33 +7013,20 @@ async def _run_pipeline_core(start_row: int = None, mode: str = None, sheet_id: 
         logging.info("***************** IF Prediction - Cache ID Retrieved *******************")
         logging.info(f"Cache ID: {cache_id_IF_Prediction} (Status: {status_IF_Prediction}, Date: {date_IF_Prediction})")
         
-        if cache_id_IF_Prediction and str(status_IF_Prediction).strip().lower() in ("sucess", "success"):
-            logging.info(f"✅ Active Gemini Cache ID found in Config Sheet: {cache_id_IF_Prediction}. Will utilize cached prompt inference.")
+        # Proactively validate Cache ID with Gemini API: check validity and remaining hours.
+        # If missing, invalid, or expiring in < 18 hours, immediately create a fresh 24h cache!
+        cache_id_IF_Prediction, was_regen = ensure_valid_gemini_cache(
+            gc=gc,
+            current_cache_id=cache_id_IF_Prediction,
+            prompt_text=if_pred_base_prompt,
+            gemini_token=token_IF_Prediction,
+            min_hours_required=18.0,
+        )
+        if cache_id_IF_Prediction:
+            status_IF_Prediction = "Success"
+            logging.info(f"✅ Utilizing active Gemini Cache ID: {cache_id_IF_Prediction} for Industry Funnel predictions.")
         else:
-            logging.warning("⚠️ No valid/active Cache ID in Config Sheet. Attempting dynamic 24hr Gemini cache creation...")
-            gemini_tok = token_IF_Prediction or getattr(settings, "GEMINI_TOKEN", "") or getattr(settings, "GEMINI_API_KEY", "") or os.getenv("GEMINI_API_KEY", "")
-            if gemini_tok and if_pred_base_prompt:
-                try:
-                    new_cache_name = Create_Daily_Cache_Non_ASYNC(gemini_tok, if_pred_base_prompt)
-                    if new_cache_name:
-                        cache_id_IF_Prediction = new_cache_name
-                        status_IF_Prediction = "Success"
-                        now_ist = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=5, minutes=30)))
-                        date_IF_Prediction = now_ist.strftime("%d/%b/%Y %H:%M:%S")
-                        logging.info(f"🎉 Dynamically created 24hr Gemini Cache: {cache_id_IF_Prediction}")
-                        try:
-                            cfg_sheet = open_sheet_with_fallback(gc, Config_Sheet_ID)
-                            ws_bp = cfg_sheet.worksheet("Base_Prompt_FunnelWise (CF>>IF>>Feed)")
-                            ws_bp.update(range_name="F3", values=[[cache_id_IF_Prediction]], value_input_option="RAW")
-                            ws_bp.update(range_name="K3:M3", values=[["models/gemini-3.1-flash-lite", date_IF_Prediction, "Success"]], value_input_option="USER_ENTERED")
-                            ws_bp.update(range_name="Q3", values=[["Success"]], value_input_option="USER_ENTERED")
-                            logging.info("✅ Persisted dynamic Gemini Cache ID to Config Sheet row 3.")
-                        except Exception as persist_err:
-                            logging.warning(f"Failed persisting dynamic Cache ID to Config Sheet: {persist_err}")
-                except Exception as c_err:
-                    logging.error(f"Failed dynamic Gemini cache creation: {c_err}")
-            if not cache_id_IF_Prediction:
-                logging.warning("⚠️ Falling back to direct Gemini_API_ASYNC predictions (Cache Poller will hot-reload once populated).")
+            logging.warning("⚠️ No valid Gemini Cache ID available. Falling back to direct Gemini_API_ASYNC predictions.")
 
         # Config - Funnel Wise Prompts
         config_funnel_prompt = Return_Base_Prompt_FunnelWise(gc)
