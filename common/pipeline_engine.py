@@ -1001,21 +1001,42 @@ def store_cached_nim_summary(content_hash: str, summary: str, max_entries: int =
                 _NIM_CONTENT_HASH_CACHE.pop(k, None)
         _NIM_CONTENT_HASH_CACHE[content_hash] = summary
 
-async def Nvidia_API_ASYNC(promptMsg, token_rotator: NIMKeyManager = None, max_attempts: int = None, session: aiohttp.ClientSession = None):
+async def Nvidia_API_ASYNC(
+    promptMsg,
+    token_rotator: NIMKeyManager = None,
+    max_attempts: int = None,
+    session: aiohttp.ClientSession = None,
+    system_instruction: Optional[str] = None,
+    max_tokens: Optional[int] = None,
+    is_classification: bool = False,
+):
     global _nim_use_unverified_ssl
     if is_pre_cutoff_window() or is_5am_ist_cutoff():
         logging.info("⏰ [Pre-Cutoff Wind-Down] Skipping outbound NVIDIA NIM API call during 11:00-11:30 PM window.")
         return ""
     if token_rotator is None and 'NIM_KEY_MANAGER' in globals() and NIM_KEY_MANAGER is not None:
         token_rotator = NIM_KEY_MANAGER
-    system_instruction = (
-        "You are a professional website information extractor and summarizer. "
-        "Output ONLY the final single continuous summary paragraph directly. "
-        "Do NOT output any thinking process, reasoning steps, analysis, planning notes, or bullet points."
-    )
+
+    if system_instruction is None:
+        if is_classification:
+            system_instruction = (
+                "You are an expert market research analyst. "
+                "Classify the company into the predefined industry from the prompt. "
+                "Output strictly the Serial Number of the industry (e.g., \"5\"), or \"MARKED_IRRELEVANT\" or \"ESCALATED\" without any additional words, explanations, or thinking notes."
+            )
+        else:
+            system_instruction = (
+                "You are a professional website information extractor and summarizer. "
+                "Output ONLY the final single continuous summary paragraph directly. "
+                "Do NOT output any thinking process, reasoning steps, analysis, planning notes, or bullet points."
+            )
+
+    if max_tokens is None:
+        max_tokens = 300 if is_classification else 600
+
     if max_attempts is None:
         tt = getattr(token_rotator, "total_tokens", None)
-        max_attempts = min(4, int(tt)) if isinstance(tt, (int, float)) and int(tt) > 0 else 4
+        max_attempts = min(5, int(tt)) if isinstance(tt, (int, float)) and int(tt) > 0 else 5
 
     payload = {
         "model": Nvidia_Base_Model,
@@ -1023,7 +1044,7 @@ async def Nvidia_API_ASYNC(promptMsg, token_rotator: NIMKeyManager = None, max_a
             {"role": "system", "content": system_instruction},
             {"role": "user", "content": str(promptMsg)}
         ],
-        "max_tokens": 600,
+        "max_tokens": max_tokens,
         "temperature": 0.0,
         "stream": False
     }
@@ -1032,7 +1053,10 @@ async def Nvidia_API_ASYNC(promptMsg, token_rotator: NIMKeyManager = None, max_a
     original_user_content = str(promptMsg)
 
     ssl_ctx = False if _nim_use_unverified_ssl else get_nim_ssl_context()
-    timeout = aiohttp.ClientTimeout(total=75.0, sock_connect=10.0, sock_read=65.0)
+    if is_classification:
+        timeout = aiohttp.ClientTimeout(total=135.0, sock_connect=15.0, sock_read=120.0)
+    else:
+        timeout = aiohttp.ClientTimeout(total=75.0, sock_connect=10.0, sock_read=65.0)
 
     attempt = 0
     while attempt < max_attempts and (token_rotator is None or token_rotator.keys):
@@ -1074,19 +1098,20 @@ async def Nvidia_API_ASYNC(promptMsg, token_rotator: NIMKeyManager = None, max_a
                             content = msg.get("content") or msg.get("reasoning_content") or ""
                             cleaned = sanitize_summary_output(content)
                             if cleaned and "below is the website extraction" not in cleaned.lower():
-                                # Zero-Data-Loss Safety Gate: verify summary is complete and not truncated
-                                is_truncated = (finish_reason == "length") or (
-                                    len(cleaned) > 20 and cleaned[-1] not in ('.', '!', '?', '"', "'", ')')
-                                )
-                                if is_truncated and payload.get("max_tokens", 600) < 1000:
-                                    logging.warning(
-                                        f"NIM summary potentially truncated (finish_reason={finish_reason}, ending='{cleaned[-15:]}'). "
-                                        f"Triggering safety fallback with max_tokens: 1000..."
+                                if not is_classification:
+                                    # Zero-Data-Loss Safety Gate: verify summary is complete and not truncated
+                                    is_truncated = (finish_reason == "length") or (
+                                        len(cleaned) > 20 and cleaned[-1] not in ('.', '!', '?', '"', "'", ')')
                                     )
-                                    payload["max_tokens"] = 1000
-                                    attempt -= 1  # Safety upgrade does not burn a retry attempt
-                                    await asyncio.sleep(0.2)
-                                    continue
+                                    if is_truncated and payload.get("max_tokens", 600) < 1000:
+                                        logging.warning(
+                                            f"NIM summary potentially truncated (finish_reason={finish_reason}, ending='{cleaned[-15:]}'). "
+                                            f"Triggering safety fallback with max_tokens: 1000..."
+                                        )
+                                        payload["max_tokens"] = 1000
+                                        attempt -= 1  # Safety upgrade does not burn a retry attempt
+                                        await asyncio.sleep(0.2)
+                                        continue
                                 return cleaned
                         # Empty/refused response -> retry with same temperature (always 0.0)
                         logging.warning(f"Empty/incomplete NIM response (attempt {attempt}/{max_attempts}), key ...{api_key[-6:]}")
@@ -3699,7 +3724,16 @@ except Exception as _e:
 
 
 
-async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_SHEET_NAME,cache_id_IF_Prediction,token_IF_Prediction,date_IF_Prediction,status_IF_Prediction,exp_date_IF_Prediction,  config_funnel_prompt,config_funnel_id_prompt,config_funnel_name_prompt,config_funnel_name_Feed_Cached_prompt,config_funnel_name_Feed_Cached_API_Token,config_funnel_name_Feed_Cached_Model,config_funnel_name_Feed_Cached_Gen_Date,config_funnel_name_Feed_Cached_Final_Status,token_rotator,mode="full",session=None,precomputed_summary=None):
+async def Extract_AI_Engine_Output(
+    row, raw_data_beat_soup, SHEET_ID, EXTRACTING_SHEET_NAME,
+    cache_id_IF_Prediction, token_IF_Prediction, date_IF_Prediction, status_IF_Prediction, exp_date_IF_Prediction,
+    config_funnel_prompt, config_funnel_id_prompt, config_funnel_name_prompt,
+    config_funnel_name_Feed_Cached_prompt, config_funnel_name_Feed_Cached_API_Token,
+    config_funnel_name_Feed_Cached_Model, config_funnel_name_Feed_Cached_Gen_Date,
+    config_funnel_name_Feed_Cached_Final_Status, token_rotator,
+    mode="full", session=None, precomputed_summary=None,
+    token_rotator_if=None, skip_movement=False
+):
 
     start_time = datetime.datetime.now()
     today_date = datetime.datetime.now()
@@ -3939,57 +3973,26 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
             input_data_for_if = Utility_Replace_Response(domain, input_data_for_if, replacable_char_Domain)
 
             try:
-                try:
-                    output_data_summery  = "Domain URL : " + domain + "\n" + "\n" + "Company Description: " + "\n" + output_data_summery
-                    
-                    # output_data_if = await Gemini_API_WITH_CACHE Gemini_API_ASYNC(input_data_for_if)
-                    logging.debug(f"IF Prediction cache check for {domain}: token_match={GEMINI_TOKEN == token_IF_Prediction}")
-
-                    current_valid_dates = get_valid_dates()
-                    use_cache = (
-                        GEMINI_TOKEN == token_IF_Prediction 
-                        and clean_date(date_IF_Prediction) in current_valid_dates 
-                        and status_IF_Prediction in ("Sucess", "Success")
-                        and cache_id_IF_Prediction
-                    )
-                    if use_cache:
-                        try:
-                            output_data_if = await Gemini_API_WITH_CACHE(output_data_summery, GEMINI_TOKEN, cache_id_IF_Prediction, session=session)
-                        except Exception as e_cache:
-                            logging.warning(f"⚠️ IF Prediction Cache failed ({e_cache}). Seamlessly falling back to direct Gemini_API_ASYNC for {domain}...")
-                            output_data_if = await Gemini_API_ASYNC(input_data_for_if, GEMINI_TOKEN, session=session)
-                    else:
-                        output_data_if = await Gemini_API_ASYNC(input_data_for_if, GEMINI_TOKEN, session=session)
-
-                    if isinstance(output_data_if, dict) and not output_data_if.get("output"):
-                        logging.warning(f"⚠️ IF Prediction output empty. Retrying direct Gemini_API_ASYNC for {domain}...")
-                        output_data_if = await Gemini_API_ASYNC(input_data_for_if, GEMINI_TOKEN, session=session)
-
-                    # output_data_if = await Gemini_API_WITH_CACHE(output_data_summery,GEMINI_TOKEN,cache_id_IF_Prediction)
-                    
-                    if isinstance(output_data_if, dict):
-                        output_data_if_input_Token = output_data_if.get("input_Token","")
-                        output_data_if_thought_Token = output_data_if.get("thinking_Token","")
-                        output_data_if_cache_Token = output_data_if.get("cached_Token","")
-                        output_data_if_output_Token = output_data_if.get("output_Token","")
-                        output_data_if_total_Token = output_data_if.get("total_Token","")
-                        output_data_if_llm_model = output_data_if.get("model","")
-                        output_data_if = output_data_if.get("output","")
-                    else:
-                        output_data_if = ""
-
-                except Exception as e:
-                    logging.error(f"Gemini API (IF) failed: {e}")
-                    output_data_if = ""
-                    output_data_if_input_Token = ""
-                    output_data_if_thought_Token = ""
-                    output_data_if_cache_Token = ""
-                    output_data_if_output_Token = ""
-                    output_data_if_total_Token = ""
-                    output_data_if_llm_model = ""
-
+                # NIM-Only Industry Funnel Prediction via meta/muse-glimmer-30b
+                # Uses dedicated IF key manager (token_rotator_if), retries within NIM pool on 429/timeouts, ZERO Gemini fallback
+                rotator_if = token_rotator_if or token_rotator
+                nim_if_raw = await Nvidia_API_ASYNC(
+                    input_data_for_if,
+                    token_rotator=rotator_if,
+                    max_attempts=5,
+                    session=session,
+                    is_classification=True,
+                    max_tokens=300,
+                )
+                if isinstance(nim_if_raw, dict):
+                    output_data_if = nim_if_raw.get("output", "")
+                else:
+                    output_data_if = str(nim_if_raw or "").strip()
+                logging.info(f"NIM Glimmer IF prediction raw output for {domain}: '{output_data_if}'")
+                output_data_if_llm_model = Nvidia_Base_Model
             except Exception as error:
-                logging.error(f"Issue is coming with this IF Prediction result: {error}")
+                logging.error(f"Issue during NIM IF Prediction for domain {domain}: {error}")
+                output_data_if = ""
 
             # logging.info(f"Second Gemini Result OUTPUT IF - {output_data_if}")
 
@@ -4341,7 +4344,9 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
 
     #********************************************* Write API - Industry Funnel ************************************************
 
-    if mode not in ("phase2", "phase3"):
+    if skip_movement:
+        logging.info(f"🛡️ [Skip Movement Flag] Bypassing Tracxn Movement write API for {domain}.")
+    elif mode not in ("phase2", "phase3"):
         if 'TRACXN_CLIENT' in globals() and TRACXN_CLIENT is not None:
             token = await TRACXN_CLIENT._acquire_token()
         elif 'TRACXN_KEY_MANAGER' in globals() and TRACXN_KEY_MANAGER is not None:
@@ -4489,7 +4494,9 @@ async def Integrated_Process_domain(
     created_timestamp=None,
     mode="full",
     write_to_sheet=True,
-    precomputed_summary=None
+    precomputed_summary=None,
+    token_rotator_if=None,
+    skip_movement=False,
 ):
     async with semaphore:
         try:
@@ -4758,10 +4765,12 @@ async def Integrated_Process_domain(
                 config_funnel_id_prompt, config_funnel_name_prompt,
                 config_funnel_name_Feed_Cached_prompt, config_funnel_name_Feed_Cached_API_Token,
                 config_funnel_name_Feed_Cached_Model, config_funnel_name_Feed_Cached_Gen_Date,
-                config_funnel_name_Feed_Cached_Final_Status,token_rotator,
+                config_funnel_name_Feed_Cached_Final_Status, token_rotator,
                 mode=mode,
                 session=session,
-                precomputed_summary=precomputed_summary
+                precomputed_summary=precomputed_summary,
+                token_rotator_if=token_rotator_if,
+                skip_movement=skip_movement,
             )
 
             # Unpack AI Engine Outputs (Col AN receives summary_status, Col AO receives output_data_summery)
@@ -5687,16 +5696,22 @@ async def Integrated_Extract_domains(
 
         writer_task = asyncio.create_task(sheet_writer_worker())
 
-        # Decoupled SEDA Two-Stage Architecture
-        # Stage 1: Fast Dedicated NIM Summarizer Producer Pool (2 in-flight requests per sharded key)
-        # Stage 2: High-Throughput Gemini Predictions & Tracxn Movements Consumer Pool
-        sharded_key_count = token_rotator.get_total_keys() if token_rotator else 17
-        default_nim_workers = max(2, sharded_key_count * 2)
+        # Decoupled SEDA Architecture with 60/40 NIM Key Split:
+        # Stage 1: Dedicated NIM Summarizer Producer Pool (60% of sharded keys)
+        # Stage 2: Dedicated NIM Industry Funnel Classifier (40% of sharded keys)
+        raw_keys = token_rotator.keys if token_rotator else list(NIM_HARDCODED_KEYS)
+        summary_keys, if_keys = split_nim_keys_for_stages(raw_keys, summary_ratio=0.6)
+        summary_rotator = NIMKeyManager(summary_keys)
+        if_rotator = NIMKeyManager(if_keys)
+        logging.info(
+            f"⚡ [NIM Key 60/40 Split] Stage 1 Summary Keys: {len(summary_keys)} | "
+            f"Stage 2 IF Prediction Keys: {len(if_keys)}"
+        )
+
+        default_nim_workers = max(2, len(summary_keys) * 2)
         num_nim_workers = min(int(os.getenv("MAX_NIM_WORKERS", str(default_nim_workers))), max(1, len(pf_data)))
         
         # Dynamic Gemini Downstream Concurrency:
-        # Each NIM summary takes ~2s while Gemini downstream takes ~4s (IF + Feed calls).
-        # Downstream concurrency dynamically scales to 2x NIM workers to match throughput when NIM keys change.
         max_gemini_allowed = int(os.getenv("MAX_GEMINI_WORKERS", "50"))
         num_downstream_workers = calculate_dynamic_downstream_workers(
             num_nim_workers=num_nim_workers,
@@ -5898,10 +5913,11 @@ async def Integrated_Extract_domains(
                                 config_funnel_name_Feed_Cached_Model,
                                 config_funnel_name_Feed_Cached_Gen_Date,
                                 config_funnel_name_Feed_Cached_Final_Status,
-                                token_rotator,
+                                summary_rotator,
                                 mode=stage1_mode,
                                 write_to_sheet=False,
                                 precomputed_summary=None,
+                                token_rotator_if=if_rotator,
                             )
                         finally:
                             if is_wf_run and norm_d:
@@ -6047,10 +6063,11 @@ async def Integrated_Extract_domains(
                             config_funnel_name_Feed_Cached_Model,
                             config_funnel_name_Feed_Cached_Gen_Date,
                             config_funnel_name_Feed_Cached_Final_Status,
-                            token_rotator,
+                            summary_rotator,
                             mode="full",
                             write_to_sheet=False,
                             precomputed_summary=precomputed_sum,
+                            token_rotator_if=if_rotator,
                         )
 
                         if isinstance(full_res, Exception) or full_res is None:

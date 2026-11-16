@@ -833,3 +833,25 @@ def get_sharded_nim_keys(
     # Sheet 4 gets indices 3, 7, 11, ...
     assigned = [k for idx, k in enumerate(valid_candidates) if idx % total_sheets == (sheet_num - 1)]
     return assigned
+
+
+def split_nim_keys_for_stages(
+    keys: List[str],
+    summary_ratio: float = 0.6,
+) -> tuple[List[str], List[str]]:
+    """
+    Partitions a pool of NIM keys into two disjoint sub-pools:
+    1. summary_keys (default 60% of keys) for Stage 1 Summarization.
+    2. if_keys (default 40% of keys) for Stage 2 Industry Funnel Prediction.
+
+    Ensures 0 key collision between Summarization workers and Industry Funnel workers.
+    """
+    clean_keys = [str(k).strip() for k in keys if str(k).strip()]
+    total = len(clean_keys)
+    if total <= 1:
+        return clean_keys, list(clean_keys)
+
+    num_summary = max(1, min(total - 1, round(total * summary_ratio)))
+    summary_keys = clean_keys[:num_summary]
+    if_keys = clean_keys[num_summary:]
+    return summary_keys, if_keys

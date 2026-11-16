@@ -1,6 +1,21 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-16] Implement Dedicated NIM-Only Industry Funnel Prediction with 60/40 Token Split
+Files changed:
+- common/key_manager.py
+- common/pipeline_engine.py
+- common/__init__.py
+Reason:
+1. Implemented dedicated NIM Glimmer (`meta/muse-glimmer-30b`) for Industry Funnel (IF) classification in Stage 2, replacing Gemini IF inference.
+2. Enforced strict NIM-only execution for Industry Funnel: zero fallback to Gemini for IF prediction, retrying transient rate limits (HTTP 429) and timeouts strictly within the NIM key pool.
+3. Implemented `split_nim_keys_for_stages(keys, summary_ratio=0.6)` in `key_manager.py` partitioning sharded NIM keys into two disjoint sub-pools (60% to Summarization, 40% to Industry Prediction), guaranteeing 0 concurrency collisions across pipeline stages.
+4. Added classification mode support to `Nvidia_API_ASYNC` with `is_classification=True`, setting `max_tokens=300` and socket read timeout `120.0s` to accommodate Muse Glimmer's internal reasoning tokens, outputting clean industry serial numbers directly.
+5. Preserved downstream Gemini inference exclusively for Feed predictions and added `skip_movement` parameter for safe integration testing without modifying Tracxn production state.
+Related tests:
+- Temp_Test/test_token_split.py (4 unit tests passed)
+- Temp_Test/test_nim_api_classification.py (passed)
+
 ## [2026-11-16] Proactive Gemini Cache TTL Validation & Automatic 24h Regeneration
 Files changed:
 - common/pipeline_engine.py

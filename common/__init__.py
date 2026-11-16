@@ -3,7 +3,7 @@ Common package for Discovery Engine.
 Contains modular utilities, key managers, scrapers, API clients, and the streaming pipeline coordinator.
 """
 
-from .key_manager import TracxnKeyManager, NIMKeyManager, get_sharded_nim_keys
+from .key_manager import TracxnKeyManager, NIMKeyManager, get_sharded_nim_keys, split_nim_keys_for_stages
 from .tech_crawler import TechCrawlerClient, is_valid_s3_url, extract_tc_error_details
 from .waterfall_scraper import (
     WaterfallScraper,
