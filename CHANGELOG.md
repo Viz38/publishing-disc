@@ -1,6 +1,24 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-16] Option 1 Strict System Instruction Tuning & Dual-Extraction Benchmark for NIM IF
+Files changed:
+- common/pipeline_engine.py
+- CHANGELOG.md
+Reason:
+1. Updated `Nvidia_API_ASYNC` with strict system instruction tuning for `is_classification=True`: explicitly guides the model to compare candidate industries concisely against the company description, then conclude and output strictly the Serial Number of the industry without echoing prompt text.
+2. Calibrated token limit to `max_tokens=1000` (up from 300) and socket timeout to `270.0s` (`sock_connect=30.0s`, `sock_read=240.0s`) to ensure RL reasoning tokens complete without premature truncation.
+3. Implemented robust Dual-Extraction regex logic: prioritizes final `content`, and if empty, extracts the industry serial number directly from `reasoning_content` using terminal regex patterns.
+4. Completed parallel live benchmarking across 5 test domains against Gemini Ground Truth using isolated test keys without making any Tracxn movements (`skip_movement=True`):
+   - `nasaimpexglobal.com`: IF 6 (Food Agriculture) [MATCH 100%], Feed 11 (Food Distributors) [MATCH 100%], Latency 90.9s
+   - `butlervm.com`: IF 9 (Logistics) [MATCH 100%], Feed 6 (Hotel IT) [MATCH 100%], Latency 164.9s
+   - `icc-jet.com`: IF 13 (Aerospace) [MATCH 100%], Feed 22 (Aircraft & Parts) [MATCH 100%], Latency 151.6s
+   - `nomad-luxe.com`: IF 2 (Retail) vs GT IF 1 (Business Services), Feed 32 (Services for Retailers), Latency 184.1s
+   - `gettraction.studio`: IF 17 (Hi-Tech) vs GT IF 1 (Business Services), Feed 31 (AI Services), Latency 196.0s
+Related tests:
+- Temp_Test/test_nim_if_dual_extraction.py (5 passed)
+- Temp_Test/test_fast_parallel_benchmark.py (5/5 completed end-to-end)
+
 ## [2026-11-16] Implement Dedicated NIM-Only Industry Funnel Prediction with 60/40 Token Split
 Files changed:
 - common/key_manager.py

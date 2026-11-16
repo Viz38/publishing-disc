@@ -1021,8 +1021,9 @@ async def Nvidia_API_ASYNC(
         if is_classification:
             system_instruction = (
                 "You are an expert market research analyst. "
-                "Classify the company into the predefined industry from the prompt. "
-                "Output strictly the Serial Number of the industry (e.g., \"5\"), or \"MARKED_IRRELEVANT\" or \"ESCALATED\" without any additional words, explanations, or thinking notes."
+                "Classify the company into the predefined industry serial number from the prompt. "
+                "Do not repeat or echo the prompt text. "
+                "Provide concise, direct reasoning comparing candidate industries against the company description, then conclude and output strictly the Serial Number of the industry (e.g. \"1\"), or \"MARKED_IRRELEVANT\" or \"ESCALATED\"."
             )
         else:
             system_instruction = (
@@ -1032,7 +1033,7 @@ async def Nvidia_API_ASYNC(
             )
 
     if max_tokens is None:
-        max_tokens = 300 if is_classification else 600
+        max_tokens = 1000 if is_classification else 600
 
     if max_attempts is None:
         tt = getattr(token_rotator, "total_tokens", None)
@@ -1054,7 +1055,7 @@ async def Nvidia_API_ASYNC(
 
     ssl_ctx = False if _nim_use_unverified_ssl else get_nim_ssl_context()
     if is_classification:
-        timeout = aiohttp.ClientTimeout(total=135.0, sock_connect=15.0, sock_read=120.0)
+        timeout = aiohttp.ClientTimeout(total=270.0, sock_connect=30.0, sock_read=240.0)
     else:
         timeout = aiohttp.ClientTimeout(total=75.0, sock_connect=10.0, sock_read=65.0)
 
@@ -1095,8 +1096,32 @@ async def Nvidia_API_ASYNC(
                             choice = choices[0]
                             finish_reason = choice.get("finish_reason", "stop")
                             msg = choice.get("message", {})
-                            content = msg.get("content") or msg.get("reasoning_content") or ""
-                            cleaned = sanitize_summary_output(content)
+                            raw_content = str(msg.get("content") or "").strip()
+                            reasoning = str(msg.get("reasoning_content") or "").strip()
+
+                            if is_classification:
+                                # Dual-Extraction: prefer final content, fallback to regex on reasoning_content
+                                final_val = ""
+                                if raw_content:
+                                    final_val = raw_content
+                                elif reasoning:
+                                    matches = re.findall(
+                                        r'(?:output|classify|industry|number|is|select|belongs to|category)\s*(?:as|is|to|:)?\s*["\']?(\d{1,2}|MARKED_IRRELEVANT|ESCALATED)["\']?',
+                                        reasoning,
+                                        re.IGNORECASE
+                                    )
+                                    if matches:
+                                        final_val = matches[-1]
+                                    else:
+                                        trail_m = re.findall(r'\b(\d{1,2}|MARKED_IRRELEVANT|ESCALATED)\b', reasoning[-200:])
+                                        if trail_m:
+                                            final_val = trail_m[-1]
+                                if final_val:
+                                    return final_val
+                                cleaned = ""
+                            else:
+                                content = raw_content or reasoning or ""
+                                cleaned = sanitize_summary_output(content)
                             if cleaned and "below is the website extraction" not in cleaned.lower():
                                 if not is_classification:
                                     # Zero-Data-Loss Safety Gate: verify summary is complete and not truncated
@@ -3982,7 +4007,7 @@ async def Extract_AI_Engine_Output(
                     max_attempts=5,
                     session=session,
                     is_classification=True,
-                    max_tokens=300,
+                    max_tokens=1000,
                 )
                 if isinstance(nim_if_raw, dict):
                     output_data_if = nim_if_raw.get("output", "")
