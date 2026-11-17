@@ -1,6 +1,22 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-17] Update Monthly Processing and Acceptance Tracking Sheet Through Nov 16
+Files changed:
+- Google Sheet: `1GMojL6BkqqTZv3rkcQ19b20y4JYT9gkucPRE7h6vYmo` (Tabs: `Processed Counts`, `Bot`)
+- Temp_Test/apply_processed_counts_update.py
+Reason:
+1. Updated monthly tracking spreadsheet with deduplicated processing counts across all 4 production sheets (Desktop-5080 and Desktop-5321) for Nov 13, 14, 15, and 16.
+2. Verified deduplicated daily counts against historical ground truth:
+   - Nov 13: 34,705 (CF->IF->PF), 2 (TPF), 1 (OD predicted), 132 (OR predicted) -> Accepted: 34,840, Processing: 43,550
+   - Nov 14: 26,986 (CF->IF->PF), 0 (TPF), 0 (OD predicted), 85 (OR predicted) -> Accepted: 27,071, Processing: 33,839
+   - Nov 15: 17,920 (CF->IF->PF), 0 (TPF), 0 (OD predicted), 45 (OR predicted) -> Accepted: 17,965, Processing: 22,456
+   - Nov 16: 18,297 (CF->IF->PF), 0 (TPF), 1 (OD predicted), 118 (OR predicted) -> Accepted: 18,416, Processing: 23,020
+3. Populated formulas `=SUM(B{r}:E{r})` for Column F (`Accepted`) and `=F{r}*0.25+F{r}` for Column G (`Processing`).
+4. Expanded `Bot` worksheet by inserting 4 date rows (Nov 13-16) and updating `=SUM(B2:B17)` / `=SUM(C2:C17)` on the Total row.
+Related tests:
+- Temp_Test/apply_processed_counts_update.py (read-back verification passed on both worksheets)
+
 ## [2026-11-17] Fix 44 Fleet Payload Placement Defects and Zero Customer Mandate Budgets
 Files changed:
 - Google Sheet: `1z3wH--c2qHGlNqW0e-6Mc8IVqh_kN5_fbWjILM4FxQM` (Sheet 4 Filter-V2, tab: `CF_IF Engine - Input Payload`)
