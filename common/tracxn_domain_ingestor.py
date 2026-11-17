@@ -524,7 +524,7 @@ class TracxnDomainIngestor:
                 except Exception as pe:
                     logger.warning(f"[{s_name}] Could not parse JSON payload from sheet for '{filter_name}': {pe}")
 
-            budget_str = p_row[5].strip() if len(p_row) > 5 else ""
+            budget_str = p_row[5].replace(",", "").strip() if len(p_row) > 5 else ""
             if budget_str:
                 try:
                     budget = int(budget_str)

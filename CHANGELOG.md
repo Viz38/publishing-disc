@@ -1,6 +1,20 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-17] Comma-Safe Budget Parsing and Fleet-Wide Tomorrow Staged Pre-Crawl Deduplication
+Files changed:
+- common/advance_precrawl.py
+- common/tracxn_domain_ingestor.py
+- Google Sheet: `1z3wH--c2qHGlNqW0e-6Mc8IVqh_kN5_fbWjILM4FxQM` (Sheet 4 Filter-V2, tab: `CF_IF Engine - Input Payload`)
+- Temp_Test/test_advance_precrawl_budget_parsing.py
+Reason:
+1. Comma-Safe Integer Budget Parsing: Added `.replace(",", "").strip()` to `b_str` and `budget_str` evaluation in `common/advance_precrawl.py` and `common/tracxn_domain_ingestor.py` so numbers formatted with thousand-separator commas (e.g. "25,000", "2,500") parse into clean integers rather than raising `ValueError` and defaulting to 0. Updated Sheet 4 `CF_IF Engine - Input Payload` Rows 285-287 to plain numeric strings (`25000`, `2500`, `2500`).
+2. Fleet-Wide Tomorrow Pre-Crawl Exclusion Pool: Extended `initialize_fleet_exclusion_pool()` in `common/advance_precrawl.py` to automatically load all domains already staged in `next_day_pre_crawl.csv` locally and query `/fleet/staged-domains` endpoints across the fleet (Sheets 1, 2, 3), expanding the exclusion pool by 52,919 staged domains to ensure autonomous cross-sheet deduplication before fetching candidate domains.
+Related tests:
+- Temp_Test/test_advance_precrawl_budget_parsing.py
+- Temp_Test/test_exclusion_pool.py
+
+
 ## [2026-11-17] Update Monthly Processing and Acceptance Tracking Sheet Through Nov 16
 Files changed:
 - Google Sheet: `1GMojL6BkqqTZv3rkcQ19b20y4JYT9gkucPRE7h6vYmo` (Tabs: `Processed Counts`, `Bot`)
