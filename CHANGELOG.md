@@ -1,6 +1,16 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-17] Override 15k Target Count Cap When User-Defined Payload Budget Exceeds 15k
+Files changed:
+- common/advance_precrawl.py
+- Temp_Test/test_payload_budget_override.py
+Reason:
+1. Implemented explicit override for the default 15,000 target count limit in `common/advance_precrawl.py`: when the sum of user-defined budgets in the sheet payload tab (`total_payload_budget`) exceeds 15,000, `effective_target_count` is set to `total_payload_budget`, preventing premature truncation and allowing the advance pre-crawl to fulfill the complete user-specified domain volume (e.g. 30,000 on Sheet 4).
+Related tests:
+- Temp_Test/test_payload_budget_override.py (5/5 tests passed)
+
+
 ## [2026-11-17] Comma-Safe Budget Parsing and Fleet-Wide Tomorrow Staged Pre-Crawl Deduplication
 Files changed:
 - common/advance_precrawl.py

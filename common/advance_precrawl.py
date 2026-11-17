@@ -220,10 +220,16 @@ def fetch_domains_for_sheet(
         if b_str and b_str.isdigit():
             total_payload_budget += int(b_str)
 
-    if target_count is None or target_count == 15000:
-        effective_target_count = total_payload_budget if total_payload_budget > 0 else (target_count or 15000)
+    if total_payload_budget > 0:
+        if total_payload_budget > 15000:
+            effective_target_count = total_payload_budget
+            logger.info(f"User-defined payload budget ({total_payload_budget}) exceeds 15k limit. Overriding 15k rule to fetch full budget.")
+        elif target_count is None or target_count == 15000:
+            effective_target_count = total_payload_budget
+        else:
+            effective_target_count = target_count
     else:
-        effective_target_count = target_count
+        effective_target_count = target_count or 15000
 
     logger.info(f"Target count for sheet {sheet_id}: {effective_target_count} domains (Payload defined total: {total_payload_budget})")
 
