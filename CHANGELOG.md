@@ -1,6 +1,26 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-17] Fleet Daemon and Engine Clean Restart with 17-Token Active Pool
+Files changed:
+- Temp_Test/restart_fleet_engines.py
+- Temp_Test/fleet_detailed_report.py
+- Temp_Test/inspect_fleet_processes.py
+- Temp_Test/inspect_engine_logs.py
+Reason:
+1. Executed graceful shutdown and targeted cleanup of previous engine processes across Desktop-5080 and Desktop-5321 while protecting active `advance_precrawl` (PID 3328731) on Desktop-5321.
+2. Restarted all 4 systemd daemons (`discovery-cf1`, `discovery-cf2`, `discovery-cf3`, `discovery-filterv2`) to reload the updated `.env` configuration (17 verified Tracxn tokens, 48 NIM keys) and dynamic rebalancing codebase.
+3. Successfully re-triggered all 4 discovery pipelines from Row 3 (`start_row=3, mode="full"`) in compliance with the Top-Row Resume Mandate.
+4. Verified HTTP 200 telemetry, process health, and active processing across all 4 production sheets:
+   - Sheet 1 (CF-1): PID 1500989, 17/17 TC keys, 12/48 NIM keys, 73 workers, HEALTHY.
+   - Sheet 2 (CF-2): PID 1500991, 17/17 TC keys, 12/48 NIM keys, 73 workers, HEALTHY.
+   - Sheet 3 (CF-3): PID 3418927, 17/17 TC keys, 12/48 NIM keys, 73 workers, HEALTHY.
+   - Sheet 4 (Filter-V2): PID 3418936, 17/17 TC keys, 11/48 NIM keys, 67 workers, HEALTHY.
+Related tests:
+- Temp_Test/fleet_detailed_report.py (4/4 sheets active and reporting 17/17 active TC tokens)
+- Temp_Test/check_precrawl_status.py (Advance pre-crawl PID 3328731 active and generating Job IDs)
+
+
 ## [2026-11-17] Purge Expired Tracxn Tokens and Deploy 17-Token Valid Pool Across Fleet
 Files changed:
 - .env (Local workspace)
