@@ -1,6 +1,25 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-17] Dynamic Fleet NIM Key Rebalancing and Worker Auto-Scaling
+Files changed:
+- common/key_manager.py
+- common/fleet_rebalancer.py
+- common/pipeline_engine.py
+- common/__init__.py
+- Temp_Test/test_fleet_dynamic_rebalancer_e2e.py
+- Temp_Test/test_fleet_rebalancer.py
+- Temp_Test/test_fleet_nim_rebalancer.py
+Reason:
+1. Implemented `FleetNIMRebalancer` and `compute_dynamic_shard` in `common/fleet_rebalancer.py` to continuously poll peer sheets and autonomously redistribute all 48 NIM keys among currently active sheets using interleaved round-robin (`key_idx % len(active_sheets) == rank`).
+2. Added `NIMKeyManager.update_keys()` and `get_all_nim_keys()` in `common/key_manager.py` allowing hot re-sharding of active keys without dropping in-flight requests or resetting penalties.
+3. Integrated rebalancer into `common/pipeline_engine.py` with an auto-scale callback that dynamically expands `nim_semaphore` permits, spawns supplementary `nim_producer_worker()` tasks, and scales downstream consumer workers proportionally to maximize throughput without key collisions.
+4. Guaranteed zero cross-sheet key collisions: disjoint key subsets are mathematically enforced across any combination of running sheets, respecting NVIDIA's 2-request in-flight ceiling per key.
+Related tests:
+- Temp_Test/test_fleet_dynamic_rebalancer_e2e.py (3/3 tests passed)
+- Temp_Test/test_fleet_rebalancer.py (4/4 tests passed)
+- Temp_Test/test_fleet_nim_rebalancer.py (2/2 tests passed)
+
 ## [2026-11-17] Override 15k Target Count Cap When User-Defined Payload Budget Exceeds 15k
 Files changed:
 - common/advance_precrawl.py
