@@ -1,6 +1,27 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-17] Purge Expired Tracxn Tokens and Deploy 17-Token Valid Pool Across Fleet
+Files changed:
+- .env (Local workspace)
+- .env (Desktop-5080)
+- .env (Desktop-5321)
+- Temp_Test/probe_user_keys.py
+- Temp_Test/probe_tc_generate.py
+- Temp_Test/build_clean_tracxn_token_pool.py
+- Temp_Test/verify_remote_env_counts.py
+Reason:
+1. Audited 19 candidate Tracxn tokens against platform API and Tech Crawler job generation endpoint (`https://platform.tracxn.com/utils/web-scraper/fetch/url/bu-daily`):
+   - 16 tokens validated with HTTP 202 job generation confirmation.
+   - 3 candidate tokens returned HTTP 401 ("Expired access token"): `3fe417d1-1...`, `ed591741-6...`, and `5be5a522-9...`.
+2. Permanently purged all 5 expired/invalid tokens from the pool (the 3 candidate failures plus 2 historically expired tokens: `ff3f0149-f...5021d5` and `ecc8c6b7-5...d091f2`).
+3. Consolidated and deduplicated all active tokens into a clean, verified 17-token pool.
+4. Deployed updated `TRACXN_API_TOKENS` across `.env` files on `Desktop-5080`, `Desktop-5321`, and local workspace with automated remote backup creation (`.env.bak.<timestamp>`). Verified clean count of exactly 17 valid tokens and 0 expired tokens on both remote production nodes.
+Related tests:
+- Temp_Test/probe_tc_generate.py (16/19 valid)
+- Temp_Test/build_clean_tracxn_token_pool.py (17/22 valid in consolidated pool)
+- Temp_Test/verify_remote_env_counts.py (Verified 17 valid tokens, 0 expired on Desktop-5080 & Desktop-5321)
+
 ## [2026-11-17] Dynamic Fleet NIM Key Rebalancing and Worker Auto-Scaling
 Files changed:
 - common/key_manager.py
