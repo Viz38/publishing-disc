@@ -511,6 +511,19 @@ TOKEN_ROTATOR = NIM_KEY_MANAGER
 CHECK_STRINGS = ["403 Forbidden", "Not Acceptable", "Coming Soon", "Javascript Enable", "Enable JavaScript", "Error 403", "Page Not Found"]
 CHECK_EXACT = "Website is not working."
 
+# Concurrency semaphore for local Waterfall Scraper instances (capped to max 10 to protect host CPU/RAM)
+_WATERFALL_SEMAPHORE: Optional[asyncio.Semaphore] = None
+_WATERFALL_SEMAPHORE_LOCK = threading.Lock()
+
+def get_waterfall_semaphore() -> asyncio.Semaphore:
+    global _WATERFALL_SEMAPHORE
+    if _WATERFALL_SEMAPHORE is None:
+        with _WATERFALL_SEMAPHORE_LOCK:
+            if _WATERFALL_SEMAPHORE is None:
+                limit = int(os.getenv("MAX_WATERFALL_SCRAPERS", "10"))
+                _WATERFALL_SEMAPHORE = asyncio.Semaphore(limit)
+    return _WATERFALL_SEMAPHORE
+
 
 class GeminiCacheError(RuntimeError):
     """Raised when a cached Gemini request fails (expired cache, 403, 404, or unresolvable error)."""
@@ -4610,7 +4623,9 @@ async def Integrated_Process_domain(
                     "Executing mandatory Waterfall Scraper fallback..."
                 )
                 waterfall_scraper = WaterfallScraper()
-                wf_body, scrape_method = await waterfall_scraper.scrape_domain(session, domain)
+                wf_sem = get_waterfall_semaphore()
+                async with wf_sem:
+                    wf_body, scrape_method = await waterfall_scraper.scrape_domain(session, domain)
                 if wf_body and len(wf_body.strip()) >= 50:
                     home_body = wf_body
                     scrappingBeautySoup = wf_body
@@ -5744,6 +5759,7 @@ async def Integrated_Extract_domains(
                 continue
 
             tc_status = safe_str(r[23]).strip().upper() if len(r) > 23 else ""
+            tc_s3_md = safe_str(r[26]).strip() if len(r) > 26 else ""
             raw_scraped = safe_str(r[29]).strip() if len(r) > 29 else ""
             nim_txt = safe_str(r[35]).strip() if len(r) > 35 else ""
             nim_st = safe_str(r[34]).strip().upper() if len(r) > 34 else ""
@@ -5751,8 +5767,11 @@ async def Integrated_Extract_domains(
             # Tier 0: Valid existing NIM summary ready for Gemini/Tracxn
             if len(nim_txt) > 20 and nim_st == "SUCCESS" and not nim_txt.startswith("http"):
                 presummarized_items.append((idx, r))
-            # Tier 1: Truly pre-scraped with usable raw content (>= 50 chars or csv only marker) ready for NIM
-            elif (len(raw_scraped) >= 50 or raw_scraped == "Raw Data Appended - csv only") and raw_scraped != "['Website is not working.']":
+            # Tier 1: Truly pre-scraped with usable raw content OR TC succeeded with S3 markdown link ready for NIM
+            elif (
+                ((len(raw_scraped) >= 50 or raw_scraped == "Raw Data Appended - csv only") and raw_scraped != "['Website is not working.']")
+                or (tc_status == "SUCCESS" and bool(tc_s3_md) and is_valid_s3_url(tc_s3_md))
+            ):
                 priority_items.append((idx, r))
             # Tier 2: Needs Phase 1 scraping (Tech Crawler or Waterfall Scraper)
             else:

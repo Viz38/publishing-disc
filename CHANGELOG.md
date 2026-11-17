@@ -1,6 +1,17 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-17] Bound Waterfall Scraper Concurrency to 10, Fast-Track S3 Pre-Scraped Domains to NIM, and Shift Pre-Crawl to 12:15 AM for True 24h Crawl Window
+Files changed:
+- common/pipeline_engine.py
+- run_daily_precrawl.sh
+Reason:
+1. Concurrency Semaphore for Local Scrapers: Added `_WATERFALL_SEMAPHORE` (default max 10, configurable via `MAX_WATERFALL_SCRAPERS`) and wrapped `WaterfallScraper().scrape_domain()` in `Integrated_Process_domain`. This caps concurrent headless browser instances (Playwright/Camoufox) to 10, eliminating host CPU lockups (100% load) and memory exhaustion / OOM kills (status 137).
+2. Queue Partitioning S3 Fast-Track: Updated Tier 1 queue prioritization in `Integrated_Extract_domains` to include domains that completed Tech Crawler (`tc_status == "SUCCESS"` and valid `tc_s3_md`), fast-tracking all ~28,250 pre-crawled domains in S3 directly to NIM ahead of failed/unscraped rows.
+3. Advance Pre-Crawl 24h Window: Aligned crontab schedule to 12:15 AM IST (`15 0 * * *`) so that domain fetching and Tech Crawler job generation run on Day 1, allowing Tech Crawler a full 24-hour crawling window before domains are picked up by the discovery engine on Day 2 at 12:05 AM IST.
+Related tests:
+- Temp_Test/test_scraper_concurrency_and_priority_queue.py (3 passed)
+
 ## [2026-11-16] Proactive Gemini Cache TTL Validation & Automatic 24h Regeneration
 Files changed:
 - common/pipeline_engine.py
