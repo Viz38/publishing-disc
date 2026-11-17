@@ -1,6 +1,20 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-17] Fix 44 Fleet Payload Placement Defects and Zero Customer Mandate Budgets
+Files changed:
+- Google Sheet: `1z3wH--c2qHGlNqW0e-6Mc8IVqh_kN5_fbWjILM4FxQM` (Sheet 4 Filter-V2, tab: `CF_IF Engine - Input Payload`)
+- Google Sheet: `1MHdkFCsoAY0V7ix_pJ5SpWFq3EFpJEug2ntJk1FkEl8` (Sheet 3 CF-3, tab: `CF_IF Engine - Input Payload`)
+- Temp_Test/fix_44_payloads.py
+- Temp_Test/set_mandates_budget_zero.py
+Reason:
+1. Fixed 44 defective payloads across Sheet 3 and Sheet 4 where `"sameAs"` was misplaced at the root level outside `"filter": {...}` (23 rows in Sheet 4 `P0 - Others - CF`) or missing completely inside `"filter"` (1 row in Sheet 4 P0, 8 rows in Sheet 4 P1 Customer Mandates, 12 rows in Sheet 3 P1 Unpublished Domains). Updated Columns D, J, and L across all 44 rows and verified 0 remaining payload syntax defects across all 328 fleet payloads.
+2. Root Cause Investigation for Leaked Leads: Traced 30 sample domains against live Tracxn API. Proved that 10/10 SameAs domains leaked from the misplaced root `sameAs` rows, and published/already-processed leads leaked due to Customer Mandate payloads lacking `funnelStatus` and `feedCurationType` filters.
+3. Zeroed Customer Mandate Budgets: Batch updated Column F (`num_domains`) from '12' to '0' across all 200 Customer Mandate sub-filters in Sheet 4 (Rows 63 to 262), halting the ingestion of ~2,400 unverified keyword-based candidate domains.
+Related tests:
+- Temp_Test/find_all_incorrect_payloads.py (0 errors across 328 payloads)
+- Temp_Test/set_mandates_budget_zero.py (200/200 verified 0)
+
 ## [2026-11-17] Bound Waterfall Scraper Concurrency to 10, Fast-Track S3 Pre-Scraped Domains to NIM, and Shift Pre-Crawl to 12:15 AM for True 24h Crawl Window
 Files changed:
 - common/pipeline_engine.py
