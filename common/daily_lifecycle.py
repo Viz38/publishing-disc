@@ -215,6 +215,15 @@ def get_eligible_domains_payload(
 ) -> Dict[str, Any]:
     target_date = date_param or get_now_ist().strftime("%Y-%m-%d")
     snap_meta = load_sheet_daily_metrics_snapshot(base_dir, target_date) if date_param else None
+    if date_param and snap_meta is not None:
+        return {
+            "sheet": os.path.basename(os.path.abspath(base_dir)),
+            "date": target_date,
+            "count": len(snap_meta["records"]),
+            "gemini_ran_count": int(snap_meta.get("gemini_ran_count") or 0),
+            "records": snap_meta["records"],
+        }
+
     if snap_meta is None:
         today_str = get_now_ist().strftime("%Y-%m-%d")
         snap_meta = load_sheet_daily_metrics_snapshot(base_dir, today_str)
