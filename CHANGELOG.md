@@ -1,6 +1,21 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-18] Bulk Move All 164,623 Unpublished SR(TPF) Domains to Central Funnel (100% Success)
+Files changed:
+- Google Sheet `1bOLBaP120HuG4wmZNisKVQRYzVykidNkPqcqDhW8s1c` (`Unpublished SR(TPF)` -> `Longlist`, `gid=0`): expanded to 14 columns (`N1 = Error`) and updated `L2:N164624` (`CENTRAL FUNNEL` / `5dc559138787070a80be21ba` / blank error)
+- Temp_Test/snapshot_and_pilot_tpf_to_cf.py
+- Temp_Test/validate_temp_tpf_keys.py
+- Temp_Test/bulk_move_tpf_to_cf_multiprocess.py
+Reason:
+1. Validated 8/8 multi-status pilot rows (`MOVED_INTO`, `SNOOZED`, blank, `CAME_BACK`, `MARKED_FOR_LATER`, `UNSNOOZED`, `MARKED_IRRELEVANT`, `ESCALATED`) via Tracxn `force-assign` + `move` into `CENTRAL FUNNEL` (`5dc559138787070a80be21ba`).
+2. Executed 4-process × 200-worker (800 concurrent workers) bulk move across 34 temporary validated Tracxn tokens (`.env` strictly untouched) on local Mac, achieving 39.9–59.4 domains/sec sustained throughput.
+3. Successfully moved all 164,623/164,623 domains with 0 failures and 0 errors, and wrote Cols L, M, and N back to `Longlist` in 7 chunked batch writes.
+Related tests:
+- Temp_Test/snapshot_and_pilot_tpf_to_cf.py (8/8 HTTP 200 across all FunnelStatus values)
+- Temp_Test/bulk_move_tpf_to_cf_multiprocess.py (`{'MOVED': 164623}`, 0 errors, all 164,623 sheet rows updated)
+
+
 ## [2026-11-18] Automate Daily Processed Counts Sheet Updates (Col F Accepted & Col G Gemini Processing)
 Files changed:
 - common/daily_eligible_exporter.py
