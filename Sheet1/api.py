@@ -526,10 +526,10 @@ def _get_status_response():
     active_nim = prog.get("active_nim_keys", 0)
     if not active_nim and state["status"] in ("running", "stopping"):
         nim_keys = [k.strip() for k in os.getenv("NIM_API_KEYS", "").split(",") if k.strip()]
-        from common import get_sharded_nim_keys
+        from common import get_fleet_sheet_count, get_sharded_nim_keys
         svc_name = getattr(settings, "SERVICE_NAME", "")
         shard_idx = 2 if ("CF-2" in svc_name or "Sheet2" in BASE_DIR) else (4 if ("Filter-V2" in svc_name or "Sheet4" in BASE_DIR) else (3 if ("CF-3" in svc_name or "Sheet3" in BASE_DIR) else 1))
-        sharded = get_sharded_nim_keys(shard_idx, total_sheets=4, keys=nim_keys)
+        sharded = get_sharded_nim_keys(shard_idx, total_sheets=get_fleet_sheet_count(), keys=nim_keys)
         active_nim = len(sharded) if sharded else 8
     
     active_workers_count = prog.get("active_workers", 48 if state["status"] in ("running", "stopping") else 0)
@@ -1008,11 +1008,11 @@ class FleetFetchAndStageRequest(BaseModel):
 async def fetch_and_stage_route(req: Optional[FleetFetchAndStageRequest] = None):
     folder_name = os.path.basename(BASE_DIR)
     sheet_num = int(folder_name.replace("Sheet", "") if "Sheet" in folder_name else 1)
-    from common.fleet_orchestrator import fetch_and_stage_sheet, get_peer_staged_domains, initialize_fleet_exclusion_pool
+    from common.fleet_orchestrator import FLEET_NODES, fetch_and_stage_sheet, get_peer_staged_domains, initialize_fleet_exclusion_pool
     exclusions = initialize_fleet_exclusion_pool()
     if req and req.exclusions:
         exclusions.update(d.strip().lower() for d in req.exclusions if d)
-    preceding_sheets = [s for s in [1, 2, 3, 4] if s < sheet_num]
+    preceding_sheets = [s for s in sorted(FLEET_NODES.keys()) if s < sheet_num]
     if preceding_sheets:
         peer_doms = await get_peer_staged_domains(preceding_sheets)
         exclusions.update(peer_doms)

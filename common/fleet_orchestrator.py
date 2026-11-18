@@ -32,12 +32,33 @@ from common.advance_precrawl import (
 
 logger = logging.getLogger("FleetOrchestrator")
 
-FLEET_NODES = {
-    1: {"name": "Sheet 1 (CF-1)", "port": 8769, "host": "5080-sheet1.rajath.world", "folder": "Sheet1", "id": "1IWXqnR52IzpFewE0QS0tlJFT65nJE_fmIoJs8ps9nZo"},
-    2: {"name": "Sheet 2 (CF-2)", "port": 8770, "host": "5080-sheet2.rajath.world", "folder": "Sheet2", "id": "1QGraMZOJjc-EIZlt_CieOVpr1jxw6tLa_QnWgWHou5I"},
-    3: {"name": "Sheet 3 (CF-3)", "port": 8771, "host": "5321-sheet3.rajath.world", "folder": "Sheet3", "id": "1MHdkFCsoAY0V7ix_pJ5SpWFq3EFpJEug2ntJk1FkEl8"},
-    4: {"name": "Sheet 4 (Filter-V2)", "port": 8772, "host": "5321-sheet4.rajath.world", "folder": "Sheet4", "id": "1z3wH--c2qHGlNqW0e-6Mc8IVqh_kN5_fbWjILM4FxQM"},
-}
+def build_fleet_nodes() -> Dict[int, Dict[str, Any]]:
+    from common.key_manager import get_fleet_sheet_count
+    fleet_count = get_fleet_sheet_count()
+    fleet_domain = os.getenv("FLEET_DOMAIN", "rajath.world").strip() or "rajath.world"
+    defaults = {
+        1: {"name": "Sheet 1 (CF-1)", "port": 8769, "host": f"5080-sheet1.{fleet_domain}", "folder": "Sheet1", "id": "1IWXqnR52IzpFewE0QS0tlJFT65nJE_fmIoJs8ps9nZo"},
+        2: {"name": "Sheet 2 (CF-2)", "port": 8770, "host": f"5080-sheet2.{fleet_domain}", "folder": "Sheet2", "id": "1QGraMZOJjc-EIZlt_CieOVpr1jxw6tLa_QnWgWHou5I"},
+        3: {"name": "Sheet 3 (CF-3)", "port": 8771, "host": f"5321-sheet3.{fleet_domain}", "folder": "Sheet3", "id": "1MHdkFCsoAY0V7ix_pJ5SpWFq3EFpJEug2ntJk1FkEl8"},
+        4: {"name": "Sheet 4 (Filter-V2)", "port": 8772, "host": f"5321-sheet4.{fleet_domain}", "folder": "Sheet4", "id": "1z3wH--c2qHGlNqW0e-6Mc8IVqh_kN5_fbWjILM4FxQM"},
+    }
+    nodes: Dict[int, Dict[str, Any]] = {}
+    for num in range(1, fleet_count + 1):
+        d = defaults[num]
+        env_id = os.getenv(f"SHEET{num}_ID", "").strip()
+        env_port = os.getenv(f"SHEET{num}_PORT", "").strip()
+        env_host = os.getenv(f"SHEET{num}_HOST", "").strip()
+        nodes[num] = {
+            "name": d["name"],
+            "port": int(env_port) if env_port.isdigit() else d["port"],
+            "host": env_host or d["host"],
+            "folder": d["folder"],
+            "id": env_id or d["id"],
+        }
+    return nodes
+
+
+FLEET_NODES = build_fleet_nodes()
 
 def get_auth_headers() -> Dict[str, str]:
     token = os.getenv("SERVICE_AUTH_TOKEN", "")
@@ -48,6 +69,12 @@ def get_auth_headers() -> Dict[str, str]:
 
 def is_node_local(sheet_num: int) -> bool:
     hostname = socket.gethostname().lower()
+    fleet_host_id = os.getenv("FLEET_HOST_ID", "").strip().lower()
+    if len(FLEET_NODES) == 1 and sheet_num in FLEET_NODES:
+        if fleet_host_id and (fleet_host_id in hostname or fleet_host_id.lstrip("9") in hostname):
+            return True
+        if "048" in hostname or "9048" in hostname:
+            return True
     return ("508" in hostname and sheet_num in (1, 2)) or ("532" in hostname and sheet_num in (3, 4))
 
 def get_node_url(sheet_num: int) -> str:
@@ -63,7 +90,8 @@ async def get_peer_staged_domains(peer_sheet_nums: Optional[List[int]] = None, c
     Queries peer sheet supervisor endpoints to get all domains currently claimed or staged.
     Also checks local filesystem files if check_local_disk is True.
     """
-    targets = peer_sheet_nums or [1, 2, 3, 4]
+    raw_targets = peer_sheet_nums if peer_sheet_nums is not None else list(FLEET_NODES.keys())
+    targets = [n for n in raw_targets if n in FLEET_NODES]
     combined_domains = set()
 
     # 1. Local filesystem check (only for sheets local to this machine)
@@ -210,7 +238,7 @@ async def orchestrate_fleet_precrawl_relay() -> Dict[str, Any]:
     }
 
     async with httpx.AsyncClient(timeout=900.0, verify=False) as client:
-        for sheet_num in [1, 2, 3, 4]:
+        for sheet_num in sorted(FLEET_NODES.keys()):
             node = FLEET_NODES[sheet_num]
             s_name = node["name"]
             node_url = get_node_url(sheet_num)

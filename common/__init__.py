@@ -3,7 +3,7 @@ Common package for Discovery Engine.
 Contains modular utilities, key managers, scrapers, API clients, and the streaming pipeline coordinator.
 """
 
-from .key_manager import TracxnKeyManager, NIMKeyManager, get_sharded_nim_keys, split_nim_keys_for_stages
+from .key_manager import TracxnKeyManager, NIMKeyManager, get_fleet_sheet_count, get_sharded_nim_keys, split_nim_keys_for_stages
 from .tech_crawler import TechCrawlerClient, is_valid_s3_url, extract_tc_error_details
 from .waterfall_scraper import (
     WaterfallScraper,
@@ -44,7 +44,9 @@ from .pipeline_engine import configure_engine, run_engine_for_sheet
 __all__ = [
     "TracxnKeyManager",
     "NIMKeyManager",
+    "get_fleet_sheet_count",
     "get_sharded_nim_keys",
+    "split_nim_keys_for_stages",
     "TechCrawlerClient",
     "is_valid_s3_url",
     "extract_tc_error_details",

@@ -23,12 +23,24 @@ if BASE_DIR not in sys.path:
 
 logger = logging.getLogger("FleetDeduplicator")
 
-TARGET_SHEETS = [
-    {"num": 1, "id": "1IWXqnR52IzpFewE0QS0tlJFT65nJE_fmIoJs8ps9nZo", "name": "Sheet 1 (CF-1)"},
-    {"num": 2, "id": "1QGraMZOJjc-EIZlt_CieOVpr1jxw6tLa_QnWgWHou5I", "name": "Sheet 2 (CF-2)"},
-    {"num": 3, "id": "1MHdkFCsoAY0V7ix_pJ5SpWFq3EFpJEug2ntJk1FkEl8", "name": "Sheet 3 (CF-3)"},
-    {"num": 4, "id": "1z3wH--c2qHGlNqW0e-6Mc8IVqh_kN5_fbWjILM4FxQM", "name": "Sheet 4 (Filter-V2)"},
-]
+def build_target_sheets() -> List[Dict[str, Any]]:
+    from common.key_manager import get_fleet_sheet_count
+    fleet_count = get_fleet_sheet_count()
+    defaults = [
+        {"num": 1, "id": "1IWXqnR52IzpFewE0QS0tlJFT65nJE_fmIoJs8ps9nZo", "name": "Sheet 1 (CF-1)"},
+        {"num": 2, "id": "1QGraMZOJjc-EIZlt_CieOVpr1jxw6tLa_QnWgWHou5I", "name": "Sheet 2 (CF-2)"},
+        {"num": 3, "id": "1MHdkFCsoAY0V7ix_pJ5SpWFq3EFpJEug2ntJk1FkEl8", "name": "Sheet 3 (CF-3)"},
+        {"num": 4, "id": "1z3wH--c2qHGlNqW0e-6Mc8IVqh_kN5_fbWjILM4FxQM", "name": "Sheet 4 (Filter-V2)"},
+    ]
+    out: List[Dict[str, Any]] = []
+    for item in defaults[:fleet_count]:
+        num = item["num"]
+        env_id = os.getenv(f"SHEET{num}_ID", "").strip()
+        out.append({"num": num, "id": env_id or item["id"], "name": item["name"]})
+    return out
+
+
+TARGET_SHEETS = build_target_sheets()
 
 def get_today_ist() -> str:
     """Returns today's date formatted as YYYY-MM-DD in Asia/Kolkata timezone."""
@@ -121,7 +133,8 @@ def identify_fleet_duplicates(
     if daily_seen:
         prior_done.update(d.strip().lower() for d in daily_seen if d and d.strip())
 
-    duplicates: Dict[int, List[Tuple[int, str, str]]] = {s: [] for s in [1, 2, 3, 4]}
+    active_nums = sorted(set(sheets_data.keys()) | {s["num"] for s in TARGET_SHEETS})
+    duplicates: Dict[int, List[Tuple[int, str, str]]] = {s: [] for s in active_nums}
     fleet_origin: Dict[str, Tuple[int, int]] = {}  # domain -> (sheet_num, row_num)
 
     for sheet_num in sorted(sheets_data.keys()):

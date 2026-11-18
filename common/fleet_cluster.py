@@ -15,12 +15,33 @@ logger = logging.getLogger(__name__)
 class FleetSummarizeRequest(BaseModel):
     items: List[Dict[str, Any]]
 
-FLEET_TOPOGRAPHY: Dict[int, Dict[str, Any]] = {
-    1: {"host": "Desktop-5080", "port": 8769, "public_url": "https://5080-sheet1.rajath.world"},
-    2: {"host": "Desktop-5080", "port": 8770, "public_url": "https://5080-sheet2.rajath.world"},
-    3: {"host": "Desktop-5321", "port": 8771, "public_url": "https://5321-sheet3.rajath.world"},
-    4: {"host": "Desktop-5321", "port": 8772, "public_url": "https://5321-sheet4.rajath.world"},
-}
+def build_fleet_topography() -> Dict[int, Dict[str, Any]]:
+    from common.key_manager import get_fleet_sheet_count
+    fleet_count = get_fleet_sheet_count()
+    fleet_domain = os.getenv("FLEET_DOMAIN", "rajath.world").strip() or "rajath.world"
+    defaults = {
+        1: {"host": "Desktop-5080", "port": 8769, "public_url": f"https://5080-sheet1.{fleet_domain}"},
+        2: {"host": "Desktop-5080", "port": 8770, "public_url": f"https://5080-sheet2.{fleet_domain}"},
+        3: {"host": "Desktop-5321", "port": 8771, "public_url": f"https://5321-sheet3.{fleet_domain}"},
+        4: {"host": "Desktop-5321", "port": 8772, "public_url": f"https://5321-sheet4.{fleet_domain}"},
+    }
+    topo: Dict[int, Dict[str, Any]] = {}
+    env_fleet_host = os.getenv("FLEET_HOST", "").strip()
+    for num in range(1, fleet_count + 1):
+        d = defaults[num]
+        env_port = os.getenv(f"SHEET{num}_PORT", "").strip()
+        env_url = os.getenv(f"SHEET{num}_URL", "").strip()
+        env_host_fqdn = os.getenv(f"SHEET{num}_HOST", "").strip()
+        pub_url = env_url or (f"https://{env_host_fqdn}" if env_host_fqdn else d["public_url"])
+        topo[num] = {
+            "host": env_fleet_host if (fleet_count == 1 and env_fleet_host) else d["host"],
+            "port": int(env_port) if env_port.isdigit() else d["port"],
+            "public_url": pub_url,
+        }
+    return topo
+
+
+FLEET_TOPOGRAPHY: Dict[int, Dict[str, Any]] = build_fleet_topography()
 
 def get_default_auth_token() -> str:
     token = os.getenv("SERVICE_AUTH_TOKEN", "")

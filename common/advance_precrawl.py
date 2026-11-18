@@ -31,12 +31,20 @@ logger = logging.getLogger("AdvancePreCrawl")
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
 
-TARGET_SHEETS = [
-    {"num": 1, "id": os.getenv("SHEET1_ID", "1IWXqnR52IzpFewE0QS0tlJFT65nJE_fmIoJs8ps9nZo"), "name": "Sheet 1 (CF-1)", "folder": "Sheet1"},
-    {"num": 2, "id": os.getenv("SHEET2_ID", "1QGraMZOJjc-EIZlt_CieOVpr1jxw6tLa_QnWgWHou5I"), "name": "Sheet 2 (CF-2)", "folder": "Sheet2"},
-    {"num": 3, "id": os.getenv("SHEET3_ID", "1MHdkFCsoAY0V7ix_pJ5SpWFq3EFpJEug2ntJk1FkEl8"), "name": "Sheet 3 (CF-3)", "folder": "Sheet3"},
-    {"num": 4, "id": os.getenv("SHEET4_ID", "1z3wH--c2qHGlNqW0e-6Mc8IVqh_kN5_fbWjILM4FxQM"), "name": "Sheet 4 (Filter-V2)", "folder": "Sheet4"},
-]
+def build_target_sheets() -> List[Dict[str, Any]]:
+    """Build active target sheet list respecting FLEET_SHEETS (e.g. single-sheet sole-fleet mode)."""
+    raw_count = os.getenv("FLEET_SHEETS", "").strip()
+    fleet_count = max(1, min(4, int(raw_count))) if raw_count.isdigit() else 4
+    defaults = [
+        {"num": 1, "id": os.getenv("SHEET1_ID", "1IWXqnR52IzpFewE0QS0tlJFT65nJE_fmIoJs8ps9nZo"), "name": "Sheet 1 (CF-1)", "folder": "Sheet1"},
+        {"num": 2, "id": os.getenv("SHEET2_ID", "1QGraMZOJjc-EIZlt_CieOVpr1jxw6tLa_QnWgWHou5I"), "name": "Sheet 2 (CF-2)", "folder": "Sheet2"},
+        {"num": 3, "id": os.getenv("SHEET3_ID", "1MHdkFCsoAY0V7ix_pJ5SpWFq3EFpJEug2ntJk1FkEl8"), "name": "Sheet 3 (CF-3)", "folder": "Sheet3"},
+        {"num": 4, "id": os.getenv("SHEET4_ID", "1z3wH--c2qHGlNqW0e-6Mc8IVqh_kN5_fbWjILM4FxQM"), "name": "Sheet 4 (Filter-V2)", "folder": "Sheet4"},
+    ]
+    return [s for s in defaults if s["num"] <= fleet_count and str(s.get("id", "")).strip()]
+
+
+TARGET_SHEETS = build_target_sheets()
 
 FUNNELS = [
     {"name": "CENTRAL FUNNEL", "id": "5dc559138787070a80be21ba"},

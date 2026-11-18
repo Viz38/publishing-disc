@@ -25,6 +25,7 @@ except ImportError:
 from common import (
     TracxnKeyManager,
     NIMKeyManager,
+    get_fleet_sheet_count,
     get_sharded_nim_keys,
     TechCrawlerClient,
     WaterfallScraper,
@@ -138,11 +139,12 @@ def configure_engine(sheet_num: int = 1, sheet_dir: str = None, sheet_id: str = 
     elif hasattr(settings, f"CF_SHEET_ID_SHEET{sheet_num}"):
         CF_SHEET_ID = getattr(settings, f"CF_SHEET_ID_SHEET{sheet_num}")
 
-    host_env = "MAX_WORKERS_5080" if sheet_num <= 2 else "MAX_WORKERS_5321"
+    host_id = os.getenv("FLEET_HOST_ID", "").strip()
+    host_env = f"MAX_WORKERS_{host_id}" if host_id else ("MAX_WORKERS_5080" if sheet_num <= 2 else "MAX_WORKERS_5321")
     MAX_WORKERS = int(os.getenv(f"MAX_WORKERS_SHEET{sheet_num}", os.getenv(host_env, getattr(settings, "MAX_WORKERS", 10))))
 
     nim_source = settings.NIM_API_KEYS if (settings and getattr(settings, "NIM_API_KEYS", None)) else None
-    NIM_HARDCODED_KEYS = get_sharded_nim_keys(sheet_num, total_sheets=4, keys=nim_source)
+    NIM_HARDCODED_KEYS = get_sharded_nim_keys(sheet_num, total_sheets=get_fleet_sheet_count(), keys=nim_source)
     NIM_KEY_MANAGER = NIMKeyManager(list(NIM_HARDCODED_KEYS))
     TOKEN_ROTATOR = NIM_KEY_MANAGER
 
@@ -480,7 +482,9 @@ IF_SHEET_ID = settings.IF_SHEET_ID
 IF_EXTRACTING_SHEET_NAME = "IF_Engine_Database"
 
 CREDENTIALS_FILE = settings.CREDENTIALS_FILE
-MAX_WORKERS = int(os.getenv("MAX_WORKERS_SHEET1", os.getenv("MAX_WORKERS_5080", getattr(settings, "MAX_WORKERS", 10))))
+_init_host_id = os.getenv("FLEET_HOST_ID", "").strip()
+_init_host_env = f"MAX_WORKERS_{_init_host_id}" if _init_host_id else "MAX_WORKERS_5080"
+MAX_WORKERS = int(os.getenv("MAX_WORKERS_SHEET1", os.getenv(_init_host_env, getattr(settings, "MAX_WORKERS", 10))))
 BATCH_SIZE = settings.BATCH_SIZE  # Default 100 rows per batch
 _WORKSHEET_CACHE = {}
 Config_Sheet_ID = settings.Config_Sheet_ID
@@ -502,8 +506,8 @@ BACKLOG_MANAGER = BacklogManager()
 Nvidia_Base_Model  = "meta/muse-glimmer-30b"
 Nvidia_Endpoint = "https://integrate.api.nvidia.com/v1/chat/completions"
 
-# Dedicated sharded NIM API keys for Sheet 1 (sharded across 4 sheets fleet-wide = zero key collision)
-NIM_HARDCODED_KEYS = get_sharded_nim_keys(1, total_sheets=4, keys=settings.NIM_API_KEYS)
+# Dedicated sharded NIM API keys for Sheet 1 (uses FLEET_SHEETS; 100% of keys when FLEET_SHEETS=1)
+NIM_HARDCODED_KEYS = get_sharded_nim_keys(1, total_sheets=get_fleet_sheet_count(), keys=settings.NIM_API_KEYS)
 NIM_KEY_MANAGER = NIMKeyManager(list(NIM_HARDCODED_KEYS))
 TOKEN_ROTATOR = NIM_KEY_MANAGER
 

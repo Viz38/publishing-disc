@@ -268,7 +268,19 @@ CURRENT_USER=$(whoami)
 HOSTNAME_LOWER=$(hostname 2>/dev/null | tr '[:upper:]' '[:lower:]')
 USER_LOWER=$(echo "$CURRENT_USER" | tr '[:upper:]' '[:lower:]')
 
-if [[ "$HOSTNAME_LOWER" == *"5321"* || "$USER_LOWER" == *"5321"* ]]; then
+# Respect FLEET_SHEETS from .env (e.g. single-sheet sole-fleet mode on Desktop-9048)
+if [[ "${FLEET_SHEETS:-4}" == "1" ]]; then
+    FOLDERS=("Sheet1")
+    PORTS=(${SHEET1_PORT:-8769})
+    NAMES=("discovery-cf1")
+    TITLES=("CF-1")
+    SHEET_IDS=("${SHEET1_ID:-${CF_SHEET_ID:-1XT_GlvBf2BGO4cEiskpUsK2Fzc5PzB-tcRHFMubDXbk}}")
+fi
+
+if [[ "$HOSTNAME_LOWER" == *"9048"* || "$HOSTNAME_LOWER" == *"048"* || "$USER_LOWER" == *"9048"* || "$USER_LOWER" == *"048"* || "${FLEET_HOST_ID:-}" == "9048" ]]; then
+    IDENTITY="Desktop-9048"
+    [ -z "$TUNNEL_TOKEN" ] && TUNNEL_TOKEN="$TUNNEL_TOKEN_9048"
+elif [[ "$HOSTNAME_LOWER" == *"5321"* || "$USER_LOWER" == *"5321"* ]]; then
     IDENTITY="Desktop-5321"
     [ -z "$TUNNEL_TOKEN" ] && TUNNEL_TOKEN="$TUNNEL_TOKEN_5321"
 elif [[ "$HOSTNAME_LOWER" == *"5080"* || "$USER_LOWER" == *"5080"* ]]; then

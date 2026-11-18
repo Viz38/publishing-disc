@@ -106,6 +106,10 @@ async def coordinate_daily_eligible_export(
     Coordinates consolidated 4-sheet export to Discovery Daily Processing (1DCKv...).
     Sheet 1 is primary coordinator; Sheet 3 is HA fallback after 00:01:30 if B1 wasn't updated yet.
     """
+    if os.getenv("DISABLE_DAILY_ELIGIBLE_EXPORT", "").strip().lower() in ("1", "true", "yes"):
+        logger.info("Skipping 12:00 AM daily eligible export (DISABLE_DAILY_ELIGIBLE_EXPORT=true).")
+        return False
+
     if sync_gc is None or sheet_num not in (1, 3):
         return False
 
@@ -116,9 +120,10 @@ async def coordinate_daily_eligible_export(
         return True
 
     expected_b1 = now_ist.strftime("%d %b %Y")
+    from common.key_manager import get_fleet_sheet_count
     if sheet_num == 1:
-        # Give peer sheets ~20s right at 00:00:00 so all 4 save their midnight snapshots first
-        if now_ist.hour == 0 and now_ist.minute == 0 and now_ist.second < 22:
+        # Give peer sheets ~20s right at 00:00:00 so all active sheets save their midnight snapshots first
+        if get_fleet_sheet_count() > 1 and now_ist.hour == 0 and now_ist.minute == 0 and now_ist.second < 22:
             await asyncio.sleep(22 - now_ist.second)
     elif sheet_num == 3:
         if now_ist.hour == 0 and (now_ist.minute < 1 or (now_ist.minute == 1 and now_ist.second < 30)):

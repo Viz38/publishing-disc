@@ -1,6 +1,30 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-18] Single-Sheet Sole-Fleet Resilience & Desktop-9048 Support (NIM-FeedPrediction)
+Files changed:
+- common/key_manager.py
+- common/__init__.py
+- common/fleet_orchestrator.py
+- common/fleet_cluster.py
+- common/fleet_deduplicator.py
+- common/advance_precrawl.py
+- common/daily_eligible_exporter.py
+- common/daily_lifecycle.py
+- common/pipeline_engine.py
+- Sheet1/api.py
+- Sheet1/config.py
+- control.sh
+- CHANGELOG.md
+Reason:
+1. Made the NIM-FeedPrediction pipeline fully resilient for single-sheet sole-fleet deployments (`FLEET_SHEETS=1` on `Desktop-9048`, Sheet 1 only on `:8769` via `9048-sheet1.rajath.world`) while preserving 4-sheet backwards compatibility.
+2. Added `get_fleet_sheet_count()` in `common/key_manager.py` and updated `get_sharded_nim_keys`, `common/pipeline_engine.py`, and `Sheet1/api.py` so Sheet 1 utilizes 100% of available NIM keys (10/10 on Desktop-9048 -> 6 Summary + 4 IF) instead of sharding by 4.
+3. Made `FLEET_NODES` (`common/fleet_orchestrator.py`), `FLEET_TOPOGRAPHY` (`common/fleet_cluster.py`), `TARGET_SHEETS` (`common/fleet_deduplicator.py`, `common/advance_precrawl.py`), and `export_fleet_eligible_sequential` (`common/daily_eligible_exporter.py`) dynamically honor `FLEET_SHEETS` and `SHEET1_*` env config with zero peer calls to Sheets 2-4.
+4. Added `DISABLE_DAILY_ELIGIBLE_EXPORT` safety guard in `common/daily_lifecycle.py` to prevent isolated single-sheet test runs from overwriting production `Discovery Daily Processing` at midnight.
+5. Updated `control.sh` to recognize `Desktop-9048` (`TUNNEL_TOKEN_9048`) and restrict managed services to `Sheet1` when `FLEET_SHEETS=1`.
+Related tests:
+- Temp_Test/test_single_sheet_sole_fleet.py (8 passed)
+
 ## [2026-11-16] Option 1 Strict System Instruction Tuning & Dual-Extraction Benchmark for NIM IF
 Files changed:
 - common/pipeline_engine.py

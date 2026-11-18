@@ -345,7 +345,9 @@ def export_fleet_eligible_sequential(
     seen = set()
     current_row = 4
 
-    for sheet_num in [1, 2, 3, 4]:
+    from common.fleet_orchestrator import FLEET_NODES
+    active_sheet_nums = sorted(FLEET_NODES.keys()) or [1]
+    for sheet_num in active_sheet_nums:
         raw_recs: List[List[str]] = []
         if local_sheet_num == sheet_num and local_records is not None:
             raw_recs = local_records

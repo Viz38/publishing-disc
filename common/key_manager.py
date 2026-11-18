@@ -779,20 +779,29 @@ class NIMKeyManager:
     def for_sheet(
         cls,
         sheet_num: int,
-        total_sheets: int = 4,
+        total_sheets: Optional[int] = None,
         keys: Optional[List[str]] = None
     ) -> "NIMKeyManager":
-        sharded = get_sharded_nim_keys(sheet_num, total_sheets=total_sheets, keys=keys)
+        eff_total = total_sheets if total_sheets is not None else get_fleet_sheet_count()
+        sharded = get_sharded_nim_keys(sheet_num, total_sheets=eff_total, keys=keys)
         logger.info(
-            f"Initialized dedicated NIMKeyManager for Sheet {sheet_num}/{total_sheets} "
+            f"Initialized dedicated NIMKeyManager for Sheet {sheet_num}/{eff_total} "
             f"with {len(sharded)} isolated keys (0 cross-process collisions)."
         )
         return cls(keys=sharded)
 
 
+def get_fleet_sheet_count() -> int:
+    """Returns configured number of active fleet sheets from FLEET_SHEETS env (default 4, clamped 1..4)."""
+    raw = os.getenv("FLEET_SHEETS", "").strip()
+    if raw.isdigit():
+        return max(1, min(4, int(raw)))
+    return 4
+
+
 def get_sharded_nim_keys(
     sheet_num: int,
-    total_sheets: int = 4,
+    total_sheets: Optional[int] = None,
     keys: Optional[List[str]] = None,
     invalid_keys: Optional[Set[str]] = None
 ) -> List[str]:
@@ -803,8 +812,9 @@ def get_sharded_nim_keys(
     all sheets, completely avoiding clustered stalling.
     Ensures 0 key collision across parallel sheet processes.
     """
-    if sheet_num < 1 or sheet_num > total_sheets:
-        raise ValueError(f"sheet_num must be between 1 and {total_sheets}, got {sheet_num}")
+    eff_total = total_sheets if total_sheets is not None else get_fleet_sheet_count()
+    if sheet_num < 1 or sheet_num > eff_total:
+        raise ValueError(f"sheet_num must be between 1 and {eff_total}, got {sheet_num}")
 
     if keys is not None:
         raw_keys = [str(k).strip() for k in keys if str(k).strip()]
@@ -826,12 +836,9 @@ def get_sharded_nim_keys(
     if not valid_candidates:
         valid_candidates = [k for k in raw_keys if k]
 
-    # Interleaved round-robin distribution:
-    # Sheet 1 gets indices 0, 4, 8, ...
-    # Sheet 2 gets indices 1, 5, 9, ...
-    # Sheet 3 gets indices 2, 6, 10, ...
-    # Sheet 4 gets indices 3, 7, 11, ...
-    assigned = [k for idx, k in enumerate(valid_candidates) if idx % total_sheets == (sheet_num - 1)]
+    # Interleaved round-robin distribution across eff_total sheets:
+    # When FLEET_SHEETS=1, Sheet 1 receives 100% of valid keys.
+    assigned = [k for idx, k in enumerate(valid_candidates) if idx % eff_total == (sheet_num - 1)]
     return assigned
 
 
