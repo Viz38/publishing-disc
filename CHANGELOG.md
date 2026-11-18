@@ -1,6 +1,55 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-18] Export Consolidated Unique Payload Daily Budget & Sheet Traceability Workbook
+Files changed:
+- Google Sheet `1JogF0VT_c80YXWTF11aSvw8bcZ25eBkoe-44qsgfWG4` (`Discovery Budget - 18nov2026`): populated `Sheet1` (`gid=0`) and `Inactive (0 Budget) Payloads`
+- Temp_Test/export_unique_payload_budget_sheet.py
+Reason:
+1. Consolidated all unique payloads across Sheets 1–4 by canonical JSON payload (46 unique active/configured payloads on `Sheet1`, plus 278 untouched 0-budget Sheet 4 catalog payloads on `Inactive (0 Budget) Payloads`).
+2. Included executive formula-driven summary block (70% / 20% / 10% and Desktop-5080 vs Desktop-5321 splits), live Tracxn supply counts, total daily budget, % share, per-sheet breakdown (`Sheet 1`–`Sheet 4`), exact row traceability (`S1:R13 | S2:R10 | ...`), IDs (`Filter ID`, `FunnelGroupID`, `funnelId`), full active JSON payload, and platform links.
+Related tests:
+- Temp_Test/export_unique_payload_budget_sheet.py (read-back verified exact computed formulas: 56,000 / 16,000 / 8,000 = 80,000; 20,000 per sheet; 40,000 per desktop)
+
+
+## [2026-11-18] Cap Daily Fleet Budget at 80,000/day (70% Set3 / 20% Usage-Based Product / 10% Others)
+Files changed:
+- Google Sheet 1 (`1IWXqnR52IzpFewE0QS0tlJFT65nJE_fmIoJs8ps9nZo`): `CF_IF Engine - Input Payload` updated to 20,000/day (`Old Budget` backup untouched)
+- Google Sheet 2 (`1QGraMZOJjc-EIZlt_CieOVpr1jxw6tLa_QnWgWHou5I`): `CF_IF Engine - Input Payload` updated to 20,000/day (`Old Budget` backup untouched)
+- Google Sheet 3 (`1MHdkFCsoAY0V7ix_pJ5SpWFq3EFpJEug2ntJk1FkEl8`): `CF_IF Engine - Input Payload` updated to 20,000/day (`Old Budget` backup untouched)
+- Google Sheet 4 (`1z3wH--c2qHGlNqW0e-6Mc8IVqh_kN5_fbWjILM4FxQM`): `CF_IF Engine - Input Payload` updated to 20,000/day (`Old Budget` backup untouched)
+- Temp_Test/apply_80k_budget_split.py
+Reason:
+1. Capped daily fleet budgeted intake at 80,000 domains/day (20,000 per sheet; 40,000 per desktop) to align with max daily fleet processing capacity.
+2. Distributed strictly proportional to live Tracxn platform supply with 0-supply and previously 0-budget rows kept at 0:
+   - `bu_llm_brightdata_set3`: 56,000 (70.00% — 4,822 Processed / 9 Deleted / 51,169 Unprocessed)
+   - `P1 - Unpublished Domains - Product - CF - New`: 16,000 (20.00% — ~1.53% of live supply per active sub-filter)
+   - Others: 8,000 (10.00% — Sheet 1: 4,000, Sheet 2: 2,500, Sheet 3 AI-Native: 1,500; `P0 - Funded - CF` kept BLANK/clear-all)
+Related tests:
+- Temp_Test/apply_80k_budget_split.py (post-update verification confirmed exact 56,000 / 16,000 / 8,000 = 80,000 across all 4 sheets)
+
+
+## [2026-11-18] Rebalance Fleet Daily Budgets (70% Set3 / 20% Usage-Based Product / 10% Others), Backup Old Budget, & Hide Extra Tabs
+Files changed:
+- Google Sheet 1 (`1IWXqnR52IzpFewE0QS0tlJFT65nJE_fmIoJs8ps9nZo`): `CF_IF Engine - Input Payload`, duplicated `Old Budget` (hidden), hid `Prompt`
+- Google Sheet 2 (`1QGraMZOJjc-EIZlt_CieOVpr1jxw6tLa_QnWgWHou5I`): `CF_IF Engine - Input Payload`, duplicated `Old Budget` (hidden), hid `Prompt`
+- Google Sheet 3 (`1MHdkFCsoAY0V7ix_pJ5SpWFq3EFpJEug2ntJk1FkEl8`): `CF_IF Engine - Input Payload`, duplicated `Old Budget` (hidden), hid `Prompt`
+- Google Sheet 4 (`1z3wH--c2qHGlNqW0e-6Mc8IVqh_kN5_fbWjILM4FxQM`): `CF_IF Engine - Input Payload`, renamed prior backup to `Old Budget (Archive)` (hidden), duplicated `Old Budget` (hidden), hid `Prompt`
+- Temp_Test/check_payload_supply_counts.py
+- Temp_Test/check_s2_s4_supply.py
+- Temp_Test/apply_supply_based_budget_split.py
+Reason:
+1. Audited live Tracxn platform `total_count` supply for every active payload across all 4 sheets to prevent allocating budget to empty or low-supply filters.
+2. Backed up every spreadsheet's pre-change `CF_IF Engine - Input Payload` into a duplicate tab named `Old Budget`.
+3. Rebalanced the 151,200 daily fleet budget evenly at 37,800/sheet (75,600 per desktop) following exact live-supply proportions:
+   - `bu_llm_brightdata_set3`: 105,840 (70.00% — 9,120 Processed / 9 Deleted / 96,711 Unprocessed)
+   - `P1 - Unpublished Domains - Product - CF - New`: 30,240 (20.00% — ~2.90% of live supply per active sub-filter)
+   - Others: 15,120 (10.00% — `P0 - Funded - CF` kept BLANK/clear-all; all 0-supply and existing 0-budget rows set/kept at 0)
+4. Enforced tab visibility across all 4 sheets: kept only `CF_IF_Engine_Database`, `CF_IF Engine - Input Payload`, and `Funnel_Details` visible; hid `Prompt`, `Old Budget`, and `Old Budget (Archive)`.
+Related tests:
+- Temp_Test/apply_supply_based_budget_split.py (post-update verification confirmed exact 105,840 / 30,240 / 15,120 = 151,200 and tab visibility across all 4 sheets)
+
+
 ## [2026-11-17] Fleet Daemon and Engine Clean Restart with 17-Token Active Pool
 Files changed:
 - Temp_Test/restart_fleet_engines.py
