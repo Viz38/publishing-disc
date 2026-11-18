@@ -1,6 +1,7 @@
 """Shared daily midnight cutoff, eligible export, CSV-only status, and 5k backlog carryover lifecycle."""
 
 import asyncio
+import datetime
 import logging
 import os
 import re
@@ -12,10 +13,14 @@ from common.daily_eligible_exporter import (
     DAILY_PROCESSING_GID,
     DAILY_PROCESSING_SHEET_ID,
     collect_fleet_eligible_records,
+    collect_fleet_gemini_ran_count,
+    count_gemini_ran_from_rows_and_cache,
     export_eligible_domains_to_gsheet,
     export_fleet_eligible_sequential,
+    load_sheet_daily_metrics_snapshot,
     load_sheet_eligible_snapshot,
     save_sheet_eligible_snapshot,
+    update_daily_processed_counts_sheet,
 )
 from common.dashboard_metrics import (
     extract_eligible_domain_records,
@@ -74,7 +79,13 @@ def snapshot_sheet_before_clear(
         rows = [[dom] + [""] * 56 for dom in cache_map.keys()]
 
     eligible_recs = extract_eligible_domain_records(rows, cache_map=cache_map)
-    save_sheet_eligible_snapshot(base_dir, eligible_recs, snapshot_date=snapshot_date)
+    gemini_ran_count = count_gemini_ran_from_rows_and_cache(rows, cache_map=cache_map)
+    save_sheet_eligible_snapshot(
+        base_dir,
+        eligible_recs,
+        snapshot_date=snapshot_date,
+        gemini_ran_count=gemini_ran_count,
+    )
 
     try:
         backlog_items = backlog_manager.extract_uncompleted_items_from_rows(
@@ -101,9 +112,12 @@ async def coordinate_daily_eligible_export(
     snapshot_date: str,
     local_records: List[List[str]],
     now_ist: Any,
+    local_gemini_ran: Optional[int] = None,
 ) -> bool:
     """
-    Coordinates consolidated 4-sheet export to Discovery Daily Processing (1DCKv...).
+    Coordinates consolidated 4-sheet export to Discovery Daily Processing (1DCKv...)
+    AND updates the daily summary counts (Col F Accepted + Col G Processing/Gemini) on
+    Processed Counts (1GMojL6BkqqTZv3rkcQ19b20y4JYT9gkucPRE7h6vYmo) for the completed run date.
     Sheet 1 is primary coordinator; Sheet 3 is HA fallback after 00:01:30 if B1 wasn't updated yet.
     """
     if sync_gc is None or sheet_num not in (1, 3):
@@ -155,6 +169,36 @@ async def coordinate_daily_eligible_export(
             f"✅ [12:00 AM Export] Sheet{sheet_num} executed sequential export of {exported_cnt} eligible fleet domains "
             f"to {DAILY_PROCESSING_SHEET_ID} (B1={expected_b1})."
         )
+
+        # Update Daily Processed Counts (Col F Accepted & Col G Processing/Gemini Ran)
+        try:
+            report_dt = (now_ist - datetime.timedelta(days=1)) if now_ist.hour < 6 else now_ist
+            report_date_str = report_dt.strftime("%Y-%m-%d")
+            counts_done_marker = os.path.join(logs_dir, f".daily_processed_counts_{report_date_str}.done")
+            if not os.path.exists(counts_done_marker):
+                eff_local_gemini = local_gemini_ran
+                if eff_local_gemini is None:
+                    snap_meta = load_sheet_daily_metrics_snapshot(base_dir, snapshot_date)
+                    if snap_meta is not None:
+                        eff_local_gemini = snap_meta.get("gemini_ran_count", 0)
+                total_gemini_ran = await asyncio.to_thread(
+                    collect_fleet_gemini_ran_count,
+                    snapshot_date=snapshot_date,
+                    local_sheet_num=sheet_num,
+                    local_gemini_ran=eff_local_gemini,
+                )
+                await asyncio.to_thread(
+                    update_daily_processed_counts_sheet,
+                    gc=sync_gc,
+                    report_date_str=report_date_str,
+                    accepted_count=exported_cnt,
+                    gemini_processing_count=total_gemini_ran,
+                )
+                with open(counts_done_marker, "w") as cf:
+                    cf.write(f"date={report_date_str},accepted={exported_cnt},gemini={total_gemini_ran}")
+        except Exception as pe:
+            logger.error(f"Error updating Daily Processed Counts sheet: {pe}")
+
         return True
     except Exception as ee:
         logger.error(f"Error during 12:00 AM daily eligible export: {ee}")
@@ -170,21 +214,26 @@ def get_eligible_domains_payload(
     date_param: Optional[str] = None,
 ) -> Dict[str, Any]:
     target_date = date_param or get_now_ist().strftime("%Y-%m-%d")
-    snap = load_sheet_eligible_snapshot(base_dir, target_date) if date_param else None
-    if snap is None:
-        # Also check today's snapshot if cutoff just cleared sheet
+    snap_meta = load_sheet_daily_metrics_snapshot(base_dir, target_date) if date_param else None
+    if snap_meta is None:
         today_str = get_now_ist().strftime("%Y-%m-%d")
-        snap = load_sheet_eligible_snapshot(base_dir, today_str)
+        snap_meta = load_sheet_daily_metrics_snapshot(base_dir, today_str)
+
+    snap_recs = snap_meta["records"] if snap_meta is not None else []
+    snap_gemini = int(snap_meta.get("gemini_ran_count") or 0) if snap_meta is not None else 0
 
     cache_map = load_cache_map(cache=local_cache, base_dir=base_dir)
     live_rows = _read_rows_for_snapshot(base_dir, sync_gc=sync_gc, sheet_id=sheet_id, sheet_name=sheet_name)
     live_recs = extract_eligible_domain_records(live_rows, cache_map=cache_map) if live_rows else []
+    live_gemini = count_gemini_ran_from_rows_and_cache(live_rows, cache_map=cache_map) if (live_rows or cache_map) else 0
 
-    records = live_recs if len(live_recs) >= len(snap or []) else (snap or [])
+    records = live_recs if len(live_recs) >= len(snap_recs) else snap_recs
+    gemini_ran_count = max(live_gemini, snap_gemini)
     return {
         "sheet": os.path.basename(os.path.abspath(base_dir)),
         "date": target_date,
         "count": len(records),
+        "gemini_ran_count": gemini_ran_count,
         "records": records,
     }
 

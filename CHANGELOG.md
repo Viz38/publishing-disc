@@ -1,6 +1,22 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-18] Automate Daily Processed Counts Sheet Updates (Col F Accepted & Col G Gemini Processing)
+Files changed:
+- common/daily_eligible_exporter.py
+- common/daily_lifecycle.py
+- Temp_Test/test_daily_processed_counts_updater.py
+- Temp_Test/audit_7day_gemini_vs_accepted.py
+- Google Sheet `1GMojL6BkqqTZv3rkcQ19b20y4JYT9gkucPRE7h6vYmo` (`Processed Counts`, `gid=0`): backfilled `2026-11-17` Row 18 Col G = `25,179` & aligned Row 19 `=SUM(G2:G18)`
+Reason:
+1. Added `count_gemini_ran_from_rows_and_cache()` and persisted `gemini_ran_count` inside each sheet's midnight `daily_eligible_<date>.json` snapshot and `/fleet/eligible-domains` API payload.
+2. Added `collect_fleet_gemini_ran_count()` and `update_daily_processed_counts_sheet()` to upsert each completed day's exact 4-sheet Accepted count (Col F) and Gemini-processed count (Col G) into `Processed Counts` (`1GMojL6BkqqTZv3rkcQ19b20y4JYT9gkucPRE7h6vYmo`, `gid=0`), inserting a new date row above `Total (Daily Sum)` when needed and keeping footer `=SUM(...)` formulas aligned.
+3. Wired automated daily writeback into `coordinate_daily_eligible_export()` (Sheet 1 primary coordinator + Sheet 3 HA fallback + idempotent `.daily_processed_counts_<date>.done` marker).
+4. Backfilled `2026-11-17` Col G (`25,179`) live on `Processed Counts`.
+Related tests:
+- Temp_Test/test_daily_processed_counts_updater.py (5/5 unit tests passed)
+
+
 ## [2026-11-18] Export Consolidated Unique Payload Daily Budget & Sheet Traceability Workbook
 Files changed:
 - Google Sheet `1JogF0VT_c80YXWTF11aSvw8bcZ25eBkoe-44qsgfWG4` (`Discovery Budget - 18nov2026`): populated `Sheet1` (`gid=0`) and `Inactive (0 Budget) Payloads`

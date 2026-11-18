@@ -23,6 +23,40 @@ logger = logging.getLogger(__name__)
 DAILY_PROCESSING_SHEET_ID = "1DCKvQcAQgTKGnWquYNOH6SlGgCun8yq8HD8Zj0AIJ-Y"
 DAILY_PROCESSING_GID = 0
 
+PROCESSED_COUNTS_SHEET_ID = "1GMojL6BkqqTZv3rkcQ19b20y4JYT9gkucPRE7h6vYmo"
+PROCESSED_COUNTS_GID = 0
+
+
+def count_gemini_ran_from_rows_and_cache(
+    rows: Sequence[Sequence[Any]],
+    cache_map: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> int:
+    """Counts unique domains where Gemini ran (IF status, IF name, or Feed number non-empty)."""
+    seen_gemini = set()
+    for r in rows or []:
+        if not r or not str(r[0] or "").strip():
+            continue
+        nd = normalize_domain(str(r[0]))
+        if not nd:
+            continue
+        if_st = str(r[37]).strip() if len(r) > 37 and r[37] is not None else ""
+        if_nm = str(r[38]).strip() if len(r) > 38 and r[38] is not None else ""
+        feed_no = str(r[43]).strip() if len(r) > 43 and r[43] is not None else ""
+        if if_st or if_nm or feed_no:
+            seen_gemini.add(nd)
+
+    for dom_key, c_rec in (cache_map or {}).items():
+        nd = normalize_domain(dom_key)
+        if not nd or nd in seen_gemini or not isinstance(c_rec, dict):
+            continue
+        if_st = str(c_rec.get("output_data_if") or "").strip()
+        if_nm = str(c_rec.get("output_data_if_name") or "").strip()
+        feed_no = str(c_rec.get("output_data_feed") or "").strip()
+        if if_st or if_nm or feed_no:
+            seen_gemini.add(nd)
+
+    return len(seen_gemini)
+
 
 def get_snapshot_filepath(sheet_dir: str, snapshot_date: str) -> str:
     logs_dir = os.path.join(sheet_dir, "Logs")
@@ -34,15 +68,18 @@ def save_sheet_eligible_snapshot(
     sheet_dir: str,
     records: List[List[str]],
     snapshot_date: str,
+    gemini_ran_count: Optional[int] = None,
 ) -> str:
-    """Atomically persists per-sheet eligible [domain, profile_id, pub_funnel_name, pub_funnel_id] before midnight clear."""
+    """Atomically persists per-sheet eligible records + daily gemini_ran_count before midnight clear."""
     path = get_snapshot_filepath(sheet_dir, snapshot_date)
-    payload = {
+    payload: Dict[str, Any] = {
         "date": snapshot_date,
         "saved_at": get_now_ist().isoformat(),
         "count": len(records),
         "records": records,
     }
+    if gemini_ran_count is not None:
+        payload["gemini_ran_count"] = int(gemini_ran_count)
     dir_name = os.path.dirname(path)
     fd, tmp_path = tempfile.mkstemp(dir=dir_name, prefix=".eligible_tmp_")
     try:
@@ -56,14 +93,16 @@ def save_sheet_eligible_snapshot(
             except OSError:
                 pass
         raise
-    logger.info(f"💾 Saved daily eligible snapshot ({len(records)} domains) -> {path}")
+    logger.info(
+        f"💾 Saved daily eligible snapshot ({len(records)} eligible, gemini_ran={gemini_ran_count}) -> {path}"
+    )
     return path
 
 
-def load_sheet_eligible_snapshot(
+def load_sheet_daily_metrics_snapshot(
     sheet_dir: str,
     snapshot_date: str,
-) -> Optional[List[List[str]]]:
+) -> Optional[Dict[str, Any]]:
     path = get_snapshot_filepath(sheet_dir, snapshot_date)
     if not os.path.exists(path):
         return None
@@ -71,10 +110,24 @@ def load_sheet_eligible_snapshot(
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         recs = data.get("records")
-        return recs if isinstance(recs, list) else []
+        recs_list = recs if isinstance(recs, list) else []
+        return {
+            "date": data.get("date", snapshot_date),
+            "count": len(recs_list),
+            "gemini_ran_count": int(data.get("gemini_ran_count") or 0),
+            "records": recs_list,
+        }
     except Exception as e:
         logger.warning(f"Failed loading snapshot {path}: {e}")
         return None
+
+
+def load_sheet_eligible_snapshot(
+    sheet_dir: str,
+    snapshot_date: str,
+) -> Optional[List[List[str]]]:
+    snap = load_sheet_daily_metrics_snapshot(sheet_dir, snapshot_date)
+    return snap["records"] if snap is not None else None
 
 
 def get_eligible_records_for_sheet_dir(
@@ -460,3 +513,136 @@ def collect_fleet_eligible_records(
             logger.warning(f"Failed fetching eligible domains from Sheet{s_num} ({url}): {e}")
 
     return combined
+
+
+def fetch_peer_sheet_gemini_ran_count(
+    sheet_num: int,
+    snapshot_date: Optional[str] = None,
+    auth_token: Optional[str] = None,
+) -> int:
+    import requests
+    from common.fleet_orchestrator import get_node_url
+
+    token = auth_token or os.getenv("SERVICE_AUTH_TOKEN", "")
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    url = f"{get_node_url(sheet_num).rstrip('/')}/fleet/eligible-domains"
+    if snapshot_date:
+        url = f"{url}?date={snapshot_date}"
+    try:
+        resp = requests.get(url, headers=headers, timeout=30)
+        if resp.status_code == 200:
+            data = resp.json()
+            return int(data.get("gemini_ran_count") or 0)
+        logger.warning(f"Peer Sheet{sheet_num} /fleet/eligible-domains returned HTTP {resp.status_code}")
+    except Exception as e:
+        logger.warning(f"Failed fetching gemini_ran_count from Sheet{sheet_num} ({url}): {e}")
+
+    if snapshot_date:
+        snap = load_sheet_daily_metrics_snapshot(f"Sheet{sheet_num}", snapshot_date)
+        if snap:
+            return int(snap.get("gemini_ran_count") or 0)
+    return 0
+
+
+def collect_fleet_gemini_ran_count(
+    snapshot_date: Optional[str] = None,
+    local_sheet_num: Optional[int] = None,
+    local_gemini_ran: Optional[int] = None,
+    auth_token: Optional[str] = None,
+    peer_fetcher: Optional[Any] = None,
+) -> int:
+    """Sums daily Gemini-ran domain counts across Sheets 1..4."""
+    fetch_fn = peer_fetcher or (
+        lambda s_num: fetch_peer_sheet_gemini_ran_count(s_num, snapshot_date=snapshot_date, auth_token=auth_token)
+    )
+    total = 0
+    for s_num in [1, 2, 3, 4]:
+        if local_sheet_num == s_num and local_gemini_ran is not None:
+            total += int(local_gemini_ran)
+        else:
+            total += int(fetch_fn(s_num) or 0)
+    return total
+
+
+def update_daily_processed_counts_sheet(
+    gc: Any,
+    report_date_str: str,
+    accepted_count: int,
+    gemini_processing_count: int,
+    spreadsheet_id: str = PROCESSED_COUNTS_SHEET_ID,
+    gid: int = PROCESSED_COUNTS_GID,
+) -> Dict[str, Any]:
+    """
+    Upserts Col F (`Accepted`) and Col G (`Processing` / Gemini Ran) for `report_date_str` (YYYY-MM-DD)
+    on the daily tracking sheet (`Processed Counts`, gid=0), inserting above `Total (Daily Sum)` if needed
+    and keeping the footer `=SUM(...)` formulas aligned.
+    """
+    ss = gc.open_by_key(spreadsheet_id)
+    try:
+        ws = ss.get_worksheet_by_id(gid)
+    except Exception:
+        ws = ss.worksheet("Processed Counts")
+
+    rows = ws.get_all_values()
+    target_row_idx: Optional[int] = None
+    total_row_idx: Optional[int] = None
+
+    for idx, r in enumerate(rows, start=1):
+        if idx == 1:
+            continue
+        col_a = str(r[0]).strip() if r else ""
+        if col_a == report_date_str:
+            target_row_idx = idx
+        elif col_a.lower().startswith("total"):
+            total_row_idx = idx
+
+    if target_row_idx is not None:
+        ws.update(
+            range_name=f"F{target_row_idx}:G{target_row_idx}",
+            values=[[int(accepted_count), int(gemini_processing_count)]],
+            value_input_option="USER_ENTERED",
+        )
+        action = "updated"
+        written_row = target_row_idx
+    else:
+        new_row = [report_date_str, "", "", "", "", int(accepted_count), int(gemini_processing_count)]
+        if total_row_idx is not None:
+            ws.insert_row(new_row, index=total_row_idx, value_input_option="USER_ENTERED")
+            written_row = total_row_idx
+            total_row_idx += 1
+        else:
+            written_row = len(rows) + 1
+            ws.update(
+                range_name=f"A{written_row}:G{written_row}",
+                values=[new_row],
+                value_input_option="USER_ENTERED",
+            )
+        action = "inserted"
+
+    # Keep Total (Daily Sum) formulas aligned through the last data row above it
+    if total_row_idx is not None and total_row_idx > 2:
+        last_data_row = total_row_idx - 1
+        ws.update(
+            range_name=f"B{total_row_idx}:G{total_row_idx}",
+            values=[[
+                f"=SUM(B2:B{last_data_row})",
+                f"=SUM(C2:C{last_data_row})",
+                f"=SUM(D2:D{last_data_row})",
+                f"=SUM(E2:E{last_data_row})",
+                f"=SUM(F2:F{last_data_row})",
+                f"=SUM(G2:G{last_data_row})",
+            ]],
+            value_input_option="USER_ENTERED",
+        )
+
+    logger.info(
+        f"📊 [Daily Processed Counts] {action.upper()} {report_date_str} (Row {written_row}): "
+        f"Col F (Accepted)={accepted_count:,}, Col G (Processing/Gemini)={gemini_processing_count:,}"
+    )
+    return {
+        "action": action,
+        "date": report_date_str,
+        "row": written_row,
+        "accepted": int(accepted_count),
+        "processing": int(gemini_processing_count),
+    }
