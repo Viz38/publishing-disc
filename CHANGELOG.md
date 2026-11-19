@@ -1,6 +1,20 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-19] Merge origin/main into NIM-FeedPrediction & Fix Pipeline split_nim_keys_for_stages Import
+Files changed:
+- common/pipeline_engine.py
+- common/key_manager.py
+- common/__init__.py
+- CHANGELOG.md
+Reason:
+1. Merged all latest features and bug fixes from `main` into `NIM-FeedPrediction` (including midnight Processed Counts automation, fast-path snapshot response, payload budget overrides, self-healing circuit breaker, and waterfall scraper concurrency limits).
+2. Fixed critical `NameError: name 'split_nim_keys_for_stages' is not defined` bug in `common/pipeline_engine.py` by importing `split_nim_keys_for_stages` from `common`.
+3. Kept `main` and `NIM-FeedPrediction` isolated: preserved dedicated NIM IF prediction, 60/40 token split, single-sheet sole-fleet resilience, and Desktop-9048 Sheet 1 configuration on `NIM-FeedPrediction`.
+Related tests:
+- Temp_Test/test_single_sheet_sole_fleet.py (8 passed)
+- Temp_Test/test_apps_script_config.py (4 passed)
+
 ## [2026-11-19] Update Sheet1 apps_script.gs for New Sheet 1 and Desktop-9048
 Files changed:
 - Sheet1/apps_script.gs
@@ -69,6 +83,211 @@ Reason:
 Related tests:
 - Temp_Test/test_token_split.py (4 unit tests passed)
 - Temp_Test/test_nim_api_classification.py (passed)
+
+## [2026-11-18] Bulk Move All 164,623 Unpublished SR(TPF) Domains to Central Funnel (100% Success)
+Files changed:
+- Google Sheet `1bOLBaP120HuG4wmZNisKVQRYzVykidNkPqcqDhW8s1c` (`Unpublished SR(TPF)` -> `Longlist`, `gid=0`): expanded to 14 columns (`N1 = Error`) and updated `L2:N164624` (`CENTRAL FUNNEL` / `5dc559138787070a80be21ba` / blank error)
+- Temp_Test/snapshot_and_pilot_tpf_to_cf.py
+- Temp_Test/validate_temp_tpf_keys.py
+- Temp_Test/bulk_move_tpf_to_cf_multiprocess.py
+Reason:
+1. Validated 8/8 multi-status pilot rows (`MOVED_INTO`, `SNOOZED`, blank, `CAME_BACK`, `MARKED_FOR_LATER`, `UNSNOOZED`, `MARKED_IRRELEVANT`, `ESCALATED`) via Tracxn `force-assign` + `move` into `CENTRAL FUNNEL` (`5dc559138787070a80be21ba`).
+2. Executed 4-process × 200-worker (800 concurrent workers) bulk move across 34 temporary validated Tracxn tokens (`.env` strictly untouched) on local Mac, achieving 39.9–59.4 domains/sec sustained throughput.
+3. Successfully moved all 164,623/164,623 domains with 0 failures and 0 errors, and wrote Cols L, M, and N back to `Longlist` in 7 chunked batch writes.
+Related tests:
+- Temp_Test/snapshot_and_pilot_tpf_to_cf.py (8/8 HTTP 200 across all FunnelStatus values)
+- Temp_Test/bulk_move_tpf_to_cf_multiprocess.py (`{'MOVED': 164623}`, 0 errors, all 164,623 sheet rows updated)
+
+
+## [2026-11-18] Automate Daily Processed Counts Sheet Updates (Col F Accepted & Col G Gemini Processing)
+Files changed:
+- common/daily_eligible_exporter.py
+- common/daily_lifecycle.py
+- Temp_Test/test_daily_processed_counts_updater.py
+- Temp_Test/audit_7day_gemini_vs_accepted.py
+- Google Sheet `1GMojL6BkqqTZv3rkcQ19b20y4JYT9gkucPRE7h6vYmo` (`Processed Counts`, `gid=0`): backfilled `2026-11-17` Row 18 Col G = `25,179` & aligned Row 19 `=SUM(G2:G18)`
+Reason:
+1. Added `count_gemini_ran_from_rows_and_cache()` and persisted `gemini_ran_count` inside each sheet's midnight `daily_eligible_<date>.json` snapshot and `/fleet/eligible-domains` API payload.
+2. Added `collect_fleet_gemini_ran_count()` and `update_daily_processed_counts_sheet()` to upsert each completed day's exact 4-sheet Accepted count (Col F) and Gemini-processed count (Col G) into `Processed Counts` (`1GMojL6BkqqTZv3rkcQ19b20y4JYT9gkucPRE7h6vYmo`, `gid=0`), inserting a new date row above `Total (Daily Sum)` when needed and keeping footer `=SUM(...)` formulas aligned.
+3. Wired automated daily writeback into `coordinate_daily_eligible_export()` (Sheet 1 primary coordinator + Sheet 3 HA fallback + idempotent `.daily_processed_counts_<date>.done` marker).
+4. Backfilled `2026-11-17` Col G (`25,179`) live on `Processed Counts`.
+Related tests:
+- Temp_Test/test_daily_processed_counts_updater.py (5/5 unit tests passed)
+
+
+## [2026-11-18] Export Consolidated Unique Payload Daily Budget & Sheet Traceability Workbook
+Files changed:
+- Google Sheet `1JogF0VT_c80YXWTF11aSvw8bcZ25eBkoe-44qsgfWG4` (`Discovery Budget - 18nov2026`): populated `Sheet1` (`gid=0`) and `Inactive (0 Budget) Payloads`
+- Temp_Test/export_unique_payload_budget_sheet.py
+Reason:
+1. Consolidated all unique payloads across Sheets 1–4 by canonical JSON payload (46 unique active/configured payloads on `Sheet1`, plus 278 untouched 0-budget Sheet 4 catalog payloads on `Inactive (0 Budget) Payloads`).
+2. Included executive formula-driven summary block (70% / 20% / 10% and Desktop-5080 vs Desktop-5321 splits), live Tracxn supply counts, total daily budget, % share, per-sheet breakdown (`Sheet 1`–`Sheet 4`), exact row traceability (`S1:R13 | S2:R10 | ...`), IDs (`Filter ID`, `FunnelGroupID`, `funnelId`), full active JSON payload, and platform links.
+Related tests:
+- Temp_Test/export_unique_payload_budget_sheet.py (read-back verified exact computed formulas: 56,000 / 16,000 / 8,000 = 80,000; 20,000 per sheet; 40,000 per desktop)
+
+
+## [2026-11-18] Cap Daily Fleet Budget at 80,000/day (70% Set3 / 20% Usage-Based Product / 10% Others)
+Files changed:
+- Google Sheet 1 (`1IWXqnR52IzpFewE0QS0tlJFT65nJE_fmIoJs8ps9nZo`): `CF_IF Engine - Input Payload` updated to 20,000/day (`Old Budget` backup untouched)
+- Google Sheet 2 (`1QGraMZOJjc-EIZlt_CieOVpr1jxw6tLa_QnWgWHou5I`): `CF_IF Engine - Input Payload` updated to 20,000/day (`Old Budget` backup untouched)
+- Google Sheet 3 (`1MHdkFCsoAY0V7ix_pJ5SpWFq3EFpJEug2ntJk1FkEl8`): `CF_IF Engine - Input Payload` updated to 20,000/day (`Old Budget` backup untouched)
+- Google Sheet 4 (`1z3wH--c2qHGlNqW0e-6Mc8IVqh_kN5_fbWjILM4FxQM`): `CF_IF Engine - Input Payload` updated to 20,000/day (`Old Budget` backup untouched)
+- Temp_Test/apply_80k_budget_split.py
+Reason:
+1. Capped daily fleet budgeted intake at 80,000 domains/day (20,000 per sheet; 40,000 per desktop) to align with max daily fleet processing capacity.
+2. Distributed strictly proportional to live Tracxn platform supply with 0-supply and previously 0-budget rows kept at 0:
+   - `bu_llm_brightdata_set3`: 56,000 (70.00% — 4,822 Processed / 9 Deleted / 51,169 Unprocessed)
+   - `P1 - Unpublished Domains - Product - CF - New`: 16,000 (20.00% — ~1.53% of live supply per active sub-filter)
+   - Others: 8,000 (10.00% — Sheet 1: 4,000, Sheet 2: 2,500, Sheet 3 AI-Native: 1,500; `P0 - Funded - CF` kept BLANK/clear-all)
+Related tests:
+- Temp_Test/apply_80k_budget_split.py (post-update verification confirmed exact 56,000 / 16,000 / 8,000 = 80,000 across all 4 sheets)
+
+
+## [2026-11-18] Rebalance Fleet Daily Budgets (70% Set3 / 20% Usage-Based Product / 10% Others), Backup Old Budget, & Hide Extra Tabs
+Files changed:
+- Google Sheet 1 (`1IWXqnR52IzpFewE0QS0tlJFT65nJE_fmIoJs8ps9nZo`): `CF_IF Engine - Input Payload`, duplicated `Old Budget` (hidden), hid `Prompt`
+- Google Sheet 2 (`1QGraMZOJjc-EIZlt_CieOVpr1jxw6tLa_QnWgWHou5I`): `CF_IF Engine - Input Payload`, duplicated `Old Budget` (hidden), hid `Prompt`
+- Google Sheet 3 (`1MHdkFCsoAY0V7ix_pJ5SpWFq3EFpJEug2ntJk1FkEl8`): `CF_IF Engine - Input Payload`, duplicated `Old Budget` (hidden), hid `Prompt`
+- Google Sheet 4 (`1z3wH--c2qHGlNqW0e-6Mc8IVqh_kN5_fbWjILM4FxQM`): `CF_IF Engine - Input Payload`, renamed prior backup to `Old Budget (Archive)` (hidden), duplicated `Old Budget` (hidden), hid `Prompt`
+- Temp_Test/check_payload_supply_counts.py
+- Temp_Test/check_s2_s4_supply.py
+- Temp_Test/apply_supply_based_budget_split.py
+Reason:
+1. Audited live Tracxn platform `total_count` supply for every active payload across all 4 sheets to prevent allocating budget to empty or low-supply filters.
+2. Backed up every spreadsheet's pre-change `CF_IF Engine - Input Payload` into a duplicate tab named `Old Budget`.
+3. Rebalanced the 151,200 daily fleet budget evenly at 37,800/sheet (75,600 per desktop) following exact live-supply proportions:
+   - `bu_llm_brightdata_set3`: 105,840 (70.00% — 9,120 Processed / 9 Deleted / 96,711 Unprocessed)
+   - `P1 - Unpublished Domains - Product - CF - New`: 30,240 (20.00% — ~2.90% of live supply per active sub-filter)
+   - Others: 15,120 (10.00% — `P0 - Funded - CF` kept BLANK/clear-all; all 0-supply and existing 0-budget rows set/kept at 0)
+4. Enforced tab visibility across all 4 sheets: kept only `CF_IF_Engine_Database`, `CF_IF Engine - Input Payload`, and `Funnel_Details` visible; hid `Prompt`, `Old Budget`, and `Old Budget (Archive)`.
+Related tests:
+- Temp_Test/apply_supply_based_budget_split.py (post-update verification confirmed exact 105,840 / 30,240 / 15,120 = 151,200 and tab visibility across all 4 sheets)
+
+
+## [2026-11-17] Fleet Daemon and Engine Clean Restart with 17-Token Active Pool
+Files changed:
+- Temp_Test/restart_fleet_engines.py
+- Temp_Test/fleet_detailed_report.py
+- Temp_Test/inspect_fleet_processes.py
+- Temp_Test/inspect_engine_logs.py
+Reason:
+1. Executed graceful shutdown and targeted cleanup of previous engine processes across Desktop-5080 and Desktop-5321 while protecting active `advance_precrawl` (PID 3328731) on Desktop-5321.
+2. Restarted all 4 systemd daemons (`discovery-cf1`, `discovery-cf2`, `discovery-cf3`, `discovery-filterv2`) to reload the updated `.env` configuration (17 verified Tracxn tokens, 48 NIM keys) and dynamic rebalancing codebase.
+3. Successfully re-triggered all 4 discovery pipelines from Row 3 (`start_row=3, mode="full"`) in compliance with the Top-Row Resume Mandate.
+4. Verified HTTP 200 telemetry, process health, and active processing across all 4 production sheets:
+   - Sheet 1 (CF-1): PID 1500989, 17/17 TC keys, 12/48 NIM keys, 73 workers, HEALTHY.
+   - Sheet 2 (CF-2): PID 1500991, 17/17 TC keys, 12/48 NIM keys, 73 workers, HEALTHY.
+   - Sheet 3 (CF-3): PID 3418927, 17/17 TC keys, 12/48 NIM keys, 73 workers, HEALTHY.
+   - Sheet 4 (Filter-V2): PID 3418936, 17/17 TC keys, 11/48 NIM keys, 67 workers, HEALTHY.
+Related tests:
+- Temp_Test/fleet_detailed_report.py (4/4 sheets active and reporting 17/17 active TC tokens)
+- Temp_Test/check_precrawl_status.py (Advance pre-crawl PID 3328731 active and generating Job IDs)
+
+
+## [2026-11-17] Purge Expired Tracxn Tokens and Deploy 17-Token Valid Pool Across Fleet
+Files changed:
+- .env (Local workspace)
+- .env (Desktop-5080)
+- .env (Desktop-5321)
+- Temp_Test/probe_user_keys.py
+- Temp_Test/probe_tc_generate.py
+- Temp_Test/build_clean_tracxn_token_pool.py
+- Temp_Test/verify_remote_env_counts.py
+Reason:
+1. Audited 19 candidate Tracxn tokens against platform API and Tech Crawler job generation endpoint (`https://platform.tracxn.com/utils/web-scraper/fetch/url/bu-daily`):
+   - 16 tokens validated with HTTP 202 job generation confirmation.
+   - 3 candidate tokens returned HTTP 401 ("Expired access token"): `3fe417d1-1...`, `ed591741-6...`, and `5be5a522-9...`.
+2. Permanently purged all 5 expired/invalid tokens from the pool (the 3 candidate failures plus 2 historically expired tokens: `ff3f0149-f...5021d5` and `ecc8c6b7-5...d091f2`).
+3. Consolidated and deduplicated all active tokens into a clean, verified 17-token pool.
+4. Deployed updated `TRACXN_API_TOKENS` across `.env` files on `Desktop-5080`, `Desktop-5321`, and local workspace with automated remote backup creation (`.env.bak.<timestamp>`). Verified clean count of exactly 17 valid tokens and 0 expired tokens on both remote production nodes.
+Related tests:
+- Temp_Test/probe_tc_generate.py (16/19 valid)
+- Temp_Test/build_clean_tracxn_token_pool.py (17/22 valid in consolidated pool)
+- Temp_Test/verify_remote_env_counts.py (Verified 17 valid tokens, 0 expired on Desktop-5080 & Desktop-5321)
+
+## [2026-11-17] Dynamic Fleet NIM Key Rebalancing and Worker Auto-Scaling
+Files changed:
+- common/key_manager.py
+- common/fleet_rebalancer.py
+- common/pipeline_engine.py
+- common/__init__.py
+- Temp_Test/test_fleet_dynamic_rebalancer_e2e.py
+- Temp_Test/test_fleet_rebalancer.py
+- Temp_Test/test_fleet_nim_rebalancer.py
+Reason:
+1. Implemented `FleetNIMRebalancer` and `compute_dynamic_shard` in `common/fleet_rebalancer.py` to continuously poll peer sheets and autonomously redistribute all 48 NIM keys among currently active sheets using interleaved round-robin (`key_idx % len(active_sheets) == rank`).
+2. Added `NIMKeyManager.update_keys()` and `get_all_nim_keys()` in `common/key_manager.py` allowing hot re-sharding of active keys without dropping in-flight requests or resetting penalties.
+3. Integrated rebalancer into `common/pipeline_engine.py` with an auto-scale callback that dynamically expands `nim_semaphore` permits, spawns supplementary `nim_producer_worker()` tasks, and scales downstream consumer workers proportionally to maximize throughput without key collisions.
+4. Guaranteed zero cross-sheet key collisions: disjoint key subsets are mathematically enforced across any combination of running sheets, respecting NVIDIA's 2-request in-flight ceiling per key.
+Related tests:
+- Temp_Test/test_fleet_dynamic_rebalancer_e2e.py (3/3 tests passed)
+- Temp_Test/test_fleet_rebalancer.py (4/4 tests passed)
+- Temp_Test/test_fleet_nim_rebalancer.py (2/2 tests passed)
+
+## [2026-11-17] Override 15k Target Count Cap When User-Defined Payload Budget Exceeds 15k
+Files changed:
+- common/advance_precrawl.py
+- Temp_Test/test_payload_budget_override.py
+Reason:
+1. Implemented explicit override for the default 15,000 target count limit in `common/advance_precrawl.py`: when the sum of user-defined budgets in the sheet payload tab (`total_payload_budget`) exceeds 15,000, `effective_target_count` is set to `total_payload_budget`, preventing premature truncation and allowing the advance pre-crawl to fulfill the complete user-specified domain volume (e.g. 30,000 on Sheet 4).
+Related tests:
+- Temp_Test/test_payload_budget_override.py (5/5 tests passed)
+
+
+## [2026-11-17] Comma-Safe Budget Parsing and Fleet-Wide Tomorrow Staged Pre-Crawl Deduplication
+Files changed:
+- common/advance_precrawl.py
+- common/tracxn_domain_ingestor.py
+- Google Sheet: `1z3wH--c2qHGlNqW0e-6Mc8IVqh_kN5_fbWjILM4FxQM` (Sheet 4 Filter-V2, tab: `CF_IF Engine - Input Payload`)
+- Temp_Test/test_advance_precrawl_budget_parsing.py
+Reason:
+1. Comma-Safe Integer Budget Parsing: Added `.replace(",", "").strip()` to `b_str` and `budget_str` evaluation in `common/advance_precrawl.py` and `common/tracxn_domain_ingestor.py` so numbers formatted with thousand-separator commas (e.g. "25,000", "2,500") parse into clean integers rather than raising `ValueError` and defaulting to 0. Updated Sheet 4 `CF_IF Engine - Input Payload` Rows 285-287 to plain numeric strings (`25000`, `2500`, `2500`).
+2. Fleet-Wide Tomorrow Pre-Crawl Exclusion Pool: Extended `initialize_fleet_exclusion_pool()` in `common/advance_precrawl.py` to automatically load all domains already staged in `next_day_pre_crawl.csv` locally and query `/fleet/staged-domains` endpoints across the fleet (Sheets 1, 2, 3), expanding the exclusion pool by 52,919 staged domains to ensure autonomous cross-sheet deduplication before fetching candidate domains.
+Related tests:
+- Temp_Test/test_advance_precrawl_budget_parsing.py
+- Temp_Test/test_exclusion_pool.py
+
+
+## [2026-11-17] Update Monthly Processing and Acceptance Tracking Sheet Through Nov 16
+Files changed:
+- Google Sheet: `1GMojL6BkqqTZv3rkcQ19b20y4JYT9gkucPRE7h6vYmo` (Tabs: `Processed Counts`, `Bot`)
+- Temp_Test/apply_processed_counts_update.py
+Reason:
+1. Updated monthly tracking spreadsheet with deduplicated processing counts across all 4 production sheets (Desktop-5080 and Desktop-5321) for Nov 13, 14, 15, and 16.
+2. Verified deduplicated daily counts against historical ground truth:
+   - Nov 13: 34,705 (CF->IF->PF), 2 (TPF), 1 (OD predicted), 132 (OR predicted) -> Accepted: 34,840, Processing: 43,550
+   - Nov 14: 26,986 (CF->IF->PF), 0 (TPF), 0 (OD predicted), 85 (OR predicted) -> Accepted: 27,071, Processing: 33,839
+   - Nov 15: 17,920 (CF->IF->PF), 0 (TPF), 0 (OD predicted), 45 (OR predicted) -> Accepted: 17,965, Processing: 22,456
+   - Nov 16: 18,297 (CF->IF->PF), 0 (TPF), 1 (OD predicted), 118 (OR predicted) -> Accepted: 18,416, Processing: 23,020
+3. Populated formulas `=SUM(B{r}:E{r})` for Column F (`Accepted`) and `=F{r}*0.25+F{r}` for Column G (`Processing`).
+4. Expanded `Bot` worksheet by inserting 4 date rows (Nov 13-16) and updating `=SUM(B2:B17)` / `=SUM(C2:C17)` on the Total row.
+Related tests:
+- Temp_Test/apply_processed_counts_update.py (read-back verification passed on both worksheets)
+
+## [2026-11-17] Fix 44 Fleet Payload Placement Defects and Zero Customer Mandate Budgets
+Files changed:
+- Google Sheet: `1z3wH--c2qHGlNqW0e-6Mc8IVqh_kN5_fbWjILM4FxQM` (Sheet 4 Filter-V2, tab: `CF_IF Engine - Input Payload`)
+- Google Sheet: `1MHdkFCsoAY0V7ix_pJ5SpWFq3EFpJEug2ntJk1FkEl8` (Sheet 3 CF-3, tab: `CF_IF Engine - Input Payload`)
+- Temp_Test/fix_44_payloads.py
+- Temp_Test/set_mandates_budget_zero.py
+Reason:
+1. Fixed 44 defective payloads across Sheet 3 and Sheet 4 where `"sameAs"` was misplaced at the root level outside `"filter": {...}` (23 rows in Sheet 4 `P0 - Others - CF`) or missing completely inside `"filter"` (1 row in Sheet 4 P0, 8 rows in Sheet 4 P1 Customer Mandates, 12 rows in Sheet 3 P1 Unpublished Domains). Updated Columns D, J, and L across all 44 rows and verified 0 remaining payload syntax defects across all 328 fleet payloads.
+2. Root Cause Investigation for Leaked Leads: Traced 30 sample domains against live Tracxn API. Proved that 10/10 SameAs domains leaked from the misplaced root `sameAs` rows, and published/already-processed leads leaked due to Customer Mandate payloads lacking `funnelStatus` and `feedCurationType` filters.
+3. Zeroed Customer Mandate Budgets: Batch updated Column F (`num_domains`) from '12' to '0' across all 200 Customer Mandate sub-filters in Sheet 4 (Rows 63 to 262), halting the ingestion of ~2,400 unverified keyword-based candidate domains.
+Related tests:
+- Temp_Test/find_all_incorrect_payloads.py (0 errors across 328 payloads)
+- Temp_Test/set_mandates_budget_zero.py (200/200 verified 0)
+
+## [2026-11-17] Bound Waterfall Scraper Concurrency to 10, Fast-Track S3 Pre-Scraped Domains to NIM, and Shift Pre-Crawl to 12:15 AM for True 24h Crawl Window
+Files changed:
+- common/pipeline_engine.py
+- run_daily_precrawl.sh
+Reason:
+1. Concurrency Semaphore for Local Scrapers: Added `_WATERFALL_SEMAPHORE` (default max 10, configurable via `MAX_WATERFALL_SCRAPERS`) and wrapped `WaterfallScraper().scrape_domain()` in `Integrated_Process_domain`. This caps concurrent headless browser instances (Playwright/Camoufox) to 10, eliminating host CPU lockups (100% load) and memory exhaustion / OOM kills (status 137).
+2. Queue Partitioning S3 Fast-Track: Updated Tier 1 queue prioritization in `Integrated_Extract_domains` to include domains that completed Tech Crawler (`tc_status == "SUCCESS"` and valid `tc_s3_md`), fast-tracking all ~28,250 pre-crawled domains in S3 directly to NIM ahead of failed/unscraped rows.
+3. Advance Pre-Crawl 24h Window: Aligned crontab schedule to 12:15 AM IST (`15 0 * * *`) so that domain fetching and Tech Crawler job generation run on Day 1, allowing Tech Crawler a full 24-hour crawling window before domains are picked up by the discovery engine on Day 2 at 12:05 AM IST.
+Related tests:
+- Temp_Test/test_scraper_concurrency_and_priority_queue.py (3 passed)
 
 ## [2026-11-16] Proactive Gemini Cache TTL Validation & Automatic 24h Regeneration
 Files changed:

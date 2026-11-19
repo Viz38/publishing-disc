@@ -173,7 +173,36 @@ def initialize_fleet_exclusion_pool(gc=None) -> Set[str]:
         except Exception as ee:
             logger.warning(f"Could not load active domains from {s_target['name']} for exclusion: {ee}")
 
-    logger.info(f"Total {len(pool)} active fleet + daily domains in exclusion pool")
+    # Exclude all domains already staged for tomorrow across the fleet
+    for s_target in TARGET_SHEETS:
+        p_csv = os.path.join(BASE_DIR, s_target["folder"], "next_day_pre_crawl.csv")
+        if os.path.exists(p_csv):
+            try:
+                with open(p_csv, "r", encoding="utf-8", errors="ignore") as f_precrawl:
+                    for row in csv.reader(f_precrawl):
+                        if row and row[0].strip():
+                            pool.add(row[0].strip().lower())
+            except Exception as pe:
+                logger.warning(f"Could not read local precrawl for {s_target['folder']}: {pe}")
+
+    from common.fleet_orchestrator import FLEET_NODES, get_node_url
+    fleet_staged_endpoints = [
+        f"{get_node_url(s_num).rstrip('/')}/fleet/staged-domains"
+        for s_num in sorted(FLEET_NODES.keys())
+    ]
+    auth_header = {"Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'Tracxn@SR')}"}
+    for ep in fleet_staged_endpoints:
+        try:
+            resp = requests.get(ep, headers=auth_header, timeout=5)
+            if resp.status_code == 200:
+                doms = resp.json().get("domains", [])
+                for d in doms:
+                    if d and isinstance(d, str):
+                        pool.add(d.strip().lower())
+        except Exception as ee:
+            logger.debug(f"Could not fetch staged domains from {ep}: {ee}")
+
+    logger.info(f"Total {len(pool)} active fleet + daily + tomorrow staged domains in exclusion pool")
     return pool
 
 def fetch_domains_for_sheet(
@@ -194,14 +223,20 @@ def fetch_domains_for_sheet(
         p_row = payload_rows[idx]
         if not p_row or not p_row[0]:
             continue
-        b_str = p_row[5].strip() if len(p_row) > 5 else ""
+        b_str = p_row[5].replace(",", "").strip() if len(p_row) > 5 else ""
         if b_str and b_str.isdigit():
             total_payload_budget += int(b_str)
 
-    if target_count is None or target_count == 15000:
-        effective_target_count = total_payload_budget if total_payload_budget > 0 else (target_count or 15000)
+    if total_payload_budget > 0:
+        if total_payload_budget > 15000:
+            effective_target_count = total_payload_budget
+            logger.info(f"User-defined payload budget ({total_payload_budget}) exceeds 15k limit. Overriding 15k rule to fetch full budget.")
+        elif target_count is None or target_count == 15000:
+            effective_target_count = total_payload_budget
+        else:
+            effective_target_count = target_count
     else:
-        effective_target_count = target_count
+        effective_target_count = target_count or 15000
 
     logger.info(f"Target count for sheet {sheet_id}: {effective_target_count} domains (Payload defined total: {total_payload_budget})")
 
@@ -226,7 +261,7 @@ def fetch_domains_for_sheet(
         filter_id = p_row[2] if len(p_row) > 2 else ""
         filter_group_id = p_row[4] if len(p_row) > 4 else ""
 
-        budget_str = p_row[5].strip() if len(p_row) > 5 else ""
+        budget_str = p_row[5].replace(",", "").strip() if len(p_row) > 5 else ""
         is_clear_all = (budget_str == "")
         is_p0_clear_all = is_clear_all and (
             str(p_row[0]).strip().upper().startswith("P0")

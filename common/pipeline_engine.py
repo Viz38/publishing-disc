@@ -27,6 +27,9 @@ from common import (
     NIMKeyManager,
     get_fleet_sheet_count,
     get_sharded_nim_keys,
+    get_all_nim_keys,
+    split_nim_keys_for_stages,
+    FleetNIMRebalancer,
     TechCrawlerClient,
     WaterfallScraper,
     LocalSheetCache,
@@ -514,6 +517,19 @@ TOKEN_ROTATOR = NIM_KEY_MANAGER
 # Error strings to check
 CHECK_STRINGS = ["403 Forbidden", "Not Acceptable", "Coming Soon", "Javascript Enable", "Enable JavaScript", "Error 403", "Page Not Found"]
 CHECK_EXACT = "Website is not working."
+
+# Concurrency semaphore for local Waterfall Scraper instances (capped to max 10 to protect host CPU/RAM)
+_WATERFALL_SEMAPHORE: Optional[asyncio.Semaphore] = None
+_WATERFALL_SEMAPHORE_LOCK = threading.Lock()
+
+def get_waterfall_semaphore() -> asyncio.Semaphore:
+    global _WATERFALL_SEMAPHORE
+    if _WATERFALL_SEMAPHORE is None:
+        with _WATERFALL_SEMAPHORE_LOCK:
+            if _WATERFALL_SEMAPHORE is None:
+                limit = int(os.getenv("MAX_WATERFALL_SCRAPERS", "10"))
+                _WATERFALL_SEMAPHORE = asyncio.Semaphore(limit)
+    return _WATERFALL_SEMAPHORE
 
 
 class GeminiCacheError(RuntimeError):
@@ -4646,7 +4662,9 @@ async def Integrated_Process_domain(
                     "Executing mandatory Waterfall Scraper fallback..."
                 )
                 waterfall_scraper = WaterfallScraper()
-                wf_body, scrape_method = await waterfall_scraper.scrape_domain(session, domain)
+                wf_sem = get_waterfall_semaphore()
+                async with wf_sem:
+                    wf_body, scrape_method = await waterfall_scraper.scrape_domain(session, domain)
                 if wf_body and len(wf_body.strip()) >= 50:
                     home_body = wf_body
                     scrappingBeautySoup = wf_body
@@ -5788,6 +5806,7 @@ async def Integrated_Extract_domains(
                 continue
 
             tc_status = safe_str(r[23]).strip().upper() if len(r) > 23 else ""
+            tc_s3_md = safe_str(r[26]).strip() if len(r) > 26 else ""
             raw_scraped = safe_str(r[29]).strip() if len(r) > 29 else ""
             nim_txt = safe_str(r[35]).strip() if len(r) > 35 else ""
             nim_st = safe_str(r[34]).strip().upper() if len(r) > 34 else ""
@@ -5795,8 +5814,11 @@ async def Integrated_Extract_domains(
             # Tier 0: Valid existing NIM summary ready for Gemini/Tracxn
             if len(nim_txt) > 20 and nim_st == "SUCCESS" and not nim_txt.startswith("http"):
                 presummarized_items.append((idx, r))
-            # Tier 1: Truly pre-scraped with usable raw content (>= 50 chars or csv only marker) ready for NIM
-            elif (len(raw_scraped) >= 50 or raw_scraped == "Raw Data Appended - csv only") and raw_scraped != "['Website is not working.']":
+            # Tier 1: Truly pre-scraped with usable raw content OR TC succeeded with S3 markdown link ready for NIM
+            elif (
+                ((len(raw_scraped) >= 50 or raw_scraped == "Raw Data Appended - csv only") and raw_scraped != "['Website is not working.']")
+                or (tc_status == "SUCCESS" and bool(tc_s3_md) and is_valid_s3_url(tc_s3_md))
+            ):
                 priority_items.append((idx, r))
             # Tier 2: Needs Phase 1 scraping (Tech Crawler or Waterfall Scraper)
             else:
@@ -6355,13 +6377,99 @@ async def Integrated_Extract_domains(
         producer_tasks = [asyncio.create_task(nim_producer_worker()) for _ in range(num_nim_workers)]
         consumer_tasks = [asyncio.create_task(downstream_consumer_worker()) for _ in range(num_downstream_workers)]
 
+        # Dynamic Fleet NIM Rebalancing & Concurrency Auto-Scaling
+        async def on_fleet_rebalance(new_key_count: int, new_keys: List[str]):
+            nonlocal num_nim_workers, num_downstream_workers, total_sheet_workers
+            target_nim_workers = min(
+                int(os.getenv("MAX_NIM_WORKERS", str(new_key_count * 2))),
+                max(1, len(pf_data))
+            )
+            if target_nim_workers > num_nim_workers:
+                diff_nim = target_nim_workers - num_nim_workers
+                logging.info(
+                    f"🚀 [Fleet NIM Rebalancing Auto-Scale] Scaling UP NIM workers from {num_nim_workers} -> {target_nim_workers} "
+                    f"(+{diff_nim} workers, {new_key_count} keys assigned)."
+                )
+                for _ in range(diff_nim):
+                    nim_semaphore.release()
+                    producer_tasks.append(asyncio.create_task(nim_producer_worker()))
+                num_nim_workers = target_nim_workers
+
+            target_downstream = calculate_dynamic_downstream_workers(
+                num_nim_workers=num_nim_workers,
+                queue_size=summarized_queue.qsize(),
+                max_allowed=min(max_gemini_allowed, max(1, len(pf_data)))
+            )
+            if target_downstream > num_downstream_workers:
+                diff_down = target_downstream - num_downstream_workers
+                logging.info(
+                    f"🚀 [Fleet Downstream Auto-Scale] Scaling UP downstream workers from {num_downstream_workers} -> {target_downstream} "
+                    f"(+{diff_down} workers)."
+                )
+                for _ in range(diff_down):
+                    downstream_semaphore.release()
+                    consumer_tasks.append(asyncio.create_task(downstream_consumer_worker()))
+                num_downstream_workers = target_downstream
+
+            total_sheet_workers = num_nim_workers + num_downstream_workers + 1
+            update_progress_file(
+                tracxn_completed_count, total_domains, success_count, fail_count,
+                phase=phase_title,
+                stage_details=f"Pipelined: {nim_completed_count}/{total_domains} summarized | {tracxn_completed_count}/{total_domains} fully completed ({tc_completed_count} resolved) [Scaled: {new_key_count} keys]",
+                pending_tc=len(pending_tech_crawler_jobs),
+                mode=mode,
+                scraped_count=tc_completed_count,
+                tc_success=success_count,
+                nim_count=nim_completed_count,
+                gemini_count=gemini_completed_count,
+                tracxn_count=tracxn_completed_count,
+                active_workers=total_sheet_workers,
+                nim_workers=num_nim_workers,
+                downstream_workers=num_downstream_workers,
+                fully_completed=tracxn_completed_count,
+                pf_completed=pf_completed_count
+            )
+
+        def is_current_nim_done() -> bool:
+            return (
+                (success_count > 0 and nim_completed_count >= success_count)
+                or (total_domains > 0 and nim_completed_count >= total_domains)
+            )
+
+        nim_source_keys = settings.NIM_API_KEYS if (settings and getattr(settings, "NIM_API_KEYS", None)) else None
+        all_fleet_nim_keys = get_all_nim_keys(keys=nim_source_keys)
+        fleet_rebalancer = FleetNIMRebalancer(
+            current_sheet_num=CURRENT_SHEET_NUM,
+            all_keys=all_fleet_nim_keys,
+            token_rotator=token_rotator,
+            on_scale_callback=on_fleet_rebalance,
+            poll_interval_sec=float(os.getenv("FLEET_REBALANCE_INTERVAL_SEC", "30.0")),
+            is_nim_done_fn=is_current_nim_done
+        )
+        fleet_rebalancer_task = asyncio.create_task(fleet_rebalancer.start())
+
         async def _close_queue_when_producers_done():
-            await asyncio.gather(*producer_tasks)
-            for _ in range(num_downstream_workers):
+            while True:
+                pending_producers = [t for t in producer_tasks if not t.done()]
+                if not pending_producers:
+                    break
+                await asyncio.gather(*pending_producers, return_exceptions=True)
+            for _ in range(len(consumer_tasks) + 10):
                 await summarized_queue.put(None)
 
+        async def _await_all_consumers():
+            while True:
+                pending_consumers = [t for t in consumer_tasks if not t.done()]
+                if not pending_consumers:
+                    break
+                await asyncio.gather(*pending_consumers, return_exceptions=True)
+
         close_task = asyncio.create_task(_close_queue_when_producers_done())
-        await asyncio.gather(close_task, *consumer_tasks)
+        await asyncio.gather(close_task, _await_all_consumers())
+
+        fleet_rebalancer.stop()
+        if not fleet_rebalancer_task.done():
+            fleet_rebalancer_task.cancel()
 
         if not tc_30min_recheck_task.done():
             tc_30min_recheck_task.cancel()

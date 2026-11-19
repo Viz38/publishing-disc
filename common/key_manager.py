@@ -581,6 +581,44 @@ class NIMKeyManager:
             f"Active keys remaining: {len(self.keys)}"
         )
 
+    def update_keys(self, new_keys: List[str]) -> int:
+        """
+        Dynamically updates the active key set (e.g. during fleet rebalancing).
+        Preserves existing penalty states and in-flight tracking for surviving keys.
+        Cleans up in-flight counters and penalties for keys that are no longer in the assigned shard.
+        Returns the count of active keys after update.
+        """
+        with self._lock:
+            cleaned = []
+            for k in new_keys:
+                k_str = str(k).strip()
+                if k_str and k_str not in self.invalid_keys and not self.is_key_expired_or_invalid(k_str):
+                    cleaned.append(k_str)
+
+            # Clean up tracking for removed keys
+            new_key_set = set(cleaned)
+            removed_keys = [k for k in self.keys if k not in new_key_set]
+            for rk in removed_keys:
+                self._in_flight.pop(rk, None)
+                self._last_used.pop(rk, None)
+                self._penalties.pop(rk, None)
+
+            self.keys = cleaned
+            if self.keys:
+                self._index = self._index % len(self.keys)
+            else:
+                self._index = 0
+            count = len(self.keys)
+
+        logger.info(f"NIMKeyManager keys updated dynamically to {count} keys.")
+        if self._async_condition is not None:
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._notify_key_available())
+            except RuntimeError:
+                pass
+        return count
+
     async def validate_key(self, key: str, session: aiohttp.ClientSession) -> bool:
         """
         Probes a single NIM key against the Nvidia API models endpoint.
@@ -862,3 +900,31 @@ def split_nim_keys_for_stages(
     summary_keys = clean_keys[:num_summary]
     if_keys = clean_keys[num_summary:]
     return summary_keys, if_keys
+
+
+def get_all_nim_keys(
+    keys: Optional[List[str]] = None,
+    invalid_keys: Optional[Set[str]] = None
+) -> List[str]:
+    """
+    Returns all valid, unexpired NIM keys in the fleet pool.
+    Filters out permanently expired/invalid keys (e.g. 401/403).
+    """
+    if keys is not None:
+        raw_keys = [str(k).strip() for k in keys if str(k).strip()]
+    else:
+        raw_env = os.getenv("NIM_API_KEYS", "")
+        if raw_env:
+            raw_keys = [k.strip() for k in raw_env.split(",") if k.strip()]
+        else:
+            raw_keys = []
+
+    if not raw_keys:
+        return []
+
+    bad_keys = set(invalid_keys or [])
+    valid_candidates = [
+        k for k in raw_keys
+        if k and k not in bad_keys and not NIMKeyManager.is_key_expired_or_invalid(k)
+    ]
+    return valid_candidates if valid_candidates else [k for k in raw_keys if k]

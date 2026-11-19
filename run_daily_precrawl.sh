@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==========================================================
 # 🚀 Discovery Engine - Daily Advance Pre-Crawl Runner
-# Triggered at 11:05 PM IST (5 23 * * *)
+# Triggered at 12:15 AM IST (15 0 * * *)
 # ==========================================================
 
 BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -11,7 +11,7 @@ fi
 
 HOSTNAME_LOWER=$(hostname 2>/dev/null | tr '[:upper:]' '[:lower:]')
 
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] 🚀 Starting 11:05 PM Advance Pre-Crawl on $HOSTNAME_LOWER..."
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] 🚀 Starting 12:15 AM Advance Pre-Crawl on $HOSTNAME_LOWER..."
 
 if [[ "$HOSTNAME_LOWER" == *"508"* ]]; then
     echo "▶ Triggering Fleet Orchestrated Pre-Crawl on Primary Host (Desktop-5080 via Sheet 1 :8769)..."
