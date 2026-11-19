@@ -1,17 +1,17 @@
 /**
- * TITLE: Discovery Engine Pipeline - CF-1
- * SHEET: Discovery AI - CF-1 (Domains DB)
+ * TITLE: Discovery Engine Pipeline - Sheet 1 (NIM Industry Prediction)
+ * SHEET: Discovery Operations - Engine 5 (NIM Industry Prediction)
+ * SPREADSHEET ID: 1XT_GlvBf2BGO4cEiskpUsK2Fzc5PzB-tcRHFMubDXbk
  * REFERENCE: Tracxn SR Publishing Architecture
  */
 
 // --- Configuration ---
 const CONFIG = {
-  TYPE: 'CF-1',
-  SHEET_NAME: 'Discovery AI - CF-1 (Domains DB)',
+  TYPE: 'Sheet-1',
+  SHEET_NAME: 'Discovery Operations - Engine 5 (NIM Industry Prediction)',
   WORKER_URLS: [
-    { name: '5321-CF-1-Pipeline', url: 'https://5321-sheet1.rajath.world', hostId: '5321', isProduction: true },
-    { name: '5080-CF-1-Pipeline', url: 'https://5080-sheet1.rajath.world', hostId: '5080', isProduction: true },
-    { name: 'Vishnu-CF-1-Pipeline', url: 'https://vishnu-sheet1.rajath.world', hostId: 'Vishnu', isTesting: true }
+    { name: '9048-Sheet1-Pipeline', url: 'https://9048-sheet1.rajath.world', hostId: '9048', isProduction: true },
+    { name: 'Vishnu-Sheet1-Pipeline', url: 'https://vishnu-sheet1.rajath.world', hostId: 'Vishnu', isTesting: true }
   ],
   AUTH_TOKEN: '', // Loaded dynamically from Script Properties (SERVICE_AUTH_TOKEN)
   DEFAULT_MODE: 'full',
@@ -96,8 +96,8 @@ function uiStartRun(resumeOnly = false) {
   htmlContent += '</head><body>';
 
   htmlContent += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;padding-bottom:14px;border-bottom:1px solid #e2e8f0;">';
-  htmlContent += '<h1 style="font-size:17px;font-weight:700;margin:0;color:#0f172a;">\uD83D\uDE80 Discovery Engine (CF-1)</h1>';
-  htmlContent += '<span style="font-size:12px;background:#e0f2fe;color:#0369a1;padding:4px 8px;border-radius:6px;font-weight:600;">Discovery AI - CF-1 (Domains DB)</span>';
+  htmlContent += '<h1 style="font-size:17px;font-weight:700;margin:0;color:#0f172a;">\uD83D\uDE80 Discovery Engine (Sheet 1 - NIM)</h1>';
+  htmlContent += '<span style="font-size:12px;background:#e0f2fe;color:#0369a1;padding:4px 8px;border-radius:6px;font-weight:600;">Discovery Operations - Engine 5 (NIM Industry Prediction)</span>';
   htmlContent += '</div>';
 
   // Step 1: Worker Select
@@ -130,8 +130,8 @@ function uiStartRun(resumeOnly = false) {
   htmlContent += '</select>';
 
   htmlContent += '<div id="phase-box" style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:12px;margin-top:14px;">';
-  htmlContent += '<div style="font-weight:600;color:#1e40af;font-size:13px;">Target: CF-1 Pipeline</div>';
-  htmlContent += '<div style="font-size:12px;color:#3b82f6;margin-top:4px;">Domain Scraping + Gemini/NIM Prediction + Tracxn Write APIs</div>';
+  htmlContent += '<div style="font-weight:600;color:#1e40af;font-size:13px;">Target: Sheet 1 (NIM Industry Prediction)</div>';
+  htmlContent += '<div style="font-size:12px;color:#3b82f6;margin-top:4px;">Domain Scraping + NIM 70B Summary & IF Prediction + Gemini Feed Prediction</div>';
   htmlContent += '</div></div>';
 
   htmlContent += '<div style="display:flex;gap:10px;">';
@@ -176,7 +176,7 @@ function uiStartRun(resumeOnly = false) {
 
   htmlContent += 'function initWorkers(data){';
   htmlContent += '  workersList = [';
-  htmlContent += '    { url: "auto", name: "Auto-Select (Recommended)", isTesting: false, statusHtml: "Finds idle production worker (5321/5080)" },';
+  htmlContent += '    { url: "auto", name: "Auto-Select (Recommended)", isTesting: false, statusHtml: "Finds idle production worker (9048)" },';
   htmlContent += '    ...data.map(w => ({ url: w.url, name: w.name, isTesting: w.isTesting, statusHtml: "Unknown" }))';
   htmlContent += '  ];';
   htmlContent += '  renderWorkers();';
@@ -444,7 +444,7 @@ function checkMultipleWorkerStatusesForUi(urls) {
 }
 
 function findIdleWorker_() {
-  // Only evaluate production workers (5321 and 5080) - NEVER Vishnu
+  // Only evaluate production workers (e.g. 9048) - NEVER Vishnu
   const prodWorkers = CONFIG.WORKER_URLS.filter(w => w.isProduction);
   const candidates = [];
 
@@ -466,7 +466,8 @@ function findIdleWorker_() {
   }
 
   if (candidates.length === 0) {
-    throw new Error('All production servers (5321 & 5080) are at maximum capacity (2 sheets each) or offline. Cannot start run.');
+    const prodNames = prodWorkers.map(w => w.hostId || w.name).join(', ') || 'production';
+    throw new Error('All production servers (' + prodNames + ') are at maximum capacity (2 sheets each) or offline. Cannot start run.');
   }
 
   // Load balance: pick candidate with lowest activeSheets
@@ -535,7 +536,8 @@ function executeRunFromUi(startRow, chosenWorkerUrl, mode = 'full', silent = fal
       }
 
       if (!alternativeFound) {
-        throw new Error('All production servers (5321 & 5080) are at maximum capacity (2 sheets each) or offline. Cannot run on ' + selected.name + '.');
+        const prodNames = CONFIG.WORKER_URLS.filter(w => w.isProduction).map(w => w.hostId || w.name).join(', ') || 'production';
+        throw new Error('All production servers (' + prodNames + ') are at maximum capacity (2 sheets each) or offline. Cannot run on ' + selected.name + '.');
       }
     }
   }
@@ -581,7 +583,7 @@ function executeRunFromUi(startRow, chosenWorkerUrl, mode = 'full', silent = fal
 
 /**
  * Dedicated Daily Automated Trigger Function
- * Automatically balances and selects an idle production worker (5321 / 5080)
+ * Automatically balances and selects an idle production worker (Desktop-9048)
  * and starts the pipeline from Row 3 and below in silent headless mode.
  * Select this function when configuring Time-driven Triggers in Google Apps Script.
  */
@@ -692,7 +694,7 @@ function executeClearAndFetch(silent = true) {
 
 /**
  * Dedicated Daily Automated Trigger Function to Clear & Fetch Domains
- * Automatically selects an idle production worker (5321 / 5080) and
+ * Automatically selects an idle production worker (Desktop-9048) and
  * clears Row 3+ to ingest fresh domains based on "CF_IF Engine - Input Payload".
  * Strictly headless with ZERO UI calls - select this when configuring Time-driven Triggers.
  */

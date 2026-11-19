@@ -1,6 +1,18 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-19] Update Sheet1 apps_script.gs for New Sheet 1 and Desktop-9048
+Files changed:
+- Sheet1/apps_script.gs
+- CHANGELOG.md
+Reason:
+1. Updated `Sheet1/apps_script.gs` on the `NIM-FeedPrediction` branch to target the new Sheet 1 spreadsheet `1XT_GlvBf2BGO4cEiskpUsK2Fzc5PzB-tcRHFMubDXbk` (`Discovery Operations - Engine 5 (NIM Industry Prediction)`).
+2. Configured `CONFIG.WORKER_URLS` with `9048-Sheet1-Pipeline` (`https://9048-sheet1.rajath.world`, hostId `9048`) as the sole production worker, removing stale `5080`/`5321` worker URLs while retaining `Vishnu-Sheet1-Pipeline` for testing.
+3. Updated wizard headers, target phase descriptions, and error/reroute diagnostic messages to reflect Desktop-9048 and NIM 70B Summary/IF + Gemini Feed prediction.
+Related tests:
+- Temp_Test/test_apps_script_config.py (4 passed)
+- Temp_Test/test_single_sheet_sole_fleet.py (8 passed)
+
 ## [2026-11-18] Single-Sheet Sole-Fleet Resilience & Desktop-9048 Support (NIM-FeedPrediction)
 Files changed:
 - common/key_manager.py
