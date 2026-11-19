@@ -1,6 +1,18 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-19] Fix Undefined pre_tc_scraped and pre_tc_completed in reconcile_existing_tech_crawler_jobs
+Files changed:
+- common/pipeline_engine.py
+- CHANGELOG.md
+Reason:
+1. Resolved missing definition of `pre_tc_scraped` and `pre_tc_completed` inside `reconcile_existing_tech_crawler_jobs` by computing them directly from `rows` at the start of the sweep.
+2. Verified that all candidate jobs can be checked, progressed, and updated in `.progress.json` during the startup sweep without throwing NameErrors.
+Related tests:
+- Temp_Test/test_single_sheet_sole_fleet.py (8 passed)
+- Temp_Test/test_apps_script_config.py (4 passed)
+- Temp_Test/test_codebase_integrity.py (AST verified)
+
 ## [2026-11-19] Merge origin/main into NIM-FeedPrediction & Fix Pipeline split_nim_keys_for_stages Import
 Files changed:
 - common/pipeline_engine.py

@@ -5095,6 +5095,10 @@ async def reconcile_existing_tech_crawler_jobs(
     if not candidates:
         return []
 
+    pre_tc_scraped = sum(1 for r in rows if (len(r) > 23 and safe_str(r[23]).strip().upper() == "SUCCESS") or (len(r) > 29 and safe_str(r[29]).strip()))
+    pre_tc_failed = sum(1 for r in rows if len(r) > 23 and safe_str(r[23]).strip().upper() in ("FAILED", "DEAD", "NO_CONTENT", "HTTP_404", "TIMEOUT"))
+    pre_tc_completed = min(len(rows), pre_tc_scraped + pre_tc_failed)
+
     total_candidates = len(candidates)
     logging.info(f"🔄 Startup Sweep: Reconciling {total_candidates} pending Tech Crawler jobs in batches of {batch_size}...")
 
