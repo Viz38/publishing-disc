@@ -1,6 +1,48 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-19] Standardize Tracxn API X-Request-Source Header Across All Projects
+Files changed:
+- `common/key_manager.py`: Updated `X-Request-Source` from `"Testing"` to `"vishnu.bhagirathan@tracxn.com | Python | Token Validation | Discovery-Engine"`
+- `common/pipeline_engine.py`: Updated `X-Request-Source` across `get_api_result`, `get_api_result_async`, and funnel movement endpoints (`Change_Domain_Funnel_Moved_Out`, `move_funnel_domain`) to `"vishnu.bhagirathan@tracxn.com | Python | ... | Discovery-Engine"`
+- `common/domain_filter_validator.py`: Updated `X-Request-Source` to `"vishnu.bhagirathan@tracxn.com | Python | Domain Filter Validation | Discovery-Engine"`
+- `common/advance_precrawl.py`: Updated `X-Request-Source` to `"vishnu.bhagirathan@tracxn.com | Python | Domain Precrawl Ingestion | Discovery-Engine"`
+- `common/tracxn_client.py`: Updated `X-Request-Source` to `"vishnu.bhagirathan@tracxn.com | Python | Tracxn API Integration | Discovery-Engine"`
+- `common/tracxn_domain_ingestor.py`: Updated `X-Request-Source` across domain ingestion endpoints to `"vishnu.bhagirathan@tracxn.com | Python | Domain Ingestion | Discovery-Engine"`
+- `common/tech_crawler.py`: Updated `X-Request-Source` to `"vishnu.bhagirathan@tracxn.com | Python | Web Scraper Utility | Discovery-Engine"`
+- `GEMINI.md`: Updated Phase 4 reference documentation header pattern to `vishnu.bhagirathan@tracxn.com | Python | Funnel Movement | Discovery-Engine`
+- Desktop external repositories: `T-API`, `DomainCreationPF`, `UsageBasedMISnew`, `EduNotAdded`, `Wipro`, `TracxnRecheck5080`, `untitled folder` (112 files updated)
+- Documents external projects: `Documents/Tracxn/Desktop`, `Documents/Tracxn/Discovery`, `Documents/Tracxn/General`, `Documents/Tracxn/CPT` (excluding `Documents/Tracxn/SR/publishing-sr(old)` and `Documents/Tracxn/SR/publishing-sr`)
+- Postman collections (448 API request items across 5 collections) updated to `"vishnu.bhagirathan@tracxn.com | Postman | API Testing | Discovery-General"`
+Reason:
+1. Replaced all legacy / arbitrary `X-Request-Source` values (`"Testing"`, `"Discovery Team"`, `"Write API"`, `"123"`, `"prodAPI"`) with the newly enforced Tracxn standard: `email | tool | purpose | project`.
+2. Strictly honored exclusion rules by keeping `Documents/Tracxn/SR/publishing-sr(old)` and `Documents/Tracxn/SR/publishing-sr` untouched.
+3. Verified zero remaining unformatted legacy `X-Request-Source` occurrences across the entire target workspace.
+Related tests:
+- `Temp_Test/check_remaining.py` (0 remaining legacy occurrences in target files)
+- Python import and header dictionary validation across `common/` modules in `Discovery-Engine`
+
+## [2026-11-19] Tracxn API Audit & Standardized X-Request-Source Documentation
+Files changed:
+- Google Sheet `1SgrPxbogbUUB36lnU-75YFW1ZjyfehY_q84Yr5IBzyQ` (`Sheet1`, `gid=0`): Populated 148 Tracxn API request points across Desktop & Documents/Tracxn
+- `~/.gemini/config/skills/tracxn-api/SKILL.md`
+- `~/.gemini/config/skills/tracxn-api/references/internal-write-apis.md`
+- `~/.gemini/config/skills/tracxn-api/examples/tracxn_client.py`
+- `~/.gemini/config/skills/skill-creator/SKILL.md`
+- `~/.gemini/config/skills/skill-creator/references/output-patterns.md`
+- `Temp_Test/find_tracxn_requests.py`
+- `Temp_Test/generate_10_col_rows.py`
+- `Temp_Test/upload_10_cols_to_gsheet.py`
+Reason:
+1. Conducted comprehensive static analysis across Desktop repositories (`Discovery-Engine`, `T-API`, `DomainCreationPF`, `UsageBasedMISnew`, `EduNotAdded`, `Wipro`, `DataLegion`, `TracxnRecheck5080`) and `Documents/Tracxn` subdirectories (`CPT`, `Desktop`, `Discovery`, `General`, `SR`).
+2. Cataloged 148 Tracxn API operational points into Google Sheet `1SgrPxbogbUUB36lnU-75YFW1ZjyfehY_q84Yr5IBzyQ` across all 10 schema columns: `Folder Name`, `Programing Language`, `Username`, `Key`, `Purpose`, `Project`, `Sheet Link`, `Desktop update required?`, `Old X-reqsource`, and proposed `New X-reqsource` formatted strictly as `email | tool | purpose | project` for user pre-commit review.
+3. Updated `/tracxn-api` skill specification to mandate `X-Request-Source: email | tool | purpose | project` and updated client examples and internal write documentation.
+4. Updated `/skill-creator` skill documentation and output patterns to enforce Tracxn API audit header requirements during skill scaffolding.
+Related tests:
+- `Temp_Test/generate_10_col_rows.py` (148/148 valid rows generated)
+- `Temp_Test/upload_10_cols_to_gsheet.py` (Uploaded all 148 rows to Google Sheet `1SgrPxbogbUUB36lnU-75YFW1ZjyfehY_q84Yr5IBzyQ` via `sheet-access@grounding-487108.iam.gserviceaccount.com`)
+
+
 ## [2026-11-18] Bulk Move All 164,623 Unpublished SR(TPF) Domains to Central Funnel (100% Success)
 Files changed:
 - Google Sheet `1bOLBaP120HuG4wmZNisKVQRYzVykidNkPqcqDhW8s1c` (`Unpublished SR(TPF)` -> `Longlist`, `gid=0`): expanded to 14 columns (`N1 = Error`) and updated `L2:N164624` (`CENTRAL FUNNEL` / `5dc559138787070a80be21ba` / blank error)

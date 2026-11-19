@@ -164,7 +164,7 @@ def _build_tracxn_headers(tok: str) -> Dict[str, str]:
     return {
         "Content-Type": "application/json",
         "accessToken": tok,
-        "X-Request-Source": "Discovery Team",
+        "X-Request-Source": "vishnu.bhagirathan@tracxn.com | Python | Domain Filter Validation | Discovery-Engine",
         "cache-control": "no-cache"
     }
 

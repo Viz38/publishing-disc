@@ -114,7 +114,7 @@ class TracxnDomainIngestor:
             headers = {
                 "Content-Type": "application/json",
                 "accessToken": token,
-                "X-Request-Source": "Discovery Team"
+                "X-Request-Source": "vishnu.bhagirathan@tracxn.com | Python | Domain Ingestion | Discovery-Engine"
             }
 
             try:
@@ -604,7 +604,7 @@ class TracxnDomainIngestor:
                     headers = {
                         "Content-Type": "application/json",
                         "accessToken": token,
-                        "X-Request-Source": "Discovery Team"
+                        "X-Request-Source": "vishnu.bhagirathan@tracxn.com | Python | Domain Ingestion | Discovery-Engine"
                     }
 
                     try:

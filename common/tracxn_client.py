@@ -42,7 +42,7 @@ class TracxnClient:
     def _headers(self, token: str) -> Dict[str, str]:
         return {
             "Content-Type": "application/json",
-            "X-Request-Source": "Write API",
+            "X-Request-Source": "vishnu.bhagirathan@tracxn.com | Python | Tracxn API Integration | Discovery-Engine",
             "accessToken": token,
         }
 

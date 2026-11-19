@@ -2387,7 +2387,7 @@ def get_api_result(payload=None, api_url="https://platform.tracxn.com/api/2.2/do
             return {'error': 'Missing Tracxn token'}
 
         headers = {
-            "X-Request-Source": "Discovery Team",
+            "X-Request-Source": "vishnu.bhagirathan@tracxn.com | Python | Domain Search/Ingestion | Discovery-Engine",
             "accessToken": tok,
             "cache-control": "no-cache",
             "Content-Type": "application/json"
@@ -2461,7 +2461,7 @@ async def get_api_result_async(payload=None, api_url="https://platform.tracxn.co
                 return {'error': 'Missing Tracxn token'}
 
             headers = {
-                "X-Request-Source": "Discovery Team",
+                "X-Request-Source": "vishnu.bhagirathan@tracxn.com | Python | Domain Search/Ingestion | Discovery-Engine",
                 "accessToken": tok,
                 "cache-control": "no-cache",
                 "Content-Type": "application/json"
@@ -3050,7 +3050,7 @@ async def Change_Domain_Funnel_Status_async(domainProfileId, currentfunnelID, fi
 def Change_Domain_Funnel_Moved_Out(domainProfileId, currentfunnelID, filterGroupId, filterId, dest_Funnel, comments, token=None):
     tok = _resolve_tracxn_sync_token(token)
     url = "https://platform.tracxn.com/data/funnel-action/move"
-    headers = {"accessToken": tok, "Content-Type": 'application/json', "X-Request-Source": '123'}
+    headers = {"accessToken": tok, "Content-Type": 'application/json', "X-Request-Source": 'vishnu.bhagirathan@tracxn.com | Python | Funnel Movement | Discovery-Engine'}
     data = {
         "funnelId": currentfunnelID,
         "domainProfileId": domainProfileId,
@@ -3098,7 +3098,7 @@ async def Change_Domain_Funnel_Moved_Out_async(domainProfileId, currentfunnelID,
     headers = {
         "accessToken": tok,
         "Content-Type": "application/json",
-        "X-Request-Source": "123"
+        "X-Request-Source": "vishnu.bhagirathan@tracxn.com | Python | Funnel Movement | Discovery-Engine"
     }
     data = {
         "funnelId": currentfunnelID,
