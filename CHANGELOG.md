@@ -1,6 +1,64 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-19] Fleet Daily Budget Capped at 40k & Automated Weekend 50% Policy
+Files changed:
+- `common/daily_lifecycle.py`: Added `get_effective_budget(base_budget, target_date)` applying 50% scaling on Saturday & Sunday (IST).
+- `common/__init__.py`: Exported `get_effective_budget`.
+- `common/tracxn_domain_ingestor.py`: Integrated `get_effective_budget()` into live domain ingestion.
+- `common/advance_precrawl.py`: Integrated `get_effective_budget()` for tomorrow's advance pre-crawl calculations (`target_run_date`).
+- Google Sheets `CF_IF Engine - Input Payload` tabs: Updated Sheets 1, 2, 3, and 4 to 10,000 domains each (Grand Total: 40,000 domains: 30,000 BrightData_set3, 7,000 Usage-Based Product, 3,000 Others; zero-budget rows strictly preserved at 0).
+- Advance pre-crawl CSVs (`next_day_pre_crawl.csv`): Trimmed to exactly 10,000 domains per sheet across Desktop-5080 and Desktop-5321 (40,000 total: 30k Set3, 7k Product, 3k Others).
+Reason:
+1. Scale down daily fleet domain ingestion budget from 80k to at most 40,000 domains per day.
+2. Maintain strict 75% BrightData_set3 (30,000), 17.5% Usage-based product filters (7,000), and 7.5% Others (3,000) breakdown.
+3. Enforce automated weekend 50% budget reduction (20,000 domains total on Saturdays and Sundays in IST).
+4. Trim advance prefetch files to prevent excessive crawler overhead for tomorrow's run.
+Related tests:
+- `Temp_Test/unit/test_unit_weekend_budget.py` (all 4 unit tests passing)
+- `Temp_Test/apply_40k_budget_split.py` (live readback verified 40,000 total across 4 sheets)
+- `Temp_Test/trim_remote_precrawls.py` (verified 10,000 domains per sheet on Desktop-5080 and Desktop-5321)
+
+## [2026-11-19] Populate 'Others' Worksheet with 35 Operational Shared Sheets
+Files changed:
+- `Temp_Test/populate_others_worksheet.py`
+- Google Sheet `1SgrPxbogbUUB36lnU-75YFW1ZjyfehY_q84Yr5IBzyQ` (Worksheet: `Others`, `gid=2082221571`)
+Reason:
+Populate the 9 columns of worksheet 'Others' for all active shared operational sheets (Config Sheet, IF>>PF Automation, Sector Research Tech Crawlers, OD Hourly Engine, OD MIS, Usage Based Publishing MIS, Gemini Funnel Predictions, CPT Profiling, CPT Email Finder, etc.) with owner attribution, mapped repository files, active hyperlink formulas, and standard New X-reqsource headers (`<Owner> | Google Apps Script | <Purpose> | <Project>`).
+Related tests:
+- `Temp_Test/populate_others_worksheet.py` (35 rows verified via read-back)
+
+
+## [2026-11-19] Align Google Apps Script Codebases & Python Worksheet with Refined X-Request-Source Specifications
+Files changed:
+- `Desktop/UsageBasedMISnew/2.gs`, `3.gs`: Updated `X-Request-Source` to `"vishnu.bhagirathan@tracxn.com | Google Apps Script | MIS | UsageBasedMIS"`
+- `Documents/Tracxn/Discovery/Usage Based Publishing MIS/DailyMISemail.gs`, `OverallMISv2.gs`, `DailyMISUpdater.gs`, `DBbuilder.gs`, `WeeklyMISv2.gs`: Updated `X-Request-Source` to `"vishnu.bhagirathan@tracxn.com | Google Apps Script | MIS | UsageBasedMIS"`
+- `Desktop/DomainCreationPF/MultiDotURL/1.gs`: Updated `X-Request-Source` to `"vishnu.bhagirathan@tracxn.com | Google Apps Script | Double Dot Domain Creation & Tagging | DomainCreation"`
+- `Documents/Tracxn/Desktop/Double Dot/tracxn_app_script.gs`: Updated `X-Request-Source` to `"vishnu.bhagirathan@tracxn.com | Google Apps Script | Double Dot Domain Creation & Tagging | DomainCreation"`
+- `Documents/Tracxn/General/LLM.gs`: Updated `X-Request-Source` to `"vishnu.bhagirathan@tracxn.com | Google Apps Script | MIS | LLM Cost & Usage Tracking"`
+- `Documents/Tracxn/Discovery/SameAs - Centeral/4. Tagging.gs`: Updated `X-Request-Source` to `"vishnu.bhagirathan@tracxn.com | Google Apps Script | SameAs Tagging & Verification | SameAs-Tagging"`
+- Google Sheet `1SgrPxbogbUUB36lnU-75YFW1ZjyfehY_q84Yr5IBzyQ` (Worksheet: `Python`, `gid=0`): Synchronized 16 matching rows in Column J (`New X-reqsource`) with refined user specifications
+Reason:
+1. Re-aligned all local Google Apps Script files with the user's reviewed and refined `New X-reqsource` values in worksheet `AppScript`.
+2. Synchronized corresponding entries in the `Python` worksheet to ensure complete consistency across documentation and live code.
+3. Verified zero remaining legacy or outdated header values in updated target files.
+Related tests:
+- `Temp_Test/sync_gas_headers_and_sheet.py` (all updated files verified with exact match)
+
+## [2026-11-19] Populate Google Apps Script X-Request-Source Header Tracking in Worksheet AppScript
+Files changed:
+- Google Sheet `1SgrPxbogbUUB36lnU-75YFW1ZjyfehY_q84Yr5IBzyQ` (Worksheet: `AppScript`, `gid=193889013`)
+- `Temp_Test/update_appscript_worksheet.py`
+Reason:
+1. Audited Google Apps Script projects via Google Apps Script CLI (`clasp`) and Google Drive API across user-owned accounts.
+2. Verified 15 core operational Google Sheets owned by `vishnu.bhagirathan@tracxn.com` (Discovery Engines 1–5, Overview Dashboard, Published MIS, Usage Based Publishing MIS, Double Dot Console, etc.) and populated functional click-through `=HYPERLINK(...)` URLs in Column E (`Sheet Link`).
+3. Mapped and updated `Old X-reqsource` and `New X-reqsource` across all 15 operational sheets adhering strictly to the `vishnu.bhagirathan@tracxn.com | Google Apps Script | <Purpose> | <Project>` format.
+4. Appended Bhavya Dubey's three Apps Script projects (`Mandate/OD MIS`, `Published MIS Backup`, `Backup MIS Tracker Report`) as rows 16–18 formatted with `bhavya.dubey@tracxn.com | GoogleAppScript | MIS | <SheetName>`.
+5. Verified live worksheet data consistency and formula execution via batch read-back.
+Related tests:
+- `Temp_Test/update_appscript_worksheet.py` (all 18 rows verified on worksheet `AppScript`)
+
+
 ## [2026-11-19] Standardize Tracxn API X-Request-Source Header Across All Projects
 Files changed:
 - `common/key_manager.py`: Updated `X-Request-Source` from `"Testing"` to `"vishnu.bhagirathan@tracxn.com | Python | Token Validation | Discovery-Engine"`
@@ -4090,9 +4148,6 @@ Related tests:
 Temp_Test/test_device_concurrency.py, Temp_Test/test_multi_sheet_fleet.py, Temp_Test/test_apps_script.py
 
 ## [2026-10-12] Embed Google Service Account Credentials in .env & Clean Files
-Files deleted:
-- creds.json
-- .env.example
 Files changed:
 - .env
 - Sheet1/config.py, Sheet1/main.py

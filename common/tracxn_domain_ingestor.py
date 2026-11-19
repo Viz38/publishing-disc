@@ -21,6 +21,7 @@ load_dotenv(os.path.join(BASE_DIR, ".env"))
 from common.key_manager import TracxnKeyManager
 from common.gsheet_circuit_breaker import is_csv_only_mode, set_csv_only_mode, is_doc_too_large_error
 from common.domain_filter_validator import is_domain_leaked, batch_validate_domains
+from common.daily_lifecycle import get_effective_budget
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("TracxnDomainIngestor")
@@ -534,6 +535,11 @@ class TracxnDomainIngestor:
                 if budget <= 0:
                     logger.info(f"[{s_name}] Skipping payload '{filter_name}' (explicit budget 0)")
                     continue
+
+                effective_b = get_effective_budget(budget)
+                if effective_b != budget:
+                    logger.info(f"[{s_name}] 🏖️ Weekend 50% budget policy applied: {budget} -> {effective_b} for '{filter_name}'")
+                budget = effective_b
             else:
                 budget = float("inf")
                 logger.info(f"[{s_name}] No budget count specified for payload '{filter_name}'. Clearing all available domains.")

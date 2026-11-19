@@ -5,7 +5,7 @@ import datetime
 import logging
 import os
 import re
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Union
 
 from common.backlog_manager import BacklogManager
 from common.bulk_pusher import handle_5am_sheet_cleanup
@@ -31,6 +31,30 @@ from common.gsheet_circuit_breaker import is_csv_only_mode
 from common.local_cache import get_now_ist
 
 logger = logging.getLogger(__name__)
+
+
+def get_effective_budget(
+    base_budget: Union[int, float],
+    target_date: Optional[Union[datetime.date, datetime.datetime]] = None,
+) -> Union[int, float]:
+    """
+    Calculates the effective daily budget applying the fleet weekend 50% policy.
+    - Weekdays (Monday through Friday in IST): returns 100% of base_budget.
+    - Weekends (Saturday and Sunday in IST): returns 50% of base_budget (max(1, round(base_budget * 0.5))).
+    - Zero or infinite budgets are preserved as-is.
+    """
+    if base_budget == float("inf") or base_budget <= 0:
+        return base_budget
+    if target_date is None:
+        target_date = get_now_ist().date()
+    elif isinstance(target_date, datetime.datetime):
+        target_date = target_date.date()
+
+    # weekday(): Monday=0, Tuesday=1, Wednesday=2, Thursday=3, Friday=4, Saturday=5, Sunday=6
+    if target_date.weekday() in (5, 6):
+        return max(1, round(base_budget * 0.5))
+    return base_budget
+
 
 
 def get_sheet_num_from_dir(base_dir: str) -> int:

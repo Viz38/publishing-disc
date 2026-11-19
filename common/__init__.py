@@ -41,8 +41,10 @@ from .bulk_sync import bulk_sync_cache_to_sheet, group_bulk_sync_chunks
 from .schema_constants import TOTAL_SCHEMA_COLUMNS, COLUMN_INDEX_MAP
 from .fleet_cluster import FleetClusterManager, FleetSummarizeRequest
 from .pipeline_engine import configure_engine, run_engine_for_sheet
+from .daily_lifecycle import get_effective_budget
 
 __all__ = [
+    "get_effective_budget",
     "TracxnKeyManager",
     "NIMKeyManager",
     "get_sharded_nim_keys",
