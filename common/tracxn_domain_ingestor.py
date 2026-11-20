@@ -486,20 +486,33 @@ class TracxnDomainIngestor:
         logger.info(f"[{s_name}] Loaded {len(daily_seen)} domains from today's registry and {len(historical_seen)} from 7-day historical registry to exclude.")
 
         cross_sheet_seen = set()
-        for other_s in FLEET_TARGET_SHEETS:
-            if other_s["id"] != s_id:
+        main_sheets = [
+            {"id": "1IWXqnR52IzpFewE0QS0tlJFT65nJE_fmIoJs8ps9nZo", "name": "Main Sheet 1 (CF-1)"},
+            {"id": "1QGraMZOJjc-EIZlt_CieOVpr1jxw6tLa_QnWgWHou5I", "name": "Main Sheet 2 (CF-2)"},
+            {"id": "1MHdkFCsoAY0V7ix_pJ5SpWFq3EFpJEug2ntJk1FkEl8", "name": "Main Sheet 3 (CF-3)"},
+            {"id": "1z3wH--c2qHGlNqW0e-6Mc8IVqh_kN5_fbWjILM4FxQM", "name": "Main Sheet 4 (Filter-V2)"},
+        ]
+        seen_sids = {s_id}
+        all_other_sheets = []
+        for s_cfg in list(FLEET_TARGET_SHEETS) + main_sheets:
+            sid = s_cfg.get("id")
+            if sid and sid not in seen_sids:
+                seen_sids.add(sid)
+                all_other_sheets.append(s_cfg)
+
+        for other_s in all_other_sheets:
+            try:
+                other_sh = retry_call(lambda: self.gc.open_by_key(other_s["id"]))
                 try:
-                    other_sh = retry_call(lambda: self.gc.open_by_key(other_s["id"]))
-                    try:
-                        other_ws = other_sh.worksheet("CF_IF_Engine_Database")
-                    except Exception:
-                        other_ws = other_sh.get_worksheet(0)
-                    col_a = other_ws.col_values(1)
-                    for d in col_a[2:]:
-                        if d and d.strip():
-                            cross_sheet_seen.add(d.strip().lower())
-                except Exception as ex:
-                    logger.warning(f"[{s_name}] Could not load domains from {other_s['name']} for cross-sheet exclusion: {ex}")
+                    other_ws = other_sh.worksheet("CF_IF_Engine_Database")
+                except Exception:
+                    other_ws = other_sh.get_worksheet(0)
+                col_a = other_ws.col_values(1)
+                for d in col_a[2:]:
+                    if d and d.strip():
+                        cross_sheet_seen.add(d.strip().lower())
+            except Exception as ex:
+                logger.warning(f"[{s_name}] Could not load domains from {other_s['name']} for cross-sheet exclusion: {ex}")
         logger.info(f"[{s_name}] Loaded {len(cross_sheet_seen)} active domains from other fleet sheets to exclude.")
 
         new_rows_57 = []
