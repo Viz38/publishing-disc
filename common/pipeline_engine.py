@@ -3805,6 +3805,12 @@ async def Extract_AI_Engine_Output(row,raw_data_beat_soup,SHEET_ID, EXTRACTING_S
     existing_summary = ""
     if len(row) > 35 and safe_str(row[35]).strip() and not safe_str(row[35]).strip().startswith("http"):
         existing_summary = safe_str(row[35]).strip()
+    elif len(row) > 13 and "bu_llm_sr_incorrectprediction" in safe_str(row[13]).lower():
+        ld_text = safe_str(row[16]).strip() if len(row) > 16 else ""
+        if ld_text:
+            existing_summary = ld_text if ld_text.startswith("Domain URL :") else f"Domain URL : {domain}\n\nCompany Description: \n{ld_text}"
+            summary_status = "SUCCESS"
+            logging.info(f"Using LD summary for {domain} via bu_llm_sr_incorrectprediction hashtag (length {len(existing_summary)}).")
 
     if precomputed_summary:
         output_data_summery = precomputed_summary
@@ -5873,6 +5879,18 @@ async def Integrated_Extract_domains(
                     # the producer when scanning thousands of pre-summarized rows on resume.
                     existing_nim_summary = safe_str(row[35]).strip() if len(row) > 35 else ""
                     existing_nim_status = safe_str(row[34]).strip() if len(row) > 34 else ""
+
+                    # Fallback check for bu_llm_sr_incorrectprediction
+                    if not existing_nim_summary and len(row) > 13 and "bu_llm_sr_incorrectprediction" in safe_str(row[13]).lower():
+                        ld_text = safe_str(row[16]).strip() if len(row) > 16 else ""
+                        if ld_text:
+                            existing_nim_summary = ld_text if ld_text.startswith("Domain URL :") else f"Domain URL : {domain}\n\nCompany Description: \n{ld_text}"
+                            existing_nim_status = "SUCCESS"
+                            if len(row) > 20 and not row[20]: row[20] = "DONE"
+                            if len(row) > 23 and not row[23]: row[23] = "SUCCESS"
+                            if len(row) > 29 and not row[29]: row[29] = "Raw Data Appended - csv only"
+                            if len(row) > 34: row[34] = "SUCCESS"
+                            if len(row) > 35: row[35] = existing_nim_summary
 
                     if len(existing_nim_summary) > 10 and not existing_nim_summary.startswith("http"):
                         # Row has a valid existing NIM summary — fast-forward to consumer

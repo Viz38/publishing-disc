@@ -1,6 +1,18 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-20] Direct LD Bypass for bu_llm_sr_incorrectprediction Tagged Domains
+Files changed:
+- `common/advance_precrawl.py`: In `parse_company_to_57col()`, added hashtag inspection for `"bu_llm_sr_incorrectprediction"`. When detected, automatically bypasses Tech Crawler scraping and NVIDIA NIM 70B summarization by setting Col X (`Status`) = `"SUCCESS"`, Col AD (`Raw Data`) = `"Raw Data Appended - csv only"`, Col AI (`NIM Status`) = `"SUCCESS"`, and Col AJ (`NIM Summary`) = extracted Long Description (`LD` / Tracxn platform description). In `generate_job_ids_for_rows()`, automatically skips Tech Crawler Job ID generation for these bypassed domains.
+- `common/tracxn_domain_ingestor.py`: In `parse_company_to_57col()`, added identical bypass logic for live domain ingestion so candidate domains with this tag skip scraping/summarization and populate Col X/AI = `"SUCCESS"` and Col AJ = LD summary.
+- `common/pipeline_engine.py`: Added fallback check in producer fast-forward and `Extract_AI_Engine_Output` so any row bearing `"bu_llm_sr_incorrectprediction"` in Col 13 is immediately fast-forwarded to Stage 2 (Industry Funnel and Feed prediction) using its LD from Col 16.
+- `Sheet*/next_day_pre_crawl.csv`: Backfilled 153 pre-crawled domains with this tag across Sheets 1-4 for tomorrow's batch.
+Reason:
+User directive: Candidate domains containing hashtag `"bu_llm_sr_incorrectprediction"` already possess high-quality human/platform descriptions (LD). They do not require re-scraping or NIM summarization, and can directly use their existing LD as the summary to predict Industry Funnel and Feed.
+Related tests:
+- `Temp_Test/unit/test_sr_incorrect_bypass.py` (all 4 tests passing)
+
+
 ## [2026-11-20] Fleet Weekend 10k Budget Policy (80% Bright Data Set 3, 10% Usage-Based, 10% Others)
 Files changed:
 - `common/daily_lifecycle.py`: Enhanced `get_effective_budget()` and added `classify_filter_category()` to enforce the strict 10k fleet weekend policy (2,500 domains per sheet across the 4 engines):

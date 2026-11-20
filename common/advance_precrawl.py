@@ -133,6 +133,41 @@ def parse_company_to_57col(
     row[16] = desc_info
     row[17] = added_time_str
     row[20] = "DONE"
+
+    # Check if hashtags contain bu_llm_sr_incorrectprediction
+    raw_tags = []
+    if isinstance(hash_tags, list):
+        raw_tags.extend(str(t).strip().lower() for t in hash_tags)
+    elif isinstance(hash_tags, str):
+        raw_tags.extend(t.strip().lower() for t in hash_tags.split(","))
+    c_ht = company.get("hashTags", [])
+    if isinstance(c_ht, list):
+        raw_tags.extend(str(t).strip().lower() for t in c_ht)
+    elif isinstance(c_ht, str):
+        raw_tags.extend(t.strip().lower() for t in c_ht.split(","))
+
+    if any("bu_llm_sr_incorrectprediction" in t for t in raw_tags):
+        ld_text = ""
+        for candidate in [
+            company.get("longDescription"),
+            company.get("overview"),
+            company.get("description"),
+            company.get("tracxnPlatformDescription"),
+        ]:
+            if candidate and isinstance(candidate, str) and len(candidate.strip()) > 10:
+                ld_text = candidate.strip()
+                break
+        if not ld_text:
+            ld_text = desc_info.strip()
+
+        ld_summary = ld_text if ld_text.startswith("Domain URL :") else f"Domain URL : {row[0]}\n\nCompany Description: \n{ld_text}"
+        row[20] = "DONE"
+        row[21] = ""
+        row[23] = "SUCCESS"
+        row[29] = "Raw Data Appended - csv only"
+        row[34] = "SUCCESS"
+        row[35] = ld_summary
+
     return row
 
 def initialize_fleet_exclusion_pool(gc=None) -> Set[str]:
@@ -532,6 +567,11 @@ async def generate_job_ids_for_rows(rows: List[List[str]], concurrency: int = 25
                     if domain:
                         # Skip if already populated with a valid Tech Crawler Job ID
                         if len(r) > 21 and r[21] and r[21].startswith("bu-daily_render_"):
+                            skipped_count += 1
+                            continue
+
+                        # Skip if scraping bypassed (e.g. bu_llm_sr_incorrectprediction with pre-populated LD summary)
+                        if (len(r) > 23 and r[23] == "SUCCESS") or (len(r) > 34 and r[34] == "SUCCESS" and len(r) > 35 and r[35]):
                             skipped_count += 1
                             continue
 
