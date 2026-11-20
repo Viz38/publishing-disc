@@ -34,3 +34,24 @@ else
 fi
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] ✅ Advance Pre-Crawl dispatch complete."
+
+# Secondary Daily Ingestion Safety Net: Ensure local sheet pipelines auto-start if idle
+echo "▶ Running Secondary Daily Ingestion Safety Net check..."
+if [[ "$HOSTNAME_LOWER" == *"508"* ]]; then
+    for port in 8769 8770; do
+        st=$(curl -s -H "Authorization: Bearer ${SERVICE_AUTH_TOKEN}" http://127.0.0.1:$port/discovery/status 2>/dev/null | grep -o '"status":"[^"]*"' | cut -d':' -f2 | tr -d '"')
+        if [[ "$st" == "idle" || "$st" == "stopped" || "$st" == "failed" || -z "$st" ]]; then
+            echo "▶ Safety Net: Triggering /discovery/clear-and-fetch on port $port (current status=$st)..."
+            curl -s -X POST -H "Authorization: Bearer ${SERVICE_AUTH_TOKEN}" -H 'Content-Type: application/json' http://127.0.0.1:$port/discovery/clear-and-fetch -d '{}' || true
+        fi
+    done
+elif [[ "$HOSTNAME_LOWER" == *"532"* ]]; then
+    for port in 8771 8772; do
+        st=$(curl -s -H "Authorization: Bearer ${SERVICE_AUTH_TOKEN}" http://127.0.0.1:$port/discovery/status 2>/dev/null | grep -o '"status":"[^"]*"' | cut -d':' -f2 | tr -d '"')
+        if [[ "$st" == "idle" || "$st" == "stopped" || "$st" == "failed" || -z "$st" ]]; then
+            echo "▶ Safety Net: Triggering /discovery/clear-and-fetch on port $port (current status=$st)..."
+            curl -s -X POST -H "Authorization: Bearer ${SERVICE_AUTH_TOKEN}" -H 'Content-Type: application/json' http://127.0.0.1:$port/discovery/clear-and-fetch -d '{}' || true
+        fi
+    done
+fi
+

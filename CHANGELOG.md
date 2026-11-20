@@ -1,6 +1,21 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-20] Permanent Autonomous Daily Guardian, Dynamic Module Reloading & Self-Healing Rollover
+Files changed:
+- `common/daily_lifecycle.py`: Added `should_trigger_daily_guardian(saved_state, current_state, current_dt)` and `reload_all_common_modules()`.
+- `common/__init__.py`: Exported `should_trigger_daily_guardian` and `reload_all_common_modules`.
+- `Sheet1/api.py`, `Sheet2/api.py`, `Sheet3/api.py`, `Sheet4/api.py`: Replaced fragile 54-minute hour==0 rollover check with state-driven Autonomous Daily Guardian. Added comprehensive dynamic module reloading and current_task tracking in `run_clear_and_fetch_task`.
+- `run_daily_precrawl.sh`: Added secondary automated ingestion safety net checking local sheets post-dispatch and auto-triggering clear-and-fetch if idle.
+Reason:
+1. Fix recurring issue where engines do not restart the next day after completing their batch.
+2. Remove restrictive `now_ist.hour == 0` constraint so that engines can start today's run at any hour outside the 11:30 PM cutoff window (including after desktop reboots or morning restarts).
+3. Eliminate stale in-memory Python bytecode and `ImportErrors` on long-running daemon processes by dynamically reloading all `common/` modules prior to batch ingestion.
+4. Replace single-attempt abandonment with self-healing 60-second retry loop until today's batch is actively loaded and running.
+Related tests:
+- `Temp_Test/unit/test_unit_daily_guardian.py` (all 6 tests passing)
+- `Temp_Test/unit/test_unit_weekend_budget.py` (all 4 tests passing)
+
 ## [2026-11-19] Fleet Daily Budget Capped at 40k & Automated Weekend 50% Policy
 Files changed:
 - `common/daily_lifecycle.py`: Added `get_effective_budget(base_budget, target_date)` applying 50% scaling on Saturday & Sunday (IST).

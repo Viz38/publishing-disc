@@ -46,6 +46,8 @@ from common import (
     ExecutionTracker,
     BacklogManager,
     FleetSummarizeRequest,
+    should_trigger_daily_guardian,
+    reload_all_common_modules,
 )
 from common.local_cache import is_pid_alive
 from common.dashboard_metrics import build_sheet_status_payload
@@ -111,12 +113,12 @@ async def _daily_5am_ist_watchdog():
     """
     last_rotated_date = None
     last_cleared_date = None
-    last_auto_started_date = None
     last_snapshot_date = None
+    last_auto_start_attempt_ts = 0.0
     local_eligible_recs = []
     FLUSH_FILE = os.path.join(BASE_DIR, ".flush_requested")
     sheet_num = get_sheet_num_from_dir(BASE_DIR)
-    logger.info("🕒 Daily 12:00 AM IST Watchdog initialized (11:30 PM Pre-Cutoff Flush & Autonomous 12:05 AM Rollover enabled).")
+    logger.info("🕒 Daily 12:00 AM IST Watchdog initialized (11:30 PM Pre-Cutoff Flush & Autonomous Daily Guardian enabled).")
     while True:
         try:
             now_ist = get_now_ist()
@@ -252,15 +254,17 @@ async def _daily_5am_ist_watchdog():
                     except Exception as re:
                         logger.error(f"Error during daily cache rotation: {re}")
 
-            # 4. Autonomous Nightly Rollover & Clear-and-Fetch Auto-Start (12:05 AM - 12:59 AM IST)
-            if last_auto_started_date != current_date_str:
-                is_rollover_window = (now_ist.hour == 0 and now_ist.minute >= 5)
-                if is_rollover_window and state.get("status") in ("idle", "succeeded", "stopped") and not state.get("active_pid"):
+            # 4. Autonomous Daily Guardian (Self-healing daily restart & rollover)
+            saved_exec_state = EXEC_TRACKER.get_state()
+            should_start_today, start_reason = should_trigger_daily_guardian(saved_exec_state, state, current_dt=now_ist)
+            if should_start_today:
+                now_ts = time.time()
+                if now_ts - last_auto_start_attempt_ts >= 60:
+                    last_auto_start_attempt_ts = now_ts
                     logger.info(
-                        f"🌟 [Autonomous Nightly Rollover] Auto-triggering clear-and-fetch for {current_date_str} "
-                        f"at {now_ist.strftime('%H:%M:%S')} IST..."
+                        f"🌟 [Autonomous Daily Guardian] Triggering daily batch start: reason={start_reason} "
+                        f"for date {current_date_str} at {now_ist.strftime('%H:%M:%S')} IST..."
                     )
-                    last_auto_started_date = current_date_str
                     asyncio.create_task(run_clear_and_fetch_task(settings.CF_SHEET_ID))
 
             # Supervisor: check if active_pid died unexpectedly while state was running
@@ -789,16 +793,15 @@ async def start_pipeline(req: RunRequest, background_tasks: BackgroundTasks):
     return {"status": "accepted", "sheet_id": req.sheet_id or settings.CF_SHEET_ID}
 
 async def run_clear_and_fetch_task(sheet_id: str):
+    async with state_lock:
+        if state.get("current_task") == "clear_and_fetch":
+            logger.info(f"ℹ️ Clear & Fetch already in progress for sheet {sheet_id}. Skipping redundant call.")
+            return
+        state["current_task"] = "clear_and_fetch"
+
     try:
         if "unittest" not in sys.modules:
-            try:
-                import importlib
-                import common.tracxn_domain_ingestor
-                import common.advance_precrawl
-                importlib.reload(common.tracxn_domain_ingestor)
-                importlib.reload(common.advance_precrawl)
-            except Exception:
-                pass
+            reload_all_common_modules()
 
         precrawl_csv = os.path.join(BASE_DIR, "next_day_pre_crawl.csv")
         folder_name = os.path.basename(BASE_DIR)
@@ -894,6 +897,10 @@ async def run_clear_and_fetch_task(sheet_id: str):
             logger.warning(f"⚠️ Clear & Fetch returned {count} domains for sheet {sheet_id}. Downstream pipeline auto-start skipped to prevent running on an empty sheet.")
     except Exception as e:
         logger.error(f"❌ Clear & Fetch failed for sheet {sheet_id}: {e}", exc_info=True)
+    finally:
+        async with state_lock:
+            if state.get("current_task") == "clear_and_fetch":
+                state["current_task"] = None
 
 @app.post("/discovery/clear-and-fetch", dependencies=[Depends(verify_token)])
 @app.post("/sheet4/clear-and-fetch", dependencies=[Depends(verify_token)])
