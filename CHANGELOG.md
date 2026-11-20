@@ -1,6 +1,23 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-20] Fleet Weekend 10k Budget Policy (80% Bright Data Set 3, 10% Usage-Based, 10% Others)
+Files changed:
+- `common/daily_lifecycle.py`: Enhanced `get_effective_budget()` and added `classify_filter_category()` to enforce the strict 10k fleet weekend policy (2,500 domains per sheet across the 4 engines):
+  * 80% Bright Data Set 3 (`bu_llm_brightdata_set3`): 2,000 domains per sheet (8,000 fleet total).
+  * 10% Usage-based product filters (`bu_llm_domaindbwli` / Domains DB with LinkedIn): 250 domains per sheet (1,000 fleet total).
+  * 10% Others (Domains DB FY24/25/26, Set 2): 250 domains per sheet (1,000 fleet total).
+  * When no category metadata is provided, scales generic base budget by 25% (`round(base_budget * 0.25)`), converting a 10k base budget into 2,500 per sheet (10k fleet).
+- `common/__init__.py`: Exported `classify_filter_category`.
+- `common/advance_precrawl.py`: Integrated category-aware budget calculation into advance pre-crawl total budget and per-filter allocation loops.
+- `common/tracxn_domain_ingestor.py`: Integrated category-aware budget scaling into live domain ingestion.
+Reason:
+User directive: On weekends, cap total fleet daily budget at 10,000 domains (2,500 per sheet across the 4 engines) instead of the previous 50% policy (20k fleet), with strict proportioning: 80% Bright Data Set 3, 10% usage-based product filters, and 10% others.
+Related tests:
+- `Temp_Test/unit/test_tomorrow_refetch.py` (all 4 tests passing)
+- `Temp_Test/unit/test_unit_cross_sheet_pagination.py` (all 2 tests passing)
+
+
 ## [2026-11-20] Rolling 7-Day Historical Domain Deduplication Engine & Peer Fleet Sync
 Files changed:
 - `common/fleet_deduplicator.py`: Enhanced `DailyProcessedRegistry` with rolling multi-day historical lookups (`get_historical_processed(days=7)`), automatic self-bootstrapping from disk archives (`pre_crawl_loaded_*.csv`, `discovery_cache_*.csv`, `daily_eligible_*.json`), peer fleet querying (`fetch_fleet_peer_historical_domains`), and automatic 30-day retention pruning. Updated `identify_fleet_duplicates` and `clean_and_deduplicate_all_sheets` to evaluate against 7-day historical pools and persist valid unique domains into the registry.
