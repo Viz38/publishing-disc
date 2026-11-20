@@ -27,6 +27,10 @@ elif [[ "$HOSTNAME_LOWER" == *"532"* ]]; then
         curl -s -X POST -H "Authorization: Bearer ${SERVICE_AUTH_TOKEN}" -H 'Content-Type: application/json' http://127.0.0.1:8771/fleet/orchestrate-precrawl -d '{}' || true
     fi
     echo ""
+elif [[ "$HOSTNAME_LOWER" == *"9048"* || "$HOSTNAME_LOWER" == *"048"* ]]; then
+    echo "▶ Desktop-9048 (NIM Branch) triggering local advance pre-crawl on :8769..."
+    curl -s -X POST -H "Authorization: Bearer ${SERVICE_AUTH_TOKEN}" -H 'Content-Type: application/json' http://127.0.0.1:8769/discovery/advance-precrawl -d '{}' || true
+    echo ""
 else
     echo "▶ Triggering local fleet pre-crawl orchestrator..."
     curl -s -X POST -H "Authorization: Bearer ${SERVICE_AUTH_TOKEN}" -H 'Content-Type: application/json' http://127.0.0.1:8769/fleet/orchestrate-precrawl -d '{}' 2>/dev/null || \
@@ -53,5 +57,11 @@ elif [[ "$HOSTNAME_LOWER" == *"532"* ]]; then
             curl -s -X POST -H "Authorization: Bearer ${SERVICE_AUTH_TOKEN}" -H 'Content-Type: application/json' http://127.0.0.1:$port/discovery/clear-and-fetch -d '{}' || true
         fi
     done
+elif [[ "$HOSTNAME_LOWER" == *"9048"* || "$HOSTNAME_LOWER" == *"048"* ]]; then
+    st=$(curl -s -H "Authorization: Bearer ${SERVICE_AUTH_TOKEN}" http://127.0.0.1:8769/discovery/status 2>/dev/null | grep -o '"status":"[^"]*"' | cut -d':' -f2 | tr -d '"')
+    if [[ "$st" == "idle" || "$st" == "stopped" || "$st" == "failed" || -z "$st" ]]; then
+        echo "▶ Safety Net: Triggering /discovery/clear-and-fetch on port 8769 (current status=$st)..."
+        curl -s -X POST -H "Authorization: Bearer ${SERVICE_AUTH_TOKEN}" -H 'Content-Type: application/json' http://127.0.0.1:8769/discovery/clear-and-fetch -d '{}' || true
+    fi
 fi
 
