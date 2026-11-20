@@ -1,6 +1,32 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-20] Integrate 7-Day Dedup, Weekend 50% Budget Policy, Daily Guardian, and Discovery Engine 5 Header into NIM-FeedPrediction
+Files changed:
+- common/fleet_deduplicator.py
+- common/advance_precrawl.py
+- common/daily_lifecycle.py
+- common/tracxn_domain_ingestor.py
+- common/pipeline_engine.py
+- common/key_manager.py
+- common/tech_crawler.py
+- common/tracxn_client.py
+- common/domain_filter_validator.py
+- Sheet1/api.py
+- common/__init__.py
+- run_daily_precrawl.sh
+- CHANGELOG.md
+Reason:
+1. Ported rolling 7-day historical deduplication (`DailyProcessedRegistry`) into `common/fleet_deduplicator.py` and `common/advance_precrawl.py`.
+2. Added comprehensive cross-fleet checking against the 4 main desktop nodes (`5080-sheet1`, `5080-sheet2`, `5321-sheet3`, `5321-sheet4`) and the 4 main Google Sheets to ensure Desktop-9048 excludes all domains processed or staged across `main`.
+3. Ported weekend 50% budget policy (`get_effective_budget`) for Saturday & Sunday runs in `common/daily_lifecycle.py`, `common/advance_precrawl.py`, and `common/tracxn_domain_ingestor.py`.
+4. Ported autonomous daily guardian (`should_trigger_daily_guardian`), dynamic module reload (`reload_all_common_modules`), and `/fleet/historical-domains` endpoint in `Sheet1/api.py`.
+5. Standardized `X-Request-Source` headers across all API calls to identify as `Discovery Engine 5` (`vishnu.bhagirathan@tracxn.com | Python | <Action> | Discovery Engine 5`).
+6. Preserved dedicated NIM IF prediction, 60/40 token split, and Desktop-9048 single-sheet deployment on `NIM-FeedPrediction`.
+Related tests:
+- Temp_Test/test_nim_upgrades.py (5 passed)
+
+
 ## [2026-11-19] Fix Undefined pre_tc_scraped and pre_tc_completed in reconcile_existing_tech_crawler_jobs
 Files changed:
 - common/pipeline_engine.py

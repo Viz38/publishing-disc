@@ -25,6 +25,8 @@ from common.tech_crawler import TechCrawlerClient
 from common.storage_cleaner import clean_old_storage
 from common.gsheet_circuit_breaker import is_csv_only_mode, set_csv_only_mode, is_doc_too_large_error
 from common.domain_filter_validator import is_domain_leaked, batch_validate_domains
+from common.daily_lifecycle import get_effective_budget
+from common.local_cache import get_now_ist
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("AdvancePreCrawl")
@@ -146,10 +148,10 @@ def initialize_fleet_exclusion_pool(gc=None) -> Set[str]:
     pool = set()
     try:
         registry = DailyProcessedRegistry()
-        pool.update(registry.get_daily_processed())
-        logger.info(f"Loaded {len(pool)} domains from daily processed registry to exclude")
+        pool.update(registry.get_historical_processed(days=7))
+        logger.info(f"Loaded {len(pool)} domains from 7-day historical processed registry to exclude")
     except Exception as re:
-        logger.warning(f"Could not load daily processed registry: {re}")
+        logger.warning(f"Could not load 7-day historical processed registry: {re}")
 
     if gc is None:
         try:
@@ -158,7 +160,21 @@ def initialize_fleet_exclusion_pool(gc=None) -> Set[str]:
             logger.warning(f"Could not get gspread client for fleet exclusion: {ge}")
             return pool
 
-    for s_target in FLEET_TARGET_SHEETS:
+    main_sheets = [
+        {"id": "1IWXqnR52IzpFewE0QS0tlJFT65nJE_fmIoJs8ps9nZo", "name": "Main Sheet 1 (CF-1)"},
+        {"id": "1QGraMZOJjc-EIZlt_CieOVpr1jxw6tLa_QnWgWHou5I", "name": "Main Sheet 2 (CF-2)"},
+        {"id": "1MHdkFCsoAY0V7ix_pJ5SpWFq3EFpJEug2ntJk1FkEl8", "name": "Main Sheet 3 (CF-3)"},
+        {"id": "1z3wH--c2qHGlNqW0e-6Mc8IVqh_kN5_fbWjILM4FxQM", "name": "Main Sheet 4 (Filter-V2)"},
+    ]
+    seen_ids = set()
+    all_check_sheets = []
+    for s_item in list(FLEET_TARGET_SHEETS) + list(TARGET_SHEETS) + main_sheets:
+        sid = s_item.get("id")
+        if sid and sid not in seen_ids:
+            seen_ids.add(sid)
+            all_check_sheets.append(s_item)
+
+    for s_target in all_check_sheets:
         try:
             target_sh = gc.open_by_key(s_target["id"])
             try:
@@ -185,10 +201,11 @@ def initialize_fleet_exclusion_pool(gc=None) -> Set[str]:
             except Exception as pe:
                 logger.warning(f"Could not read local precrawl for {s_target['folder']}: {pe}")
 
-    from common.fleet_orchestrator import FLEET_NODES, get_node_url
     fleet_staged_endpoints = [
-        f"{get_node_url(s_num).rstrip('/')}/fleet/staged-domains"
-        for s_num in sorted(FLEET_NODES.keys())
+        "https://5080-sheet1.rajath.world/fleet/staged-domains",
+        "https://5080-sheet2.rajath.world/fleet/staged-domains",
+        "https://5321-sheet3.rajath.world/fleet/staged-domains",
+        "https://5321-sheet4.rajath.world/fleet/staged-domains",
     ]
     auth_header = {"Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'Tracxn@SR')}"}
     for ep in fleet_staged_endpoints:
@@ -218,6 +235,8 @@ def fetch_domains_for_sheet(
     payload_rows = payload_ws.get_all_values()
 
     # Calculate total budget from payload tab if target_count is default or None
+    # Advance pre-crawl prepares domains for the NEXT day's run (tomorrow in IST)
+    target_run_date = (get_now_ist() + datetime.timedelta(days=1)).date()
     total_payload_budget = 0
     for idx in range(2, len(payload_rows)):
         p_row = payload_rows[idx]
@@ -225,7 +244,7 @@ def fetch_domains_for_sheet(
             continue
         b_str = p_row[5].replace(",", "").strip() if len(p_row) > 5 else ""
         if b_str and b_str.isdigit():
-            total_payload_budget += int(b_str)
+            total_payload_budget += get_effective_budget(int(b_str), target_date=target_run_date)
 
     if total_payload_budget > 0:
         if total_payload_budget > 15000:
@@ -234,11 +253,11 @@ def fetch_domains_for_sheet(
         elif target_count is None or target_count == 15000:
             effective_target_count = total_payload_budget
         else:
-            effective_target_count = target_count
+            effective_target_count = get_effective_budget(target_count, target_date=target_run_date)
     else:
-        effective_target_count = target_count or 15000
+        effective_target_count = get_effective_budget(target_count or 15000, target_date=target_run_date)
 
-    logger.info(f"Target count for sheet {sheet_id}: {effective_target_count} domains (Payload defined total: {total_payload_budget})")
+    logger.info(f"Target count for sheet {sheet_id} (target date {target_run_date.strftime('%A, %b %d')}): {effective_target_count} domains (Payload defined total: {total_payload_budget})")
 
     # If shared_exclusion_set is provided, use it directly (it gets updated in place as domains are accepted)
     if shared_exclusion_set is not None:
@@ -277,7 +296,9 @@ def fetch_domains_for_sheet(
                 budget = 0
             if budget <= 0:
                 continue
-            effective_budget = budget
+            effective_budget = get_effective_budget(budget, target_date=target_run_date)
+            if effective_budget != budget:
+                logger.info(f"🏖️ Weekend 50% policy applied for tomorrow ({target_run_date.strftime('%A, %b %d')}): {budget} -> {effective_budget} for '{filter_name}'")
         else:
             effective_budget = float("inf")
             logger.info(f"No budget count specified for payload '{filter_name}'. Clearing all available domains.")
@@ -346,7 +367,7 @@ def fetch_domains_for_sheet(
                 headers = {
                     "Content-Type": "application/json",
                     "accessToken": token,
-                    "X-Request-Source": "Discovery Team"
+                    "X-Request-Source": "vishnu.bhagirathan@tracxn.com | Python | Domain Precrawl Ingestion | Discovery Engine 5"
                 }
 
                 try:
@@ -608,6 +629,16 @@ def save_precrawl_to_csv(folder: str, rows: List[List[str]]) -> str:
             writer.writerow(r[:57])
 
     logger.info(f"💾 Saved {len(rows)} pre-crawled domains to {out_path} ({os.path.getsize(out_path) / 1024:.1f} KB)")
+    try:
+        from common.fleet_deduplicator import DailyProcessedRegistry
+        tomorrow_date = (get_now_ist() + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+        staged_clean = [r[0].strip().lower() for r in rows if r and r[0] and "." in r[0]]
+        if staged_clean:
+            reg = DailyProcessedRegistry()
+            reg.record_daily_processed(staged_clean, date_str=tomorrow_date)
+            logger.info(f"📝 Staged {len(staged_clean)} domains into daily registry for {tomorrow_date}")
+    except Exception as se:
+        logger.warning(f"Could not stage domains into daily registry: {se}")
     return out_path
 
 async def run_precrawl_for_sheet(target: Dict[str, Any], budget: Optional[int] = None, shared_exclusion_set: Optional[Set[str]] = None):

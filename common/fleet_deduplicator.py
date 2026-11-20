@@ -13,9 +13,12 @@ Guarantees:
 import os
 import sys
 import json
+import csv
+import glob
 import logging
 import datetime
-from typing import List, Dict, Tuple, Set, Optional, Any, Iterable
+from typing import List, Dict, Tuple, Set, Optional, Any, Iterable, Union
+import requests
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
@@ -72,37 +75,146 @@ def retry_gspread_call(fn, max_retries: int = 5, initial_delay: int = 5):
 
 class DailyProcessedRegistry:
     """
-    Persistent daily registry of all domains processed across the fleet.
-    Guarantees that a domain is processed at most once per calendar day.
+    Persistent registry of domains processed across the fleet.
+    Supports rolling multi-day historical lookups (e.g. 7-day deduplication window),
+    peer fleet synchronization across hosts, and automatic cache bootstrapping.
     """
-    def __init__(self, storage_dir: Optional[str] = None):
-        self.storage_dir = storage_dir or os.path.join(BASE_DIR, "Logs", "daily_registry")
+    def __init__(self, storage_dir: Optional[str] = None, root_dir: Optional[str] = None):
+        self.root_dir = root_dir or BASE_DIR
+        self.storage_dir = storage_dir or os.path.join(self.root_dir, "Logs", "daily_registry")
         os.makedirs(self.storage_dir, exist_ok=True)
 
     def _get_registry_path(self, date_str: Optional[str] = None) -> str:
         d = date_str or get_today_ist()
         return os.path.join(self.storage_dir, f"daily_processed_{d}.json")
 
-    def get_daily_processed(self, date_str: Optional[str] = None) -> Set[str]:
-        path = self._get_registry_path(date_str)
-        if not os.path.exists(path):
-            return set()
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if isinstance(data, list):
-                    return set(d.strip().lower() for d in data if d and d.strip())
-        except Exception as e:
-            logger.error(f"Error reading daily processed registry from {path}: {e}")
+    def _bootstrap_from_local_cache(self, date_str: str) -> Set[str]:
+        """
+        Self-bootstraps historical domains for a given date from existing
+        pre_crawl_loaded_*.csv, discovery_cache_*.csv, or daily_eligible_*.json on local disk.
+        """
+        found_domains: Set[str] = set()
+        sheets = ["Sheet1", "Sheet2", "Sheet3", "Sheet4"]
+
+        for s in sheets:
+            cache_dir = os.path.join(self.root_dir, s, "Logs", "Cache")
+            logs_dir = os.path.join(self.root_dir, s, "Logs")
+
+            # 1. Check pre_crawl_loaded_YYYY-MM-DD*.csv (cleanest format)
+            if os.path.exists(cache_dir):
+                precrawl_matches = glob.glob(os.path.join(cache_dir, f"pre_crawl_loaded_{date_str}*.csv"))
+                for p_file in precrawl_matches:
+                    try:
+                        with open(p_file, "r", encoding="utf-8", errors="ignore") as f:
+                            for row in csv.reader(f):
+                                if row and row[0].strip():
+                                    dom = row[0].strip().strip('"').strip("'").lower()
+                                    if "." in dom and " " not in dom and not dom.startswith("title") and dom != "domain":
+                                        found_domains.add(dom)
+                    except Exception as e:
+                        logger.debug(f"Error bootstrapping from {p_file}: {e}")
+
+            # 2. Check daily_eligible_YYYY-MM-DD.json
+            eligible_file = os.path.join(logs_dir, f"daily_eligible_{date_str}.json")
+            if os.path.exists(eligible_file):
+                try:
+                    with open(eligible_file, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                        recs = data.get("records", [])
+                        for r in recs:
+                            if r and r[0]:
+                                dom = str(r[0]).strip().lower()
+                                if "." in dom and " " not in dom:
+                                    found_domains.add(dom)
+                except Exception as e:
+                    logger.debug(f"Error bootstrapping from {eligible_file}: {e}")
+
+            # 3. Check discovery_cache_YYYY-MM-DD.csv if still empty
+            if not found_domains and os.path.exists(cache_dir):
+                dcache_file = os.path.join(cache_dir, f"discovery_cache_{date_str}.csv")
+                if os.path.exists(dcache_file):
+                    try:
+                        with open(dcache_file, "r", encoding="utf-8", errors="ignore") as f:
+                            for row in csv.reader(f):
+                                if row and row[0].strip():
+                                    dom = row[0].strip().strip('"').strip("'").lower()
+                                    if "." in dom and " " not in dom and dom != "domain":
+                                        found_domains.add(dom)
+                    except Exception as e:
+                        logger.debug(f"Error bootstrapping from {dcache_file}: {e}")
+
+        if found_domains:
+            logger.info(f"✨ Self-bootstrapped {len(found_domains)} historical domains for {date_str} from disk.")
+            self.record_daily_processed(found_domains, date_str=date_str)
+
+        return found_domains
+
+    def get_daily_processed(self, date_str: Optional[str] = None, allow_bootstrap: bool = True) -> Set[str]:
+        d = date_str or get_today_ist()
+        path = self._get_registry_path(d)
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, list) and data:
+                        return set(dom.strip().lower() for dom in data if dom and dom.strip())
+            except Exception as e:
+                logger.error(f"Error reading daily processed registry from {path}: {e}")
+
+        # If empty or not exists, attempt self-bootstrap from cache archives
+        if allow_bootstrap:
+            bootstrapped = self._bootstrap_from_local_cache(d)
+            if bootstrapped:
+                return bootstrapped
+
         return set()
 
+    def get_historical_processed(
+        self,
+        days: int = 7,
+        target_date: Optional[Union[datetime.date, datetime.datetime, str]] = None,
+        include_peer_endpoints: bool = True
+    ) -> Set[str]:
+        """
+        Retrieves all domains processed within a rolling window of `days` up to target_date (inclusive).
+        Aggregates local daily registry files, bootstraps missing days, and merges peer fleet domains.
+        """
+        if target_date is None:
+            now_utc = datetime.datetime.now(datetime.timezone.utc)
+            now_ist = now_utc + datetime.timedelta(hours=5, minutes=30)
+            base_dt = now_ist.date()
+        elif isinstance(target_date, str):
+            base_dt = datetime.datetime.strptime(target_date, "%Y-%m-%d").date()
+        elif isinstance(target_date, datetime.datetime):
+            base_dt = target_date.date()
+        else:
+            base_dt = target_date
+
+        historical_pool: Set[str] = set()
+
+        for offset in range(days + 1):
+            d_curr = base_dt - datetime.timedelta(days=offset)
+            d_str = d_curr.strftime("%Y-%m-%d")
+            daily_doms = self.get_daily_processed(d_str, allow_bootstrap=True)
+            historical_pool.update(daily_doms)
+
+        if include_peer_endpoints:
+            peer_doms = fetch_fleet_peer_historical_domains(days=days)
+            if peer_doms:
+                logger.info(f"Merged {len(peer_doms)} historical domains from peer fleet endpoints.")
+                historical_pool.update(peer_doms)
+
+        logger.info(f"Loaded {len(historical_pool)} total historical domains across {days}-day rolling window.")
+        return historical_pool
+
     def record_daily_processed(self, domains: Iterable[str], date_str: Optional[str] = None) -> int:
-        path = self._get_registry_path(date_str)
-        current = self.get_daily_processed(date_str)
+        d = date_str or get_today_ist()
+        path = self._get_registry_path(d)
+        current = self.get_daily_processed(d, allow_bootstrap=False)
         for dom in domains:
             if dom:
                 clean_d = dom.strip().lower()
-                if clean_d:
+                if clean_d and "." in clean_d and " " not in clean_d:
                     current.add(clean_d)
 
         # Atomic write via temp file
@@ -118,20 +230,79 @@ class DailyProcessedRegistry:
                     os.remove(temp_path)
                 except Exception:
                     pass
+
+        # Automatic 30-day retention pruning
+        self._prune_old_registries(retention_days=30)
         return len(current)
+
+    def _prune_old_registries(self, retention_days: int = 30):
+        """Removes daily registry files older than retention_days."""
+        try:
+            now_utc = datetime.datetime.now(datetime.timezone.utc)
+            now_ist = (now_utc + datetime.timedelta(hours=5, minutes=30)).date()
+            cutoff_date = now_ist - datetime.timedelta(days=retention_days)
+
+            pattern = os.path.join(self.storage_dir, "daily_processed_*.json")
+            for f in glob.glob(pattern):
+                fname = os.path.basename(f)
+                date_part = fname.replace("daily_processed_", "").replace(".json", "")
+                try:
+                    f_date = datetime.datetime.strptime(date_part, "%Y-%m-%d").date()
+                    if f_date < cutoff_date:
+                        os.remove(f)
+                        logger.info(f"🧹 Pruned expired historical registry file: {fname}")
+                except Exception:
+                    continue
+        except Exception as pe:
+            logger.debug(f"Error during registry pruning: {pe}")
+
+
+def fetch_fleet_peer_historical_domains(days: int = 7) -> Set[str]:
+    """
+    Queries peer endpoints across Desktop-5080 and Desktop-5321 for their historical processed domains.
+    """
+    fleet_endpoints = [
+        "https://5080-sheet1.rajath.world/fleet/historical-domains",
+        "https://5080-sheet2.rajath.world/fleet/historical-domains",
+        "https://5321-sheet3.rajath.world/fleet/historical-domains",
+        "https://5321-sheet4.rajath.world/fleet/historical-domains",
+    ]
+    auth_header = {"Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'Tracxn@SR')}"}
+    peer_domains: Set[str] = set()
+
+    for ep in fleet_endpoints:
+        try:
+            resp = requests.get(ep, params={"days": days}, headers=auth_header, timeout=4)
+            if resp.status_code == 200:
+                data = resp.json()
+                doms = data.get("domains", [])
+                if isinstance(doms, list):
+                    for d in doms:
+                        if d and isinstance(d, str):
+                            peer_domains.add(d.strip().lower())
+        except Exception:
+            continue
+
+    return peer_domains
 
 
 def identify_fleet_duplicates(
     sheets_data: Dict[int, List[Tuple[int, str]]],
-    daily_seen: Optional[Set[str]] = None
+    daily_seen: Optional[Set[str]] = None,
+    historical_seen: Optional[Set[str]] = None
 ) -> Dict[int, List[Tuple[int, str, str]]]:
     """
     Evaluates domain occurrences across production sheets in strict priority order (Sheet 1 > 2 > 3 > 4).
+    Flags intra-sheet duplicates, cross-sheet duplicates, and rolling 7-day historical duplicates.
     Returns a mapping: sheet_num -> list of (row_number, domain, reason) for duplicate rows to be purged.
     """
     prior_done: Set[str] = set()
     if daily_seen:
         prior_done.update(d.strip().lower() for d in daily_seen if d and d.strip())
+
+    prior_historical: Set[str] = set()
+    if historical_seen:
+        prior_historical.update(d.strip().lower() for d in historical_seen if d and d.strip())
 
     active_nums = sorted(set(sheets_data.keys()) | {s["num"] for s in TARGET_SHEETS})
     duplicates: Dict[int, List[Tuple[int, str, str]]] = {s: [] for s in active_nums}
@@ -152,6 +323,9 @@ def identify_fleet_duplicates(
                     reason = f"Duplicate within Sheet {sheet_num} (Row {orig_row})"
                 else:
                     reason = f"Duplicate of Sheet {orig_sheet} (Row {orig_row})"
+                duplicates[sheet_num].append((row_num, clean_d, reason))
+            elif clean_d in prior_historical:
+                reason = "Already processed in fleet within last 7 days"
                 duplicates[sheet_num].append((row_num, clean_d, reason))
             elif clean_d in prior_done:
                 reason = "Already processed in fleet earlier today"
@@ -237,24 +411,31 @@ def load_all_active_fleet_domains(gc=None) -> Dict[int, List[Tuple[int, str]]]:
 
 from common.advance_precrawl import get_gspread_client, fetch_domains_for_sheet
 
-def clean_and_deduplicate_all_sheets(gc=None, dry_run: bool = False, backfill: bool = True) -> Dict[str, Any]:
+def clean_and_deduplicate_all_sheets(
+    gc=None,
+    dry_run: bool = False,
+    backfill: bool = True,
+    history_days: int = 7
+) -> Dict[str, Any]:
     """
     Full cross-sheet cleaning operation across all 4 sheets.
     1. Reads active domains across Sheets 1-4.
-    2. Identifies all duplicates (respecting priority Sheet 1 > 2 > 3 > 4) and daily registry.
+    2. Identifies all duplicates respecting priority (Sheet 1 > 2 > 3 > 4) and rolling 7-day history.
     3. Purges duplicate rows from Google Sheets (blanks Col A so engine bypasses them).
-    4. Automated Budget Backfill: Re-fetches replacement domains for purged rows so budget is 100% fulfilled.
-    5. Returns audit report.
+    4. Automated Budget Backfill: Re-fetches replacement domains for purged rows excluding 7-day history.
+    5. Persists valid unique domains into the daily registry.
+    6. Returns audit report.
     """
     if gc is None:
         gc = get_gspread_client()
 
     registry = DailyProcessedRegistry()
     daily_seen = registry.get_daily_processed()
-    logger.info(f"Daily registry has {len(daily_seen)} previously processed domains today.")
+    historical_seen = registry.get_historical_processed(days=history_days)
+    logger.info(f"Loaded {len(daily_seen)} domains from today's registry, {len(historical_seen)} from {history_days}-day history.")
 
     sheets_data = load_all_active_fleet_domains(gc)
-    duplicates = identify_fleet_duplicates(sheets_data, daily_seen=daily_seen)
+    duplicates = identify_fleet_duplicates(sheets_data, daily_seen=daily_seen, historical_seen=historical_seen)
 
     total_dups = sum(len(d_list) for d_list in duplicates.values())
     logger.info(f"Cross-sheet deduplication scan found {total_dups} duplicate instances.")
@@ -318,7 +499,7 @@ def clean_and_deduplicate_all_sheets(gc=None, dry_run: bool = False, backfill: b
                 if backfill and len(s_dups) > 0:
                     missing_count = len(s_dups)
                     logger.info(f"[{s_cfg['name']}] Refetching {missing_count} fresh replacement domains to maintain full budget...")
-                    exclusions = set(daily_seen) | set(all_valid_unique_domains)
+                    exclusions = set(historical_seen) | set(daily_seen) | set(all_valid_unique_domains)
                     try:
                         replacement_rows = fetch_domains_for_sheet(
                             sheet_id=s_id,
@@ -340,6 +521,14 @@ def clean_and_deduplicate_all_sheets(gc=None, dry_run: bool = False, backfill: b
                         logger.error(f"[{s_cfg['name']}] Error during budget backfill refetch: {bfe}")
             except Exception as e:
                 logger.error(f"[{s_cfg['name']}] Failed to purge duplicate rows in sheet: {e}")
+
+    # Persist all valid unique domains in the daily registry
+    if all_valid_unique_domains and not dry_run:
+        try:
+            registry.record_daily_processed(all_valid_unique_domains)
+            logger.info(f"📝 Recorded {len(all_valid_unique_domains)} unique domains into daily processed registry.")
+        except Exception as pe:
+            logger.warning(f"Failed to record daily processed domains in registry: {pe}")
 
     return report
 

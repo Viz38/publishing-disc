@@ -5,7 +5,7 @@ import datetime
 import logging
 import os
 import re
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from common.backlog_manager import BacklogManager
 from common.bulk_pusher import handle_5am_sheet_cleanup
@@ -28,9 +28,133 @@ from common.dashboard_metrics import (
     load_local_sheet_rows,
 )
 from common.gsheet_circuit_breaker import is_csv_only_mode
-from common.local_cache import get_now_ist
+from common.local_cache import (
+    IST_TZ,
+    get_now_ist,
+    is_5am_ist_cutoff,
+    is_pre_cutoff_window,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def get_effective_budget(
+    base_budget: Union[int, float],
+    target_date: Optional[Union[datetime.date, datetime.datetime]] = None,
+) -> Union[int, float]:
+    """
+    Calculates the effective daily budget applying the fleet weekend 50% policy.
+    - Weekdays (Monday through Friday in IST): returns 100% of base_budget.
+    - Weekends (Saturday and Sunday in IST): returns 50% of base_budget (max(1, round(base_budget * 0.5))).
+    - Zero or infinite budgets are preserved as-is.
+    """
+    if base_budget == float("inf") or base_budget <= 0:
+        return base_budget
+    if target_date is None:
+        target_date = get_now_ist().date()
+    elif isinstance(target_date, datetime.datetime):
+        target_date = target_date.date()
+
+    # weekday(): Monday=0, Tuesday=1, Wednesday=2, Thursday=3, Friday=4, Saturday=5, Sunday=6
+    if target_date.weekday() in (5, 6):
+        return max(1, round(base_budget * 0.5))
+    return base_budget
+
+
+def should_trigger_daily_guardian(
+    saved_state: Optional[Dict[str, Any]],
+    current_state: Dict[str, Any],
+    current_dt: Optional[datetime.datetime] = None,
+) -> Tuple[bool, str]:
+    """
+    State-driven decision engine determining whether the autonomous daily guardian
+    should trigger a fresh daily domain ingestion and pipeline start.
+
+    Returns (True, reason) if:
+      1. Not inside the daily maintenance cutoff window (23:30 - 00:05 IST).
+      2. No pipeline or task is actively running or stopping.
+      3. A new day's cycle has arrived (or no previous run exists).
+      4. Today's run has not already completed or been user-cancelled today.
+    """
+    if current_dt is None:
+        current_dt = get_now_ist()
+    elif current_dt.tzinfo is None:
+        current_dt = current_dt.replace(tzinfo=IST_TZ)
+    else:
+        current_dt = current_dt.astimezone(IST_TZ)
+
+    # 1. Maintenance cutoff window check (23:30 - 00:05 IST)
+    if is_pre_cutoff_window(current_dt) or is_5am_ist_cutoff(current_dt):
+        return (False, "maintenance_cutoff_window")
+
+    # 2. Active pipeline check
+    active_pid = current_state.get("active_pid")
+    if active_pid is not None:
+        return (False, f"pipeline_running_pid_{active_pid}")
+    if current_state.get("status") in ("running", "stopping"):
+        return (False, f"pipeline_status_{current_state.get('status')}")
+    if current_state.get("current_task") is not None:
+        return (False, "task_already_active")
+
+    # 3. State evaluation
+    if not saved_state:
+        return (True, "no_previous_state")
+
+    current_date_str = current_dt.strftime("%Y-%m-%d")
+    last_run_date = saved_state.get("date_ist")
+    last_status = saved_state.get("status")
+    last_term = saved_state.get("termination_reason")
+
+    if last_run_date != current_date_str:
+        return (True, f"new_day_cycle_last_run_{last_run_date}")
+
+    # Same date checks
+    if last_status == "completed" or last_term == "completed":
+        return (False, "today_run_already_completed")
+    if last_status == "user_cancelled" or last_term == "user_cancelled":
+        return (False, "today_run_user_cancelled")
+    if last_status in ("failed", "interrupted"):
+        return (True, f"today_run_retry_{last_status}")
+    if last_status in ("idle", "stopped"):
+        return (True, f"today_run_unstarted_{last_status}")
+    if last_status == "running":
+        # Stale run recorded as running but no active PID in current_state
+        return (True, "today_crashed_run_recovery")
+
+    return (False, f"unhandled_state_{last_status}")
+
+
+def reload_all_common_modules() -> List[str]:
+    """
+    Dynamically reloads all cached common modules in sys.modules to prevent
+    stale in-memory bytecode or ImportErrors after git updates on persistent daemon runtimes.
+    """
+    import importlib
+    import sys
+
+    reloaded = []
+    MODULES_TO_RELOAD = [
+        "common.daily_lifecycle",
+        "common.local_cache",
+        "common.fleet_deduplicator",
+        "common.tracxn_domain_ingestor",
+        "common.advance_precrawl",
+        "common.key_manager",
+        "common.tech_crawler",
+        "common.gsheet_circuit_breaker",
+        "common.bulk_pusher",
+        "common.daily_eligible_exporter",
+        "common.dashboard_metrics",
+    ]
+    for mod_name in MODULES_TO_RELOAD:
+        if mod_name in sys.modules:
+            try:
+                importlib.reload(sys.modules[mod_name])
+                reloaded.append(mod_name)
+            except Exception as e:
+                logger.warning(f"Failed to reload {mod_name}: {e}")
+    return reloaded
+
 
 
 def get_sheet_num_from_dir(base_dir: str) -> int:

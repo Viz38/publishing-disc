@@ -48,8 +48,26 @@ from .bulk_sync import bulk_sync_cache_to_sheet, group_bulk_sync_chunks
 from .schema_constants import TOTAL_SCHEMA_COLUMNS, COLUMN_INDEX_MAP
 from .fleet_cluster import FleetClusterManager, FleetSummarizeRequest
 from .pipeline_engine import configure_engine, run_engine_for_sheet
+from .daily_lifecycle import (
+    get_effective_budget,
+    should_trigger_daily_guardian,
+    reload_all_common_modules,
+)
+from .fleet_deduplicator import (
+    DailyProcessedRegistry,
+    identify_fleet_duplicates,
+    clean_and_deduplicate_all_sheets,
+    fetch_fleet_peer_historical_domains,
+)
 
 __all__ = [
+    "get_effective_budget",
+    "should_trigger_daily_guardian",
+    "reload_all_common_modules",
+    "DailyProcessedRegistry",
+    "identify_fleet_duplicates",
+    "clean_and_deduplicate_all_sheets",
+    "fetch_fleet_peer_historical_domains",
     "TracxnKeyManager",
     "NIMKeyManager",
     "get_fleet_sheet_count",
