@@ -1008,6 +1008,19 @@ async def get_sheet_staged_domains():
         "domains": list(domains)
     }
 
+@app.get("/fleet/historical-domains", dependencies=[Depends(verify_token)])
+async def get_sheet_historical_domains(days: int = 7):
+    from common.fleet_deduplicator import DailyProcessedRegistry
+    registry = DailyProcessedRegistry()
+    domains = registry.get_historical_processed(days=days, include_peer_endpoints=False)
+    return {
+        "status": "ok",
+        "sheet": os.path.basename(BASE_DIR),
+        "days": days,
+        "count": len(domains),
+        "domains": list(domains)
+    }
+
 class FleetFetchAndStageRequest(BaseModel):
     exclusions: Optional[List[str]] = None
 

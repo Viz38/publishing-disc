@@ -136,6 +136,7 @@ def reload_all_common_modules() -> List[str]:
     MODULES_TO_RELOAD = [
         "common.daily_lifecycle",
         "common.local_cache",
+        "common.fleet_deduplicator",
         "common.tracxn_domain_ingestor",
         "common.advance_precrawl",
         "common.key_manager",

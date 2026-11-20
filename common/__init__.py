@@ -46,11 +46,21 @@ from .daily_lifecycle import (
     should_trigger_daily_guardian,
     reload_all_common_modules,
 )
+from .fleet_deduplicator import (
+    DailyProcessedRegistry,
+    identify_fleet_duplicates,
+    clean_and_deduplicate_all_sheets,
+    fetch_fleet_peer_historical_domains,
+)
 
 __all__ = [
     "get_effective_budget",
     "should_trigger_daily_guardian",
     "reload_all_common_modules",
+    "DailyProcessedRegistry",
+    "identify_fleet_duplicates",
+    "clean_and_deduplicate_all_sheets",
+    "fetch_fleet_peer_historical_domains",
     "TracxnKeyManager",
     "NIMKeyManager",
     "get_sharded_nim_keys",

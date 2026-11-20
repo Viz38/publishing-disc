@@ -258,13 +258,14 @@ class TracxnDomainIngestor:
         fleet_seen: Set[str],
         daily_seen: Set[str],
         filter_metadata: Dict[str, Any],
-        max_loop_iterations: int = 20
+        max_loop_iterations: int = 20,
+        historical_seen: Optional[Set[str]] = None
     ) -> List[List[Any]]:
         """
         Executes the self-healing ingestion loop:
         1. Ingests domains from fetch_fn.
         2. Evaluates the 3 criteria (sameAs, status == PUBLISHED, feeds tagged) -> removes invalid.
-        3. Evaluates duplicates (intra-batch, fleet_seen from prior sheets, daily_seen) -> removes duplicates.
+        3. Evaluates duplicates (intra-batch, fleet_seen from prior sheets, daily_seen, 7-day historical_seen) -> removes duplicates.
         4. Repopulates the removed count from fetch_fn.
         5. Loops steps 2-4 until budget is fulfilled with 100% clean, unique domains.
         """
@@ -293,9 +294,9 @@ class TracxnDomainIngestor:
                     logger.info(f"Purging leaked domain '{dom}' (Reason: {reason})")
                     continue
 
-                # Step 3: Check duplicates
-                if dom in clean_domains or dom in fleet_seen or dom in daily_seen:
-                    logger.info(f"Purging duplicate domain '{dom}'")
+                # Step 3: Check duplicates (fleet, today's daily, 7-day history)
+                if dom in clean_domains or dom in fleet_seen or dom in daily_seen or (historical_seen and dom in historical_seen):
+                    logger.info(f"Purging duplicate domain '{dom}' (already in active fleet or 7-day history)")
                     continue
 
                 # Step 4: Add clean row
@@ -325,12 +326,13 @@ class TracxnDomainIngestor:
         fleet_seen: Set[str],
         daily_seen: Set[str],
         filter_metadata: Dict[str, Any],
-        max_loop_iterations: int = 20
+        max_loop_iterations: int = 20,
+        historical_seen: Optional[Set[str]] = None
     ) -> List[List[Any]]:
         """
         Post-ingestion validation, deduplication, and self-healing repopulation:
         1. Checks all candidate rows for the 3 criteria (via batch_validate_domains).
-        2. Discards leaked rows and duplicate rows.
+        2. Discards leaked rows and duplicate rows (including 7-day historical).
         3. Fetches replacement domains using fetch_replacement_fn.
         4. Validates replacements against the 3 criteria and duplicates.
         5. Loops until target_budget of 100% clean, verified, non-duplicate rows is reached.
@@ -350,8 +352,8 @@ class TracxnDomainIngestor:
             if is_leaked:
                 logger.info(f"Post-ingestion audit purged leaked domain '{dom}' (Reason: {reason})")
                 continue
-            if dom in clean_domains or dom in fleet_seen or dom in daily_seen:
-                logger.info(f"Post-ingestion audit purged duplicate domain '{dom}'")
+            if dom in clean_domains or dom in fleet_seen or dom in daily_seen or (historical_seen and dom in historical_seen):
+                logger.info(f"Post-ingestion audit purged duplicate domain '{dom}' (already in fleet or 7-day history)")
                 continue
             clean_domains.add(dom)
             clean_rows.append(r)
@@ -374,7 +376,7 @@ class TracxnDomainIngestor:
                 if is_leaked:
                     logger.info(f"Purging leaked replacement domain '{dom}' (Reason: {reason})")
                     continue
-                if dom in clean_domains or dom in fleet_seen or dom in daily_seen:
+                if dom in clean_domains or dom in fleet_seen or dom in daily_seen or (historical_seen and dom in historical_seen):
                     logger.info(f"Purging duplicate replacement domain '{dom}'")
                     continue
                 potential_candidates.append(item)
@@ -480,7 +482,8 @@ class TracxnDomainIngestor:
         )
         registry = DailyProcessedRegistry()
         daily_seen = registry.get_daily_processed()
-        logger.info(f"[{s_name}] Loaded {len(daily_seen)} domains from daily processed registry to exclude.")
+        historical_seen = registry.get_historical_processed(days=7)
+        logger.info(f"[{s_name}] Loaded {len(daily_seen)} domains from today's registry and {len(historical_seen)} from 7-day historical registry to exclude.")
 
         cross_sheet_seen = set()
         for other_s in FLEET_TARGET_SHEETS:
@@ -500,7 +503,7 @@ class TracxnDomainIngestor:
         logger.info(f"[{s_name}] Loaded {len(cross_sheet_seen)} active domains from other fleet sheets to exclude.")
 
         new_rows_57 = []
-        domain_seen = set(daily_seen) | cross_sheet_seen | fleet_seen
+        domain_seen = set(daily_seen) | set(historical_seen) | cross_sheet_seen | fleet_seen
         added_time_str = datetime.datetime.now().strftime("%d/%b/%Y  %H:%M:%S")
 
         # Row 0 & 1 are headers, payload data starts at row index 2 (Row 3/4)
@@ -740,7 +743,7 @@ class TracxnDomainIngestor:
                     logger.warning(f"[{s_name}] Post-ingestion audit purged leaked domain '{dom}' (Reason: {reason})")
                     leaked_purged += 1
                     continue
-                if dom in sheet_clean_doms or dom in fleet_seen or dom in daily_seen:
+                if dom in sheet_clean_doms or dom in fleet_seen or dom in daily_seen or (historical_seen and dom in historical_seen):
                     logger.warning(f"[{s_name}] Post-ingestion audit purged duplicate domain '{dom}'")
                     dups_purged += 1
                     continue
@@ -755,6 +758,15 @@ class TracxnDomainIngestor:
         if new_rows_57:
             total_new = len(new_rows_57)
             logger.info(f"[{s_name}] Total unique domains collected: {total_new}. Writing rows...")
+
+            # Record newly ingested clean domains into the daily processed registry
+            new_clean_doms = [r[0].strip().lower() for r in new_rows_57 if r and r[0]]
+            if new_clean_doms:
+                try:
+                    registry.record_daily_processed(new_clean_doms)
+                    logger.info(f"[{s_name}] 📝 Recorded {len(new_clean_doms)} unique domains into daily processed registry.")
+                except Exception as rpe:
+                    logger.warning(f"[{s_name}] Could not record ingested domains into daily registry: {rpe}")
 
             if not use_csv_only:
                 try:

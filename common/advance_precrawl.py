@@ -140,10 +140,10 @@ def initialize_fleet_exclusion_pool(gc=None) -> Set[str]:
     pool = set()
     try:
         registry = DailyProcessedRegistry()
-        pool.update(registry.get_daily_processed())
-        logger.info(f"Loaded {len(pool)} domains from daily processed registry to exclude")
+        pool.update(registry.get_historical_processed(days=7))
+        logger.info(f"Loaded {len(pool)} domains from 7-day historical processed registry to exclude")
     except Exception as re:
-        logger.warning(f"Could not load daily processed registry: {re}")
+        logger.warning(f"Could not load 7-day historical processed registry: {re}")
 
     if gc is None:
         try:
@@ -607,6 +607,16 @@ def save_precrawl_to_csv(folder: str, rows: List[List[str]]) -> str:
             writer.writerow(r[:57])
 
     logger.info(f"💾 Saved {len(rows)} pre-crawled domains to {out_path} ({os.path.getsize(out_path) / 1024:.1f} KB)")
+    try:
+        from common.fleet_deduplicator import DailyProcessedRegistry
+        tomorrow_date = (get_now_ist() + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+        staged_clean = [r[0].strip().lower() for r in rows if r and r[0] and "." in r[0]]
+        if staged_clean:
+            reg = DailyProcessedRegistry()
+            reg.record_daily_processed(staged_clean, date_str=tomorrow_date)
+            logger.info(f"📝 Staged {len(staged_clean)} domains into daily registry for {tomorrow_date}")
+    except Exception as se:
+        logger.warning(f"Could not stage domains into daily registry: {se}")
     return out_path
 
 async def run_precrawl_for_sheet(target: Dict[str, Any], budget: Optional[int] = None, shared_exclusion_set: Optional[Set[str]] = None):
