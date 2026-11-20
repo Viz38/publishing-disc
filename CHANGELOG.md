@@ -1,6 +1,19 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-20] Enforce 10k Fleet Weekend Policy with 80% Set 3, 10% Usage-Based, 10% Others on NIM-FeedPrediction
+Files changed:
+- common/daily_lifecycle.py: Enhanced `get_effective_budget()` and added `classify_filter_category()` for category-aware weekend budget proportioning.
+- common/__init__.py: Exported `classify_filter_category`.
+- common/advance_precrawl.py: Updated advance pre-crawl calculations with category-aware budget scaling.
+- common/tracxn_domain_ingestor.py: Updated live ingestion with category-aware budget scaling.
+- CHANGELOG.md
+Reason:
+Synchronized the fleet weekend 10k policy to the NIM branch. On weekends, enforces 80% Bright Data Set 3, 10% usage-based product filters, and 10% others.
+Related tests:
+- Temp_Test/unit/test_tomorrow_refetch.py (all 4 tests passing)
+
+
 ## [2026-11-20] Integrate 7-Day Dedup, Weekend 50% Budget Policy, Daily Guardian, and Discovery Engine 5 Header into NIM-FeedPrediction
 Files changed:
 - common/fleet_deduplicator.py

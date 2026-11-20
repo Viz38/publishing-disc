@@ -25,7 +25,7 @@ from common.tech_crawler import TechCrawlerClient
 from common.storage_cleaner import clean_old_storage
 from common.gsheet_circuit_breaker import is_csv_only_mode, set_csv_only_mode, is_doc_too_large_error
 from common.domain_filter_validator import is_domain_leaked, batch_validate_domains
-from common.daily_lifecycle import get_effective_budget
+from common.daily_lifecycle import get_effective_budget, classify_filter_category
 from common.local_cache import get_now_ist
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -244,7 +244,16 @@ def fetch_domains_for_sheet(
             continue
         b_str = p_row[5].replace(",", "").strip() if len(p_row) > 5 else ""
         if b_str and b_str.isdigit():
-            total_payload_budget += get_effective_budget(int(b_str), target_date=target_run_date)
+            fg_name = p_row[0]
+            f_name = p_row[1] if len(p_row) > 1 else ""
+            p_payload = p_row[10].strip() if len(p_row) > 10 and p_row[10] else (p_row[3].strip() if len(p_row) > 3 and p_row[3] else "")
+            total_payload_budget += get_effective_budget(
+                int(b_str),
+                target_date=target_run_date,
+                filter_group_name=fg_name,
+                filter_name=f_name,
+                payload_str=p_payload,
+            )
 
     if total_payload_budget > 0:
         if total_payload_budget > 15000:
@@ -253,7 +262,7 @@ def fetch_domains_for_sheet(
         elif target_count is None or target_count == 15000:
             effective_target_count = total_payload_budget
         else:
-            effective_target_count = get_effective_budget(target_count, target_date=target_run_date)
+            effective_target_count = target_count
     else:
         effective_target_count = get_effective_budget(target_count or 15000, target_date=target_run_date)
 
@@ -289,6 +298,11 @@ def fetch_domains_for_sheet(
         if not is_clear_all and (len(new_rows_57) - p0_clear_all_added) >= effective_target_count:
             continue
 
+        raw_payload_str = (
+            p_row[10].strip() if len(p_row) > 10 and p_row[10] and p_row[10].strip()
+            else (p_row[3].strip() if len(p_row) > 3 and p_row[3] and p_row[3].strip() else "")
+        )
+
         if budget_str:
             try:
                 budget = int(budget_str)
@@ -296,17 +310,19 @@ def fetch_domains_for_sheet(
                 budget = 0
             if budget <= 0:
                 continue
-            effective_budget = get_effective_budget(budget, target_date=target_run_date)
+            effective_budget = get_effective_budget(
+                budget,
+                target_date=target_run_date,
+                filter_group_name=filter_group_name,
+                filter_name=filter_name,
+                payload_str=raw_payload_str,
+            )
             if effective_budget != budget:
-                logger.info(f"🏖️ Weekend 50% policy applied for tomorrow ({target_run_date.strftime('%A, %b %d')}): {budget} -> {effective_budget} for '{filter_name}'")
+                cat = classify_filter_category(filter_group_name, filter_name, raw_payload_str)
+                logger.info(f"🏖️ Weekend 10k fleet policy applied for tomorrow ({target_run_date.strftime('%A, %b %d')}): {budget} -> {effective_budget} for '{filter_name}' (category: {cat})")
         else:
             effective_budget = float("inf")
             logger.info(f"No budget count specified for payload '{filter_name}'. Clearing all available domains.")
-
-        raw_payload_str = (
-            p_row[10].strip() if len(p_row) > 10 and p_row[10] and p_row[10].strip()
-            else (p_row[3].strip() if len(p_row) > 3 and p_row[3] and p_row[3].strip() else "")
-        )
         custom_payload_template = None
         if raw_payload_str:
             try:

@@ -38,14 +38,47 @@ from common.local_cache import (
 logger = logging.getLogger(__name__)
 
 
+def classify_filter_category(
+    filter_group_name: str = "",
+    filter_name: str = "",
+    payload_str: str = "",
+) -> str:
+    """
+    Classifies a filter definition into one of three strategic categories:
+      - 'bright_data_set3': Bright Data Set 3 filters (80% weekend target)
+      - 'usage_based': Usage-based / product filters, e.g. Domains DB with LinkedIn (10% weekend target)
+      - 'others': Other filters (10% weekend target)
+    """
+    text = f"{filter_group_name} {filter_name} {payload_str}".lower()
+    if "bu_llm_brightdata_set3" in text or "set 3" in text or "set3" in text or "fy25 & fy24" in text:
+        return "bright_data_set3"
+    elif "domaindbwli" in text or "usage" in text or "product" in text or "hashtags" in text or "linkedin" in text:
+        return "usage_based"
+    return "others"
+
+
 def get_effective_budget(
     base_budget: Union[int, float],
     target_date: Optional[Union[datetime.date, datetime.datetime]] = None,
+    filter_group_name: str = "",
+    filter_name: str = "",
+    payload_str: str = "",
 ) -> Union[int, float]:
     """
-    Calculates the effective daily budget applying the fleet weekend 50% policy.
+    Calculates the effective daily budget applying the fleet weekend 10k policy:
     - Weekdays (Monday through Friday in IST): returns 100% of base_budget.
-    - Weekends (Saturday and Sunday in IST): returns 50% of base_budget (max(1, round(base_budget * 0.5))).
+    - Weekends (Saturday and Sunday in IST):
+        * Total fleet target is 10,000 domains daily (2,500 per sheet across the 4 engines).
+        * Distribution per sheet:
+            - 80% Bright Data Set 3 = 2,000 domains (8,000 fleet)
+            - 10% Usage-based product filters = 250 domains (1,000 fleet)
+            - 10% Others = 250 domains (1,000 fleet)
+        * If specific filter information is provided, scales proportionally to meet category targets:
+            - bright_data_set3: base 8,500 -> target 2,000 (factor 2000/8500)
+            - usage_based: base 1,217 -> target 250 (factor 250/1217)
+            - others: base 283 -> target 250 (factor 250/283)
+        * Otherwise (generic total count e.g. 10k base count), applies 25% multiplier
+          (max(1, round(base_budget * 0.25))), scaling a 10,000 base budget to 2,500 per sheet (10k fleet).
     - Zero or infinite budgets are preserved as-is.
     """
     if base_budget == float("inf") or base_budget <= 0:
@@ -57,7 +90,15 @@ def get_effective_budget(
 
     # weekday(): Monday=0, Tuesday=1, Wednesday=2, Thursday=3, Friday=4, Saturday=5, Sunday=6
     if target_date.weekday() in (5, 6):
-        return max(1, round(base_budget * 0.5))
+        if filter_group_name or filter_name or payload_str:
+            cat = classify_filter_category(filter_group_name, filter_name, payload_str)
+            if cat == "bright_data_set3":
+                return max(1, round(base_budget * (2000.0 / 8500.0)))
+            elif cat == "usage_based":
+                return max(1, round(base_budget * (250.0 / 1217.0)))
+            else:
+                return max(1, round(base_budget * (250.0 / 283.0)))
+        return max(1, round(base_budget * 0.25))
     return base_budget
 
 
