@@ -263,6 +263,23 @@ async def _daily_5am_ist_watchdog():
                     last_auto_started_date = current_date_str
                     asyncio.create_task(run_clear_and_fetch_task(settings.CF_SHEET_ID))
 
+            # 5. Autonomous Self-Healing Pipeline Launcher (Runs outside maintenance cutoff)
+            if not is_pre_cutoff_window(now_ist) and not is_5am_ist_cutoff(now_ist):
+                if state.get("active_pid") is None and state.get("current_task") is None:
+                    prog = state.get("progress", {})
+                    total_domains = prog.get("total", 0)
+                    current_done = prog.get("fully_completed", 0) or prog.get("current", 0)
+                    if total_domains > 0 and current_done < total_domains:
+                        now_ts = time.time()
+                        if now_ts - last_auto_start_attempt_ts >= 60:
+                            last_auto_start_attempt_ts = now_ts
+                            logger.info(
+                                f"🌟 [Self-Healing Watchdog] Unstarted domains detected in sheet "
+                                f"({current_done}/{total_domains} completed). Auto-starting pipeline from Row 3..."
+                            )
+                            pipeline_req = RunRequest(start_row=3, mode="full", sheet_id=settings.CF_SHEET_ID)
+                            asyncio.create_task(run_pipeline_task(pipeline_req))
+
             # Supervisor: check if active_pid died unexpectedly while state was running
             active_pid = state.get("active_pid")
             if active_pid and not is_pid_alive(active_pid) and state.get("status") == "running" and not state.get("is_stopping"):
@@ -872,16 +889,6 @@ async def run_clear_and_fetch_task(sheet_id: str):
                 wait_secs = max(5, (5 - dt.minute) * 60 - dt.second + 2)
                 logger.info(f"⏳ Clear & Fetch completed ({count} domains). Waiting {wait_secs}s for 12:05 AM IST cutoff window to pass before starting pipeline...")
                 await asyncio.sleep(wait_secs)
-
-            # Post-Ingestion Fleet Deduplication Gate
-            # Strictly run BEFORE auto-starting the pipeline to ensure zero double-processing and zero wasted TC jobs
-            from common.fleet_deduplicator import clean_and_deduplicate_all_sheets
-            try:
-                logger.info(f"🧹 Running cross-sheet deduplication before pipeline launch for sheet {sheet_id}...")
-                dedup_report = await asyncio.to_thread(clean_and_deduplicate_all_sheets)
-                logger.info(f"✅ Pre-pipeline deduplication complete: {dedup_report.get('total_duplicates_found', 0)} duplicates removed.")
-            except Exception as de:
-                logger.error(f"Error during pre-pipeline deduplication: {de}")
 
             logger.info(f"🚀 Auto-starting discovery engine pipeline for sheet {sheet_id} (start_row=3, mode=full)...")
             EXEC_TRACKER.reset_retry_count()

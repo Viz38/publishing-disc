@@ -855,15 +855,6 @@ class TracxnDomainIngestor:
                     writer.writerows(new_rows_57)
                 logger.info(f"[{s_name}] ✅ Staged {total_new} domains into {local_sheet_csv}")
 
-            # 5. Post-Ingestion Cross-Sheet Cleaning & Deduplication Operation
-            # Strictly executed BEFORE any Tech Crawler Job ID is generated
-            try:
-                logger.info(f"[{s_name}] Running cross-sheet deduplication cleaning across all 4 production sheets...")
-                dedup_report = clean_and_deduplicate_all_sheets(gc=self.gc, dry_run=False)
-                logger.info(f"[{s_name}] Post-ingestion deduplication complete: purged {dedup_report.get('total_duplicates_found', 0)} duplicates across fleet.")
-            except Exception as de:
-                logger.error(f"[{s_name}] Error during post-ingestion cross-sheet deduplication: {de}")
-
             return total_new
         else:
             logger.info(f"[{s_name}] No new domains returned for active payloads.")

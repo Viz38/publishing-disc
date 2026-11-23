@@ -508,14 +508,26 @@ def clean_and_deduplicate_all_sheets(
                         )
                         if replacement_rows:
                             cleared_rows = sorted([r for r, _, _ in s_dups])
+                            batch_updates = []
                             for idx, rep_row in enumerate(replacement_rows):
                                 if idx < len(cleared_rows):
                                     target_r = cleared_rows[idx]
-                                    retry_gspread_call(lambda: ws.update(range_name=f"A{target_r}:BE{target_r}", values=[rep_row], value_input_option="USER_ENTERED"))
+                                    batch_updates.append({
+                                        "range": f"A{target_r}:BE{target_r}",
+                                        "values": [rep_row]
+                                    })
                                     dom_clean = rep_row[0].strip().lower()
                                     all_valid_unique_domains.append(dom_clean)
                                     exclusions.add(dom_clean)
-                            logger.info(f"[{s_cfg['name']}] Successfully backfilled {len(replacement_rows)}/{missing_count} replacement domains.")
+
+                            # Batch update replacement rows in chunks of 100 to avoid single-row API rate limits
+                            UPDATE_CHUNK = 100
+                            for u_idx in range(0, len(batch_updates), UPDATE_CHUNK):
+                                sub_batch = batch_updates[u_idx : u_idx + UPDATE_CHUNK]
+                                retry_gspread_call(lambda: ws.batch_update(sub_batch, value_input_option="USER_ENTERED"))
+                                time.sleep(0.5)
+
+                            logger.info(f"[{s_cfg['name']}] Successfully backfilled {len(replacement_rows)}/{missing_count} replacement domains in {len(batch_updates)} batched ranges.")
                             report["sheet_details"][s_num]["backfilled_count"] = len(replacement_rows)
                     except Exception as bfe:
                         logger.error(f"[{s_cfg['name']}] Error during budget backfill refetch: {bfe}")
