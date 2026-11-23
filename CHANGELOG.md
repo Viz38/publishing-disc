@@ -1,6 +1,19 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-23] Batch Google Sheets Deduplication & Autonomous Unstarted-Batch Guardian
+Files changed:
+- `common/fleet_deduplicator.py`: Replaced single-row `ws.update()` loop with chunked `ws.batch_update()` payloads in chunks of 100 ranges. Eliminates Google Sheets 429 quota exhaustion (`RESOURCE_EXHAUSTED`) and reduces hundreds of API updates from hours to seconds.
+- `common/tracxn_domain_ingestor.py`: Removed redundant blocking `clean_and_deduplicate_all_sheets()` call after live ingestion to eliminate duplicate cross-sheet network sweeps.
+- `Sheet*/api.py`: 
+  * Removed blocking cross-sheet deduplication inside `run_clear_and_fetch_task` so pipeline launch is never stranded by transient network issues.
+  * Added Autonomous Self-Healing Pipeline Launcher in the 60s watchdog loop across Sheets 1-4. Outside the 11:30 PM - 00:05 AM maintenance cutoff, if `active_pid is None` and domains exist in the sheet (`total > 0` and uncompleted), the supervisor automatically launches `run_pipeline_task(RunRequest(start_row=3, mode="full"))`.
+Reason:
+Engines completing prior to 11:30 PM failed to automatically start next-day processing because deduplication row-by-row updates hit Google Sheets 429 quota limits, blocking pipeline launch, and the watchdog lacked an unstarted batch self-healing trigger.
+Related tests:
+- `Temp_Test/unit/test_local_csv_and_guardian.py` (all tests passing)
+- `Temp_Test/unit/test_sr_incorrect_bypass.py` (all tests passing)
+
 ## [2026-11-20] Direct LD Bypass for bu_llm_sr_incorrectprediction Tagged Domains
 Files changed:
 - `common/advance_precrawl.py`: In `parse_company_to_57col()`, added hashtag inspection for `"bu_llm_sr_incorrectprediction"`. When detected, automatically bypasses Tech Crawler scraping and NVIDIA NIM 70B summarization by setting Col X (`Status`) = `"SUCCESS"`, Col AD (`Raw Data`) = `"Raw Data Appended - csv only"`, Col AI (`NIM Status`) = `"SUCCESS"`, and Col AJ (`NIM Summary`) = extracted Long Description (`LD` / Tracxn platform description). In `generate_job_ids_for_rows()`, automatically skips Tech Crawler Job ID generation for these bypassed domains.
