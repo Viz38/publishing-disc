@@ -1,6 +1,22 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-23] Bulk Reassignment of 45,945 Candidates to Central Funnel & Batch Sheet Sync
+Files changed:
+- `Temp_Test/bulk_move_45945_to_cf.py`: High-concurrency asynchronous mover using 34 validated Tracxn tokens across 80 concurrent workers. Programmatically called `/data/funnel-action/force-assign` and `/data/funnel-action/move` to route candidates to Central Funnel (`CF_ID: 5dc559138787070a80be21ba`) with append-only journal crash-resilience.
+- `Temp_Test/batch_writeback_to_sheets.py`: Chunked batch update engine writing 500 rows (1,000 range updates) per atomic `ws.batch_update()` call across Part 1 (`1Z0lQy1O7rhHcHp_nuc5KU0HJtApGibJMFVPpTa5ALjA`), Part 2 (`1UsA8bqBNbwji28VJX-ugJUo7B5ba-gF8J5oWeOaojg8`), and Part 3 (`1vaxFNOgRJuY_1v5dvw-0C2CnDhN2mKVRp6MfnOgwBpM`). Updated `Col F (FunnelStatus) = MOVED_INTO`, `Col G (FunnelName) = CENTRAL FUNNEL`, `Col H (FunnelId) = 5dc559138787070a80be21ba`, and `Col K (Category) = Pending at Discovery (CF)`.
+- Master Tracking Sheet (`1kpRvG1KFsh9cuSvZSbtLvpo-10ziNIcUe4LWK9mB8A0`): Updated `Summary` tab formulas preserving filter view hyperlinks to reflect accurate live counts:
+  * `Pending at Discovery (CF)` increased from 17,982 (2.3%) to 63,761 (8.0%) [+45,779 domains].
+  * `Pending at Discovery (IF)` cleared from 1,906 to 0 (0.0%).
+  * `Pending at SR (TPF)` dropped from 1,578 to 13 (0.0%).
+  * `Rejected` dropped from 42,461 to 153 (0.0%).
+Reason:
+User requested moving all candidate domains in `Pending at SR (TPF)`, `Rejected`, and `Pending at Discovery (IF)` into Central Funnel (CF) so they are systematically picked up by the Discovery Engine.
+Related tests:
+- `Temp_Test/moved_45945_journal.jsonl` (45,779 records successfully journaled)
+- `Temp_Test/sheet_written_journal.jsonl` (45,779 records batch-written to Google Sheets)
+
+
 ## [2026-11-23] Batch Google Sheets Deduplication & Autonomous Unstarted-Batch Guardian
 Files changed:
 - `common/fleet_deduplicator.py`: Replaced single-row `ws.update()` loop with chunked `ws.batch_update()` payloads in chunks of 100 ranges. Eliminates Google Sheets 429 quota exhaustion (`RESOURCE_EXHAUSTED`) and reduces hundreds of API updates from hours to seconds.
