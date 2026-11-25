@@ -1,6 +1,91 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-25] Removed Hashtag Disqualification from Validator to Allow Sent-Back Cases
+Files changed:
+- `common/domain_filter_validator.py`: In `is_domain_leaked()`, removed the `hashTags` disqualification block that previously flagged `bu_llm_discovery_processing`, `bu_llm_feed_prediction`, and `bu_llm_industry_prediction` as leaked.
+- `Temp_Test/test_hardening_and_gatekeeper.py`: Added `test_sent_back_discovery_processing_allowed` and `test_sent_back_feed_prediction_allowed` verifying that sent-back cases with discovery hashtags are accepted as clean.
+Reason:
+User requested permitting sent-back cases (domains previously processed or predicted by LLM that are reviewed and sent back for re-evaluation) to be picked and re-processed by the Discovery Engine. All primary leak criteria (`sameAs`, `PUBLISHED` status, active `feedNames`, and root/nested `feedCurationType`) remain strictly enforced.
+Related tests:
+- `Temp_Test/test_hardening_and_gatekeeper.py` (5/5 tests PASSED)
+- `Temp_Test/test_load_precrawl_gatekeeper.py` (1/1 tests PASSED)
+
+## [2026-11-25] Hardened Domain Leak Validator, Pre-Crawl 7-Day Gatekeeper & Sheet 4 Feed Curation Exclusions
+Files changed:
+- `Sheet 4 (Filter-V2) Google Sheet`: In tab `CF_IF Engine - Input Payload`, updated all 214 filter payloads (Columns D and J) that were missing the `feedCurationType` exclusion block, injecting:
+  ```json
+  {
+    "not": {
+      "feedCurationType": [
+        "A1 - Deep Curation",
+        "A2 - Deep Curation - Investment Feeds",
+        "B1 - Light Curation",
+        "C1 - Domain List",
+        "E1 - 100% Re-hashed Feeds",
+        "E2 - 100% Re-hashed Sector Feeds"
+      ]
+    }
+  }
+  ```
+  Applied a soft yellow background fill (`#FEF08A`) across Columns A:J for all 214 updated SR rows so they can be immediately identified. Brings fleet-wide payload compliance for `feedCurationType` to 100.0% (344/344).
+- `common/domain_filter_validator.py`: Hardened `is_domain_leaked()`:
+  * Added root-level `feedCurationType` inspection (flags string or list values as `feed_tagged`).
+  * Added `hashTags` inspection: flags domains tagged with `bu_llm_discovery_processing`, `bu_llm_feed_prediction`, or `bu_llm_industry_prediction` as `already_processed_discovery`.
+  * Hardened `businessModelList` and `sectorList` checks to evaluate `feedCurationType` alongside `feedName` and `feedId`.
+- `common/advance_precrawl.py`: Hardened `load_precrawl_to_sheet()` with an in-flight pre-load gatekeeper before writing to `CF_IF_Engine_Database` or `local_sheet.csv`:
+  * Enforces 7-day rolling historical registry deduplication (`DailyProcessedRegistry().get_historical_processed(days=7)`), purging previously processed domains.
+  * Enforces live leak validation (`batch_validate_domains()`), purging published, aliased, feed-curated, or discovery-tagged domains before sheet loading.
+Reason:
+User reported 2,468 duplicate/already processed domains in `24Nov.txt` that were exported to the next department. Root cause investigation identified that 214 payloads in Sheet 4 lacked the `feedCurationType` exclusion, and `load_precrawl_to_sheet()` lacked a gatekeeper check when pouring staged pre-crawl CSVs into the active sheets.
+Related tests:
+- `Temp_Test/test_hardening_and_gatekeeper.py` (unit tests verifying root `feedCurationType`, discovery hashtags, and clean domain behavior)
+- `Temp_Test/test_load_precrawl_gatekeeper.py` (unit tests verifying 7-day deduplication and leak gatekeeper filtering)
+- `Temp_Test/audit_payload_exclusions.py` (verified 344/344 payloads now have `feedCurationType` exclusion)
+- `Temp_Test/apply_sheet4_payload_updates.py` (executed batch payload updates and yellow fill application)
+
+## [2026-11-25] P0 Others Filter Daily Budget Allocation & NIM Key Pool Expansion
+Files changed:
+- `Sheet 4 (Filter-V2) Google Sheet`: In tab `CF_IF Engine - Input Payload`, updated Column F (`num_domains`) for Rows 4–46 (the 43 sub-filters of `P0 - Others - CF`). Changed `num_domains` from `0` to allocate an exact daily budget of **2,000 domains/day** across the 17 active filters with available domains in Tracxn:
+  * Row 10 (`P0 - Processed`): 992 domains/day
+  * Row 46 (`Accelerators & Incubators Portfolio - Processed (Unpublished)`): 360 domains/day
+  * Row 5 (`Cos with Investments (Funds) - Unpublished - Processed`): 210 domains/day
+  * Row 38 (`Acquisition Backlogs - All [Moved into / Snooze / Later]`): 120 domains/day
+  * Row 9 (`P0 - Unprocessed`): 110 domains/day
+  * Row 34 (`Acquired | Global Status = None; Processed`): 105 domains/day
+  * Row 32 (`Has Female Founder | Global Status = None; Processed`): 45 domains/day
+  * Row 36 (`Accelerators & Incubators Portfolio - Unprocessed`): 18 domains/day
+  * Row 26 (`Has Key People | Global Status = None; Processed`): 10 domains/day
+  * Row 39 (`Acquisition Backlogs - All | Global Status = None, Funnel = None`): 10 domains/day
+  * Row 28 (`Has Female Founder | DELETED/IRRELEVANT; Processed`): 6 domains/day
+  * Row 33 (`Acquired | Global Status = None; Unprocessed`): 5 domains/day
+  * Rows 4, 6, 8, 14: 2 domains/day each
+  * Row 43 (`P0 - LiveDeal - Processed`): 1 domain/day
+  * Remaining 26 filters (0 currently available in Tracxn): kept at 0
+- `.env`: Appended new NVIDIA NIM API key `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` to `NIM_API_KEYS`, increasing active fleet NIM key pool from 48 to 49 keys.
+Reason:
+User directive: Enable daily processing for `P0 - Others - CF` candidate domains instead of keeping their budget at 0, allocating 2,000 domains per day so the 16,050 available domains are systematically ingested and processed.
+Related tests:
+- `Temp_Test/p0_others_report.json` (live Tracxn count audit across all 43 filters)
+- `Temp_Test/verify_sheet4_ingestion_budgets.py` (verified exact 2,000 weekday budget and weekend scaling)
+
+## [2026-11-23] Bulk Reassignment of 45,945 Candidates to Central Funnel & Batch Sheet Sync
+Files changed:
+- `Temp_Test/bulk_move_45945_to_cf.py`: High-concurrency asynchronous mover using 34 validated Tracxn tokens across 80 concurrent workers. Programmatically called `/data/funnel-action/force-assign` and `/data/funnel-action/move` to route candidates to Central Funnel (`CF_ID: 5dc559138787070a80be21ba`) with append-only journal crash-resilience.
+- `Temp_Test/batch_writeback_to_sheets.py`: Chunked batch update engine writing 500 rows (1,000 range updates) per atomic `ws.batch_update()` call across Part 1 (`1Z0lQy1O7rhHcHp_nuc5KU0HJtApGibJMFVPpTa5ALjA`), Part 2 (`1UsA8bqBNbwji28VJX-ugJUo7B5ba-gF8J5oWeOaojg8`), and Part 3 (`1vaxFNOgRJuY_1v5dvw-0C2CnDhN2mKVRp6MfnOgwBpM`). Updated `Col F (FunnelStatus) = MOVED_INTO`, `Col G (FunnelName) = CENTRAL FUNNEL`, `Col H (FunnelId) = 5dc559138787070a80be21ba`, and `Col K (Category) = Pending at Discovery (CF)`.
+- Master Tracking Sheet (`1kpRvG1KFsh9cuSvZSbtLvpo-10ziNIcUe4LWK9mB8A0`): Updated `Summary` tab formulas preserving filter view hyperlinks to reflect accurate live counts:
+  * `Pending at Discovery (CF)` increased from 17,982 (2.3%) to 63,761 (8.0%) [+45,779 domains].
+  * `Pending at Discovery (IF)` cleared from 1,906 to 0 (0.0%).
+  * `Pending at SR (TPF)` dropped from 1,578 to 13 (0.0%).
+  * `Rejected` dropped from 42,461 to 153 (0.0%).
+Reason:
+User requested moving all candidate domains in `Pending at SR (TPF)`, `Rejected`, and `Pending at Discovery (IF)` into Central Funnel (CF) so they are systematically picked up by the Discovery Engine.
+Related tests:
+- `Temp_Test/moved_45945_journal.jsonl` (45,779 records successfully journaled)
+- `Temp_Test/sheet_written_journal.jsonl` (45,779 records batch-written to Google Sheets)
+
+
+>>>>>>> 6b3cde1 (fix(dedup): harden leak validator, add advance pre-crawl gatekeeper, and permit sent-back cases)
 ## [2026-11-23] Batch Google Sheets Deduplication & Autonomous Unstarted-Batch Guardian
 Files changed:
 - `common/fleet_deduplicator.py`: Replaced single-row `ws.update()` loop with chunked `ws.batch_update()` payloads in chunks of 100 ranges. Eliminates Google Sheets 429 quota exhaustion (`RESOURCE_EXHAUSTED`) and reduces hundreds of API updates from hours to seconds.
