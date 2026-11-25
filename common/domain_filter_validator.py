@@ -58,11 +58,19 @@ def is_domain_leaked(item: Dict[str, Any]) -> Tuple[bool, str]:
     if cst == "PUBLISHED":
         return True, "status_published"
 
-    # 3. Criteria 3: feedNames is not empty or blank / feeds assigned
+    # 3. Criteria 3: feedNames is not empty or blank / feeds assigned / discovery processed
     # Check feedNames list
     fn = item.get("feedNames")
     if fn and isinstance(fn, list) and len(fn) > 0:
         if any(str(x).strip() for x in fn if x):
+            return True, "feed_tagged"
+
+    # Check root feedCurationType
+    fct = item.get("feedCurationType")
+    if fct:
+        if isinstance(fct, list) and len(fct) > 0 and any(str(x).strip() for x in fct if x):
+            return True, "feed_tagged"
+        elif isinstance(fct, str) and fct.strip() and fct.strip().lower() not in ("null", "none", "t_null", ""):
             return True, "feed_tagged"
 
     # Check businessModelList
@@ -70,8 +78,8 @@ def is_domain_leaked(item: Dict[str, Any]) -> Tuple[bool, str]:
     if bm_list and isinstance(bm_list, list):
         for bm in bm_list:
             if isinstance(bm, dict):
-                # Has a designated feed or published feed
-                if bm.get("feedName") or bm.get("feedId"):
+                # Has a designated feed, published feed, or curation tier
+                if bm.get("feedName") or bm.get("feedId") or bm.get("feedCurationType"):
                     return True, "feed_tagged"
 
     # Check sectorList
@@ -80,10 +88,10 @@ def is_domain_leaked(item: Dict[str, Any]) -> Tuple[bool, str]:
         for s_item in sector_list:
             if isinstance(s_item, list):
                 for sub in s_item:
-                    if isinstance(sub, dict) and (sub.get("type") == "FEED" or sub.get("feedName")):
+                    if isinstance(sub, dict) and (sub.get("type") == "FEED" or sub.get("feedName") or sub.get("feedCurationType")):
                         return True, "feed_tagged"
             elif isinstance(s_item, dict):
-                if s_item.get("type") == "FEED" or s_item.get("feedName"):
+                if s_item.get("type") == "FEED" or s_item.get("feedName") or s_item.get("feedCurationType"):
                     return True, "feed_tagged"
 
     return False, ""

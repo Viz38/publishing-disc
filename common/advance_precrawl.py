@@ -749,7 +749,62 @@ def load_precrawl_to_sheet(sheet_id: str, folder: str, chunk_size: int = 500) ->
         logger.warning(f"Pre-crawl file {csv_path} is empty!")
         return 0
 
+    # =========================================================================
+    # PRE-LOAD GATEKEEPER: 7-Day Deduplication & Leak Validation Gate
+    # =========================================================================
+    logger.info(f"🛡️ [Pre-Load Gatekeeper] Auditing {len(rows_to_load)} staged pre-crawl rows for {folder} before sheet loading...")
+    
+    # 1. 7-Day Historical Registry Exclusion
+    from common.fleet_deduplicator import DailyProcessedRegistry
+    registry = DailyProcessedRegistry()
+    try:
+        historical_seen = registry.get_historical_processed(days=7)
+        logger.info(f"🛡️ [Pre-Load Gatekeeper] Loaded {len(historical_seen)} domains from 7-day historical registry.")
+    except Exception as re:
+        logger.warning(f"🛡️ [Pre-Load Gatekeeper] Could not query 7-day historical registry: {re}")
+        historical_seen = set()
+
+    non_historical_rows = []
+    historical_purged = 0
+    for r in rows_to_load:
+        dom = r[0].strip().lower() if r and r[0] else ""
+        if dom and dom in historical_seen:
+            historical_purged += 1
+        else:
+            non_historical_rows.append(r)
+
+    if historical_purged > 0:
+        logger.warning(f"🚨 [Pre-Load Gatekeeper] Purged {historical_purged} duplicate rows already processed in fleet within last 7 days!")
+
+    # 2. Live Platform Leak & Published Status Validation Gate
+    from common.domain_filter_validator import batch_validate_domains
+    candidate_doms = [r[0].strip().lower() for r in non_historical_rows if r and r[0] and r[0].strip()]
+    val_map = {}
+    if candidate_doms:
+        logger.info(f"🛡️ [Pre-Load Gatekeeper] Validating {len(candidate_doms)} remaining candidate domains via batch_validate_domains...")
+        val_map = batch_validate_domains(candidate_doms)
+
+    clean_rows = []
+    leak_purged = 0
+    for r in non_historical_rows:
+        dom = r[0].strip().lower() if r and r[0] else ""
+        is_leak, reason = val_map.get(dom, (False, ""))
+        if is_leak:
+            leak_purged += 1
+            logger.info(f"🚨 [Pre-Load Gatekeeper] Purged leaked domain '{dom}' (Reason: {reason})")
+        else:
+            clean_rows.append(r)
+
+    if leak_purged > 0:
+        logger.warning(f"🚨 [Pre-Load Gatekeeper] Purged {leak_purged} leaked/published/sameAs domains during pre-load gate!")
+
+    rows_to_load = clean_rows
+    if not rows_to_load:
+        logger.critical(f"🚨 [Pre-Load Gatekeeper] ALL staged rows in {csv_path} were purged (0 clean domains remain)!")
+        return 0
+
     total_rows = len(rows_to_load)
+    logger.info(f"✅ [Pre-Load Gatekeeper] Validation complete: {total_rows} clean domains approved for sheet loading (Purged: {historical_purged} 7d duplicates, {leak_purged} leaks).")
     use_csv_only = is_csv_only_mode(sheet_dir)
 
     if not use_csv_only:
