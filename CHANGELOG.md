@@ -1,6 +1,20 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-26] Enable Daemon Status API Hydration from Discovery Cache & Eliminate Zero-Count Overwrite in Apps Script
+Files changed:
+- `common/dashboard_metrics.py`: Updated `build_sheet_status_payload()` to automatically hydrate cumulative phase counts directly from `discovery_cache.csv` whenever `progress_total == 0` or `active == False`. Guarantees that `/discovery/status` HTTP endpoints on all hosts continuously serve true completed numbers (Sheet 1: 2,712/3,740, Sheet 2: 1,601/2,002, Sheet 4: 1,934/3,383) rather than resetting to `0 / 0` when pipelines exit.
+- `status_dashboard.gs`: Polished `statusDisplay` evaluation to show `✅ COMPLETED` whenever an idle engine has completed items (`bestData.progress_current > 0`). Synchronized with `Temp_Test/deploy_clasp/status_dashboard.gs` and deployed via `clasp push --force`.
+- Remote Hosts (`Desktop-5080`, `Desktop-5321`, `Desktop-9048`): Deployed updated `common/dashboard_metrics.py` across all physical nodes and restarted idle supervisor services (`discovery-cf1`, `discovery-cf2`, `discovery-filterv2`).
+- `Temp_Test/render_both_dashboards.py`: Removed hardcoded fallback dict; now fetches 100% live from `/discovery/status` endpoints on all 4 main fleet engines and the NIM engine.
+- `Temp_Test/test_dashboard_metrics_hydration.py`: Added 2 unit tests verifying cache hydration when idle/completed and preservation of active running state (9/9 tests PASSED).
+- `Temp_Test/status_dashboard.png` & `Temp_Test/testing_fleet_dashboard.png`: Captured live visual verification screenshots.
+Reason:
+Ensure that when users trigger "Refresh Dashboard" via Google Apps Script or when the automated 15-minute timer fires, the dashboard receives the true completed counts from the daemons rather than ephemeral zero counts.
+Related tests:
+- `Temp_Test/test_dashboard_metrics_hydration.py` (2/2 tests PASSED)
+- `Temp_Test/test_dashboard_optimization.py` (7/7 tests PASSED)
+
 ## [2026-11-26] Rename 'Status' Tab to 'Production Fleet' and Configure 'Discovery Operations - NIM Fleet 1' Hyperlink
 Files changed:
 - `Google Spreadsheet (1eVKXWnGNsHp8WmoqXo8Pz-mB6f7V7xGleMfd7CcahSA)`: Renamed tab `sheetId: 1570465616` from `"Status"` to `"Production Fleet"` via Google Sheets API `updateSheetProperties`.

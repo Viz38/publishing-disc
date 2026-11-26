@@ -290,8 +290,13 @@ def build_sheet_status_payload(
     progress = dict(raw_progress) if isinstance(raw_progress, dict) else {}
     progress["csv_only_mode"] = csv_only
 
-    if csv_only:
-        rows = load_local_sheet_rows(base_dir)
+    # Ensure completed/idle engines always report true cumulative numbers from discovery_cache.csv
+    # even when active process has exited (progress_total == 0) and regardless of csv_only mode
+    is_idle_or_completed = not progress.get("active") and (
+        int(progress.get("progress_total", 0) or 0) == 0 or int(progress.get("progress_current", 0) or 0) == 0
+    )
+    if is_idle_or_completed or csv_only:
+        rows = load_local_sheet_rows(base_dir) if csv_only else []
         cache_map = load_cache_map(cache=cache, base_dir=base_dir)
         if rows:
             metrics = compute_sheet_metrics_from_rows(rows, cache_map=cache_map)
@@ -314,9 +319,22 @@ def build_sheet_status_payload(
         elif cache_map:
             synth_rows = [[dom] + [""] * 56 for dom in cache_map.keys()]
             metrics = compute_sheet_metrics_from_rows(synth_rows, cache_map=cache_map)
+            progress["total"] = max(int(progress.get("total", 0) or 0), metrics["total"])
+            progress["scraped_count"] = max(int(progress.get("scraped_count", 0) or 0), metrics["scraped_count"])
+            progress["tc_success"] = max(int(progress.get("tc_success", 0) or 0), metrics["tc_success"])
+            progress["nim_count"] = max(int(progress.get("nim_count", 0) or 0), metrics["nim_count"])
+            progress["gemini_count"] = max(int(progress.get("gemini_count", 0) or 0), metrics["gemini_count"])
+            progress["tracxn_count"] = max(int(progress.get("tracxn_count", 0) or 0), metrics["tracxn_count"])
+            progress["pf_completed"] = max(int(progress.get("pf_completed", 0) or 0), metrics["pf_completed"])
+            progress["fully_completed"] = max(int(progress.get("fully_completed", 0) or 0), metrics["fully_completed"])
+            progress["current"] = max(int(progress.get("current", 0) or 0), metrics["fully_completed"])
+            if "progress_total" in progress:
+                progress["progress_total"] = max(int(progress.get("progress_total", 0) or 0), progress["total"])
+            if "progress_current" in progress:
+                progress["progress_current"] = max(int(progress.get("progress_current", 0) or 0), progress["current"])
+            if "progress_success" in progress:
+                progress["progress_success"] = max(int(progress.get("progress_success", 0) or 0), progress["tc_success"])
             progress["eligible_completed"] = metrics["eligible_completed"]
-            for key in ("scraped_count", "tc_success", "nim_count", "gemini_count", "tracxn_count", "pf_completed", "fully_completed"):
-                progress[key] = max(int(progress.get(key, 0) or 0), metrics[key])
         else:
             progress["eligible_completed"] = int(progress.get("eligible_completed", 0) or 0)
     elif "eligible_completed" in progress and progress["eligible_completed"] is not None:
