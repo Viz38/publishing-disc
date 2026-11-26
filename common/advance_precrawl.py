@@ -27,6 +27,7 @@ from common.gsheet_circuit_breaker import is_csv_only_mode, set_csv_only_mode, i
 from common.domain_filter_validator import is_domain_leaked, batch_validate_domains
 from common.daily_lifecycle import get_effective_budget, classify_filter_category
 from common.local_cache import get_now_ist
+from common.dynamic_domain_fetcher import DynamicDomainFetcher
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("AdvancePreCrawl")
@@ -378,138 +379,66 @@ def fetch_domains_for_sheet(
                 }
                 payload_str = json.dumps(query_payload)
 
-            from_offset = 0
-            page_size = 100
-            req_timeout = 30
-            consecutive_errors = 0
-            max_consecutive_errors = 4
+            fetcher = DynamicDomainFetcher(
+                key_manager=km,
+                stagnation_item_threshold=500,
+                max_window_coverage=85000,
+            )
+            needed_for_budget = effective_budget - domain_added_count
+            if not is_clear_all:
+                sheet_remaining = effective_target_count - (len(new_rows_57) - p0_clear_all_added)
+                needed_for_budget = min(needed_for_budget, max(sheet_remaining, 0))
 
-            while domain_added_count < effective_budget:
-                page_payload = dict(query_payload)
-                page_payload["from"] = from_offset
-                page_payload["size"] = page_size
+            if needed_for_budget <= 0:
+                break
 
-                token = km.get_next_token()
-                if not token:
-                    logger.error("No active Tracxn token available!")
-                    break
+            def accept_precrawl_item(item: Dict[str, Any]) -> bool:
+                nonlocal domain_added_count, p0_clear_all_added
+                dom = (item.get("domain") or "").strip().lower()
+                if not dom or "." not in dom:
+                    return False
 
-                headers = {
-                    "Content-Type": "application/json",
-                    "accessToken": token,
-                    "X-Request-Source": "vishnu.bhagirathan@tracxn.com | Python | Domain Precrawl Ingestion | Discovery-Engine"
-                }
+                # Check 3 criteria in-flight
+                is_leaked, reason = is_domain_leaked(item)
+                if is_leaked:
+                    logger.info(f"Purging leaked domain '{dom}' in advance pre-crawl (Reason: {reason})")
+                    return False
 
-                try:
-                    resp = requests.post(TRACXN_API_URL, json=page_payload, headers=headers, timeout=req_timeout)
-                    if resp.status_code == 200:
-                        consecutive_errors = 0
-                        data = resp.json()
-                        page_items = data.get("result", [])
-                        total_cov = data.get("total_count", 0)
-                        if not page_items:
-                            break
+                if dom in domain_seen or dom in existing_sheet_domains:
+                    return False
 
-                        for item in page_items:
-                            dom = item.get("domain", "").strip().lower()
-                            if not dom or "." not in dom:
-                                continue
+                domain_seen.add(dom)
+                existing_sheet_domains.add(dom)
+                row_57 = parse_company_to_57col(
+                    company=item,
+                    filter_group_name=filter_group_name,
+                    filter_group_id=filter_group_id,
+                    filter_name=filter_name,
+                    filter_id=filter_id,
+                    payload_str=payload_str,
+                    funnel_name=f_name,
+                    funnel_id=f_id,
+                    added_time_str=added_time_str
+                )
+                new_rows_57.append(row_57)
+                domain_added_count += 1
+                if is_p0_clear_all:
+                    p0_clear_all_added += 1
 
-                            # Check 3 criteria in-flight
-                            is_leaked, reason = is_domain_leaked(item)
-                            if is_leaked:
-                                logger.info(f"Purging leaked domain '{dom}' in advance pre-crawl (Reason: {reason})")
-                                continue
+                if domain_added_count % 1000 == 0:
+                    logger.info(f"  --> Fetched {domain_added_count}/{effective_budget} domains for '{filter_name}' ({len(new_rows_57)}/{effective_target_count} total for sheet, P0 clear-all={p0_clear_all_added})...")
 
-                            if dom not in domain_seen and dom not in existing_sheet_domains:
-                                domain_seen.add(dom)
-                                existing_sheet_domains.add(dom)
-                                row_57 = parse_company_to_57col(
-                                    company=item,
-                                    filter_group_name=filter_group_name,
-                                    filter_group_id=filter_group_id,
-                                    filter_name=filter_name,
-                                    filter_id=filter_id,
-                                    payload_str=payload_str,
-                                    funnel_name=f_name,
-                                    funnel_id=f_id,
-                                    added_time_str=added_time_str
-                                )
-                                new_rows_57.append(row_57)
-                                domain_added_count += 1
-                                if is_p0_clear_all:
-                                    p0_clear_all_added += 1
-                                if domain_added_count % 1000 == 0:
-                                    logger.info(f"  --> Fetched {domain_added_count}/{effective_budget} domains for '{filter_name}' ({len(new_rows_57)}/{effective_target_count} total for sheet, P0 clear-all={p0_clear_all_added})...")
-                                if domain_added_count >= effective_budget or (
-                                    not is_clear_all and (len(new_rows_57) - p0_clear_all_added) >= effective_target_count
-                                ):
-                                    break
-                        if domain_added_count >= effective_budget or (
-                            not is_clear_all and (len(new_rows_57) - p0_clear_all_added) >= effective_target_count
-                        ):
-                            break
-                        from_offset += page_size
-                        if from_offset > 0 and from_offset % 2000 == 0 and domain_added_count < effective_budget:
-                            logger.info(f"  [Offset {from_offset}] '{filter_name}': {domain_added_count}/{effective_budget} domains accepted so far (skipping already-allocated domains)...")
-                        if total_cov and from_offset >= total_cov:
-                            break
-                    elif resp.status_code == 403:
-                        is_unauth = False
-                        try:
-                            err_data = resp.json()
-                            if err_data.get("errorCode") == 403000000 or "unauthorized" in str(err_data.get("message", "")).lower():
-                                is_unauth = True
-                        except Exception:
-                            if "unauthorized" in resp.text.lower():
-                                is_unauth = True
+                if not is_clear_all and (len(new_rows_57) - p0_clear_all_added) >= effective_target_count:
+                    return False
+                return True
 
-                        if is_unauth and page_payload.get("dataset") != "search":
-                            logger.info(f"Tracxn 403000000 unauthorized dataset error on '{page_payload.get('dataset')}'. Falling back to 'search' without penalizing token.")
-                            query_payload["dataset"] = "search"
-                            page_payload["dataset"] = "search"
-                            continue
-
-                        km.handle_http_error(token, resp.status_code)
-                        consecutive_errors += 1
-                        logger.warning(f"Tracxn token invalid/expired (status {resp.status_code}, attempt {consecutive_errors}/{max_consecutive_errors}). Rotating token...")
-                        if consecutive_errors >= max_consecutive_errors:
-                            logger.warning(f"Aborting '{filter_name}' ({f_name}) after {consecutive_errors} consecutive auth errors.")
-                            break
-                        continue
-                    elif resp.status_code == 401:
-                        km.handle_http_error(token, resp.status_code)
-                        consecutive_errors += 1
-                        logger.warning(f"Tracxn token invalid/expired (status {resp.status_code}, attempt {consecutive_errors}/{max_consecutive_errors}). Rotating token...")
-                        if consecutive_errors >= max_consecutive_errors:
-                            logger.warning(f"Aborting '{filter_name}' ({f_name}) after {consecutive_errors} consecutive auth errors.")
-                            break
-                        continue
-                    elif resp.status_code == 429:
-                        km.handle_http_error(token, resp.status_code)
-                        consecutive_errors += 1
-                        logger.warning(f"Tracxn rate limit 429 hit (attempt {consecutive_errors}/10). Sleeping 2s and rotating...")
-                        if consecutive_errors >= 10:
-                            logger.warning(f"Aborting '{filter_name}' ({f_name}) after {consecutive_errors} consecutive 429 rate-limit errors.")
-                            break
-                        time.sleep(2)
-                        continue
-                    else:
-                        km.handle_http_error(token, resp.status_code)
-                        logger.warning(f"Tracxn error status {resp.status_code}. Rotating...")
-                        break
-                except Exception as e:
-                    consecutive_errors += 1
-                    logger.warning(f"Error fetching Tracxn domains (attempt {consecutive_errors}/{max_consecutive_errors}) for '{filter_name}': {e}")
-                    if consecutive_errors >= max_consecutive_errors:
-                        logger.warning(f"Aborting '{filter_name}' ({f_name}) after {consecutive_errors} consecutive request errors so downstream payloads can proceed.")
-                        break
-                    if isinstance(e, requests.exceptions.Timeout) or "timed out" in str(e).lower():
-                        page_size = max(25, page_size // 2)
-                        req_timeout = min(90, max(45, req_timeout + 15))
-                        logger.info(f"Shrinking page_size={page_size} and raising timeout={req_timeout}s for '{filter_name}' retry...")
-                    time.sleep(2)
-                    continue
+            fetch_res = fetcher.fetch_for_budget(
+                base_payload=query_payload,
+                budget=needed_for_budget,
+                accept_item_fn=accept_precrawl_item,
+                source_label=s_name,
+                filter_name=filter_name,
+            )
 
             if custom_payload_template and "funnelId" not in custom_payload_template.get("filter", {}):
                 break

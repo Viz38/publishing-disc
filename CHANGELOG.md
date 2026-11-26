@@ -1,6 +1,19 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-26] Dynamic Domain Fetcher with Stagnation Pivoting and 100k Limit Slicing
+Files changed:
+- `common/dynamic_domain_fetcher.py`: Created adaptive, self-healing `DynamicDomainFetcher`. Detects duplicate saturation (>98% duplicate rate over threshold) and automatically pivots to bounded historical date windows. Recovers from Elasticsearch 100k offset limits (HTTP 422) by dynamically partitioning large queries into sub-slices starting at offset 0.
+- `common/tracxn_domain_ingestor.py`: Replaced manual, fragile pagination loop in `ingest_domains_for_sheet()` with `DynamicDomainFetcher`. Ensures large payloads (e.g. 385k leads) cleanly fulfill assigned budgets without halting at offset 100,000.
+- `common/advance_precrawl.py`: Integrated `DynamicDomainFetcher` into `fetch_domains_for_sheet()` for resilient pre-crawling.
+- `Temp_Test/test_dynamic_domain_fetcher.py`: Added 4 unit tests covering window splitting, date bounds clamping, 422 recovery, and stagnation pivoting.
+- `Temp_Test/test_live_dynamic_ingestion.py`: Added live verification script testing dynamic pivots against production Tracxn APIs.
+Reason:
+Payloads with massive historical backlogs (such as `6afaf210df32cb486f1163be` with 385,637 leads) caused ingestion to fail or halt at offset 100,000 due to Elasticsearch 100k pagination limits (`from + size must be less than or equal to 100000`) and high duplicate density in top search results. The dynamic fetcher automatically partitions the date ranges and pivots when duplicate density is high, ensuring full budget fulfillment across all active sheets.
+Related tests:
+- `Temp_Test/test_dynamic_domain_fetcher.py` (4/4 tests PASSED)
+- Live tests against 385k payload (PASSED with 2 temporal pivots)
+
 ## [2026-11-25] Removed Hashtag Disqualification from Validator to Allow Sent-Back Cases
 Files changed:
 - `common/domain_filter_validator.py`: In `is_domain_leaked()`, removed the `hashTags` disqualification block that previously flagged `bu_llm_discovery_processing`, `bu_llm_feed_prediction`, and `bu_llm_industry_prediction` as leaked.
@@ -85,6 +98,7 @@ Related tests:
 - `Temp_Test/sheet_written_journal.jsonl` (45,779 records batch-written to Google Sheets)
 
 
+>>>>>>> 6b3cde1 (fix(dedup): harden leak validator, add advance pre-crawl gatekeeper, and permit sent-back cases)
 ## [2026-11-23] Batch Google Sheets Deduplication & Autonomous Unstarted-Batch Guardian
 Files changed:
 - `common/fleet_deduplicator.py`: Replaced single-row `ws.update()` loop with chunked `ws.batch_update()` payloads in chunks of 100 ranges. Eliminates Google Sheets 429 quota exhaustion (`RESOURCE_EXHAUSTED`) and reduces hundreds of API updates from hours to seconds.
@@ -109,154 +123,139 @@ User directive: Candidate domains containing hashtag `"bu_llm_sr_incorrectpredic
 Related tests:
 - `Temp_Test/unit/test_sr_incorrect_bypass.py` (all 4 tests passing)
 
-
-## [2026-11-20] Fleet Weekend 10k Budget Policy (80% Bright Data Set 3, 10% Usage-Based, 10% Others)
+## [2026-11-20] Enforce 10k Fleet Weekend Policy with 80% Set 3, 10% Usage-Based, 10% Others on NIM-FeedPrediction
 Files changed:
-- `common/daily_lifecycle.py`: Enhanced `get_effective_budget()` and added `classify_filter_category()` to enforce the strict 10k fleet weekend policy (2,500 domains per sheet across the 4 engines):
-  * 80% Bright Data Set 3 (`bu_llm_brightdata_set3`): 2,000 domains per sheet (8,000 fleet total).
-  * 10% Usage-based product filters (`bu_llm_domaindbwli` / Domains DB with LinkedIn): 250 domains per sheet (1,000 fleet total).
-  * 10% Others (Domains DB FY24/25/26, Set 2): 250 domains per sheet (1,000 fleet total).
-  * When no category metadata is provided, scales generic base budget by 25% (`round(base_budget * 0.25)`), converting a 10k base budget into 2,500 per sheet (10k fleet).
-- `common/__init__.py`: Exported `classify_filter_category`.
-- `common/advance_precrawl.py`: Integrated category-aware budget calculation into advance pre-crawl total budget and per-filter allocation loops.
-- `common/tracxn_domain_ingestor.py`: Integrated category-aware budget scaling into live domain ingestion.
+- common/daily_lifecycle.py: Enhanced `get_effective_budget()` and added `classify_filter_category()` for category-aware weekend budget proportioning.
+- common/__init__.py: Exported `classify_filter_category`.
+- common/advance_precrawl.py: Updated advance pre-crawl calculations with category-aware budget scaling.
+- common/tracxn_domain_ingestor.py: Updated live ingestion with category-aware budget scaling.
+- CHANGELOG.md
 Reason:
-User directive: On weekends, cap total fleet daily budget at 10,000 domains (2,500 per sheet across the 4 engines) instead of the previous 50% policy (20k fleet), with strict proportioning: 80% Bright Data Set 3, 10% usage-based product filters, and 10% others.
+Synchronized the fleet weekend 10k policy to the NIM branch. On weekends, enforces 80% Bright Data Set 3, 10% usage-based product filters, and 10% others.
 Related tests:
-- `Temp_Test/unit/test_tomorrow_refetch.py` (all 4 tests passing)
-- `Temp_Test/unit/test_unit_cross_sheet_pagination.py` (all 2 tests passing)
+- Temp_Test/unit/test_tomorrow_refetch.py (all 4 tests passing)
 
 
-## [2026-11-20] Rolling 7-Day Historical Domain Deduplication Engine & Peer Fleet Sync
+## [2026-11-20] Integrate 7-Day Dedup, Weekend 50% Budget Policy, Daily Guardian, and Discovery Engine 5 Header into NIM-FeedPrediction
 Files changed:
-- `common/fleet_deduplicator.py`: Enhanced `DailyProcessedRegistry` with rolling multi-day historical lookups (`get_historical_processed(days=7)`), automatic self-bootstrapping from disk archives (`pre_crawl_loaded_*.csv`, `discovery_cache_*.csv`, `daily_eligible_*.json`), peer fleet querying (`fetch_fleet_peer_historical_domains`), and automatic 30-day retention pruning. Updated `identify_fleet_duplicates` and `clean_and_deduplicate_all_sheets` to evaluate against 7-day historical pools and persist valid unique domains into the registry.
-- `common/tracxn_domain_ingestor.py`: Integrated `get_historical_processed(days=7)` into `ingest_domains_for_sheet()`, `repopulate_clean_domains()`, and `audit_and_repopulate_rows()`. Excludes 7-day historical domains during in-flight Tracxn pagination and automatically persists newly ingested clean domains to the registry upon writeback.
-- `common/advance_precrawl.py`: Updated `initialize_fleet_exclusion_pool()` to load `get_historical_processed(days=7)`, preventing recently processed domains from being prefetched for tomorrow. Updated `save_precrawl_to_csv()` to register tomorrow's staged domains in the registry.
-- `common/daily_lifecycle.py`: Added `"common.fleet_deduplicator"` to `MODULES_TO_RELOAD` in `reload_all_common_modules()`.
-- `common/__init__.py`: Exported `DailyProcessedRegistry`, `identify_fleet_duplicates`, `clean_and_deduplicate_all_sheets`, and `fetch_fleet_peer_historical_domains`.
-- `Sheet1/api.py`, `Sheet2/api.py`, `Sheet3/api.py`, `Sheet4/api.py`: Added GET endpoint `/fleet/historical-domains` (accepting `days=7`) to allow cross-desktop historical synchronization.
+- common/fleet_deduplicator.py
+- common/advance_precrawl.py
+- common/daily_lifecycle.py
+- common/tracxn_domain_ingestor.py
+- common/pipeline_engine.py
+- common/key_manager.py
+- common/tech_crawler.py
+- common/tracxn_client.py
+- common/domain_filter_validator.py
+- Sheet1/api.py
+- common/__init__.py
+- run_daily_precrawl.sh
+- CHANGELOG.md
 Reason:
-Empirically confirmed that between 35% and 80% of candidate domains ingested on consecutive days were duplicate repeats of domains processed 1 to 7 days earlier that were still awaiting the next department's platform write APIs. Enforcing a rolling 7-day historical deduplication pool eliminates duplicate re-processing and ensures that 100% of fetched domains are fresh.
+1. Ported rolling 7-day historical deduplication (`DailyProcessedRegistry`) into `common/fleet_deduplicator.py` and `common/advance_precrawl.py`.
+2. Added comprehensive cross-fleet checking against the 4 main desktop nodes (`5080-sheet1`, `5080-sheet2`, `5321-sheet3`, `5321-sheet4`) and the 4 main Google Sheets to ensure Desktop-9048 excludes all domains processed or staged across `main`.
+3. Ported weekend 50% budget policy (`get_effective_budget`) for Saturday & Sunday runs in `common/daily_lifecycle.py`, `common/advance_precrawl.py`, and `common/tracxn_domain_ingestor.py`.
+4. Ported autonomous daily guardian (`should_trigger_daily_guardian`), dynamic module reload (`reload_all_common_modules`), and `/fleet/historical-domains` endpoint in `Sheet1/api.py`.
+5. Standardized `X-Request-Source` headers across all API calls to identify as `Discovery Engine 5` (`vishnu.bhagirathan@tracxn.com | Python | <Action> | Discovery Engine 5`).
+6. Preserved dedicated NIM IF prediction, 60/40 token split, and Desktop-9048 single-sheet deployment on `NIM-FeedPrediction`.
 Related tests:
-- `Temp_Test/unit/test_unit_7day_dedup.py` (all 5 tests passing)
-- `Temp_Test/unit/test_unit_daily_guardian.py` (all 6 tests passing)
-- `Temp_Test/unit/test_unit_weekend_budget.py` (all 4 tests passing)
-- `Temp_Test/unit/test_fleet_deduplicator.py` (all 3 tests passing)
+- Temp_Test/test_nim_upgrades.py (5 passed)
 
-## [2026-11-20] Permanent Autonomous Daily Guardian, Dynamic Module Reloading & Self-Healing Rollover
+
+## [2026-11-19] Fix Undefined pre_tc_scraped and pre_tc_completed in reconcile_existing_tech_crawler_jobs
 Files changed:
-- `common/daily_lifecycle.py`: Added `should_trigger_daily_guardian(saved_state, current_state, current_dt)` and `reload_all_common_modules()`.
-- `common/__init__.py`: Exported `should_trigger_daily_guardian` and `reload_all_common_modules`.
-- `Sheet1/api.py`, `Sheet2/api.py`, `Sheet3/api.py`, `Sheet4/api.py`: Replaced fragile 54-minute hour==0 rollover check with state-driven Autonomous Daily Guardian. Added comprehensive dynamic module reloading and current_task tracking in `run_clear_and_fetch_task`.
-- `run_daily_precrawl.sh`: Added secondary automated ingestion safety net checking local sheets post-dispatch and auto-triggering clear-and-fetch if idle.
+- common/pipeline_engine.py
+- CHANGELOG.md
 Reason:
-1. Fix recurring issue where engines do not restart the next day after completing their batch.
-2. Remove restrictive `now_ist.hour == 0` constraint so that engines can start today's run at any hour outside the 11:30 PM cutoff window (including after desktop reboots or morning restarts).
-3. Eliminate stale in-memory Python bytecode and `ImportErrors` on long-running daemon processes by dynamically reloading all `common/` modules prior to batch ingestion.
-4. Replace single-attempt abandonment with self-healing 60-second retry loop until today's batch is actively loaded and running.
+1. Resolved missing definition of `pre_tc_scraped` and `pre_tc_completed` inside `reconcile_existing_tech_crawler_jobs` by computing them directly from `rows` at the start of the sweep.
+2. Verified that all candidate jobs can be checked, progressed, and updated in `.progress.json` during the startup sweep without throwing NameErrors.
 Related tests:
-- `Temp_Test/unit/test_unit_daily_guardian.py` (all 6 tests passing)
-- `Temp_Test/unit/test_unit_weekend_budget.py` (all 4 tests passing)
+- Temp_Test/test_single_sheet_sole_fleet.py (8 passed)
+- Temp_Test/test_apps_script_config.py (4 passed)
+- Temp_Test/test_codebase_integrity.py (AST verified)
 
-## [2026-11-19] Fleet Daily Budget Capped at 40k & Automated Weekend 50% Policy
+## [2026-11-19] Merge origin/main into NIM-FeedPrediction & Fix Pipeline split_nim_keys_for_stages Import
 Files changed:
-- `common/daily_lifecycle.py`: Added `get_effective_budget(base_budget, target_date)` applying 50% scaling on Saturday & Sunday (IST).
-- `common/__init__.py`: Exported `get_effective_budget`.
-- `common/tracxn_domain_ingestor.py`: Integrated `get_effective_budget()` into live domain ingestion.
-- `common/advance_precrawl.py`: Integrated `get_effective_budget()` for tomorrow's advance pre-crawl calculations (`target_run_date`).
-- Google Sheets `CF_IF Engine - Input Payload` tabs: Updated Sheets 1, 2, 3, and 4 to 10,000 domains each (Grand Total: 40,000 domains: 30,000 BrightData_set3, 7,000 Usage-Based Product, 3,000 Others; zero-budget rows strictly preserved at 0).
-- Advance pre-crawl CSVs (`next_day_pre_crawl.csv`): Trimmed to exactly 10,000 domains per sheet across Desktop-5080 and Desktop-5321 (40,000 total: 30k Set3, 7k Product, 3k Others).
+- common/pipeline_engine.py
+- common/key_manager.py
+- common/__init__.py
+- CHANGELOG.md
 Reason:
-1. Scale down daily fleet domain ingestion budget from 80k to at most 40,000 domains per day.
-2. Maintain strict 75% BrightData_set3 (30,000), 17.5% Usage-based product filters (7,000), and 7.5% Others (3,000) breakdown.
-3. Enforce automated weekend 50% budget reduction (20,000 domains total on Saturdays and Sundays in IST).
-4. Trim advance prefetch files to prevent excessive crawler overhead for tomorrow's run.
+1. Merged all latest features and bug fixes from `main` into `NIM-FeedPrediction` (including midnight Processed Counts automation, fast-path snapshot response, payload budget overrides, self-healing circuit breaker, and waterfall scraper concurrency limits).
+2. Fixed critical `NameError: name 'split_nim_keys_for_stages' is not defined` bug in `common/pipeline_engine.py` by importing `split_nim_keys_for_stages` from `common`.
+3. Kept `main` and `NIM-FeedPrediction` isolated: preserved dedicated NIM IF prediction, 60/40 token split, single-sheet sole-fleet resilience, and Desktop-9048 Sheet 1 configuration on `NIM-FeedPrediction`.
 Related tests:
-- `Temp_Test/unit/test_unit_weekend_budget.py` (all 4 unit tests passing)
-- `Temp_Test/apply_40k_budget_split.py` (live readback verified 40,000 total across 4 sheets)
-- `Temp_Test/trim_remote_precrawls.py` (verified 10,000 domains per sheet on Desktop-5080 and Desktop-5321)
+- Temp_Test/test_single_sheet_sole_fleet.py (8 passed)
+- Temp_Test/test_apps_script_config.py (4 passed)
 
-## [2026-11-19] Populate 'Others' Worksheet with 35 Operational Shared Sheets
+## [2026-11-19] Update Sheet1 apps_script.gs for New Sheet 1 and Desktop-9048
 Files changed:
-- `Temp_Test/populate_others_worksheet.py`
-- Google Sheet `1SgrPxbogbUUB36lnU-75YFW1ZjyfehY_q84Yr5IBzyQ` (Worksheet: `Others`, `gid=2082221571`)
+- Sheet1/apps_script.gs
+- CHANGELOG.md
 Reason:
-Populate the 9 columns of worksheet 'Others' for all active shared operational sheets (Config Sheet, IF>>PF Automation, Sector Research Tech Crawlers, OD Hourly Engine, OD MIS, Usage Based Publishing MIS, Gemini Funnel Predictions, CPT Profiling, CPT Email Finder, etc.) with owner attribution, mapped repository files, active hyperlink formulas, and standard New X-reqsource headers (`<Owner> | Google Apps Script | <Purpose> | <Project>`).
+1. Updated `Sheet1/apps_script.gs` on the `NIM-FeedPrediction` branch to target the new Sheet 1 spreadsheet `1XT_GlvBf2BGO4cEiskpUsK2Fzc5PzB-tcRHFMubDXbk` (`Discovery Operations - Engine 5 (NIM Industry Prediction)`).
+2. Configured `CONFIG.WORKER_URLS` with `9048-Sheet1-Pipeline` (`https://9048-sheet1.rajath.world`, hostId `9048`) as the sole production worker, removing stale `5080`/`5321` worker URLs while retaining `Vishnu-Sheet1-Pipeline` for testing.
+3. Updated wizard headers, target phase descriptions, and error/reroute diagnostic messages to reflect Desktop-9048 and NIM 70B Summary/IF + Gemini Feed prediction.
 Related tests:
-- `Temp_Test/populate_others_worksheet.py` (35 rows verified via read-back)
+- Temp_Test/test_apps_script_config.py (4 passed)
+- Temp_Test/test_single_sheet_sole_fleet.py (8 passed)
 
-
-## [2026-11-19] Align Google Apps Script Codebases & Python Worksheet with Refined X-Request-Source Specifications
+## [2026-11-18] Single-Sheet Sole-Fleet Resilience & Desktop-9048 Support (NIM-FeedPrediction)
 Files changed:
-- `Desktop/UsageBasedMISnew/2.gs`, `3.gs`: Updated `X-Request-Source` to `"vishnu.bhagirathan@tracxn.com | Google Apps Script | MIS | UsageBasedMIS"`
-- `Documents/Tracxn/Discovery/Usage Based Publishing MIS/DailyMISemail.gs`, `OverallMISv2.gs`, `DailyMISUpdater.gs`, `DBbuilder.gs`, `WeeklyMISv2.gs`: Updated `X-Request-Source` to `"vishnu.bhagirathan@tracxn.com | Google Apps Script | MIS | UsageBasedMIS"`
-- `Desktop/DomainCreationPF/MultiDotURL/1.gs`: Updated `X-Request-Source` to `"vishnu.bhagirathan@tracxn.com | Google Apps Script | Double Dot Domain Creation & Tagging | DomainCreation"`
-- `Documents/Tracxn/Desktop/Double Dot/tracxn_app_script.gs`: Updated `X-Request-Source` to `"vishnu.bhagirathan@tracxn.com | Google Apps Script | Double Dot Domain Creation & Tagging | DomainCreation"`
-- `Documents/Tracxn/General/LLM.gs`: Updated `X-Request-Source` to `"vishnu.bhagirathan@tracxn.com | Google Apps Script | MIS | LLM Cost & Usage Tracking"`
-- `Documents/Tracxn/Discovery/SameAs - Centeral/4. Tagging.gs`: Updated `X-Request-Source` to `"vishnu.bhagirathan@tracxn.com | Google Apps Script | SameAs Tagging & Verification | SameAs-Tagging"`
-- Google Sheet `1SgrPxbogbUUB36lnU-75YFW1ZjyfehY_q84Yr5IBzyQ` (Worksheet: `Python`, `gid=0`): Synchronized 16 matching rows in Column J (`New X-reqsource`) with refined user specifications
+- common/key_manager.py
+- common/__init__.py
+- common/fleet_orchestrator.py
+- common/fleet_cluster.py
+- common/fleet_deduplicator.py
+- common/advance_precrawl.py
+- common/daily_eligible_exporter.py
+- common/daily_lifecycle.py
+- common/pipeline_engine.py
+- Sheet1/api.py
+- Sheet1/config.py
+- control.sh
+- CHANGELOG.md
 Reason:
-1. Re-aligned all local Google Apps Script files with the user's reviewed and refined `New X-reqsource` values in worksheet `AppScript`.
-2. Synchronized corresponding entries in the `Python` worksheet to ensure complete consistency across documentation and live code.
-3. Verified zero remaining legacy or outdated header values in updated target files.
+1. Made the NIM-FeedPrediction pipeline fully resilient for single-sheet sole-fleet deployments (`FLEET_SHEETS=1` on `Desktop-9048`, Sheet 1 only on `:8769` via `9048-sheet1.rajath.world`) while preserving 4-sheet backwards compatibility.
+2. Added `get_fleet_sheet_count()` in `common/key_manager.py` and updated `get_sharded_nim_keys`, `common/pipeline_engine.py`, and `Sheet1/api.py` so Sheet 1 utilizes 100% of available NIM keys (10/10 on Desktop-9048 -> 6 Summary + 4 IF) instead of sharding by 4.
+3. Made `FLEET_NODES` (`common/fleet_orchestrator.py`), `FLEET_TOPOGRAPHY` (`common/fleet_cluster.py`), `TARGET_SHEETS` (`common/fleet_deduplicator.py`, `common/advance_precrawl.py`), and `export_fleet_eligible_sequential` (`common/daily_eligible_exporter.py`) dynamically honor `FLEET_SHEETS` and `SHEET1_*` env config with zero peer calls to Sheets 2-4.
+4. Added `DISABLE_DAILY_ELIGIBLE_EXPORT` safety guard in `common/daily_lifecycle.py` to prevent isolated single-sheet test runs from overwriting production `Discovery Daily Processing` at midnight.
+5. Updated `control.sh` to recognize `Desktop-9048` (`TUNNEL_TOKEN_9048`) and restrict managed services to `Sheet1` when `FLEET_SHEETS=1`.
 Related tests:
-- `Temp_Test/sync_gas_headers_and_sheet.py` (all updated files verified with exact match)
+- Temp_Test/test_single_sheet_sole_fleet.py (8 passed)
 
-## [2026-11-19] Populate Google Apps Script X-Request-Source Header Tracking in Worksheet AppScript
+## [2026-11-16] Option 1 Strict System Instruction Tuning & Dual-Extraction Benchmark for NIM IF
 Files changed:
-- Google Sheet `1SgrPxbogbUUB36lnU-75YFW1ZjyfehY_q84Yr5IBzyQ` (Worksheet: `AppScript`, `gid=193889013`)
-- `Temp_Test/update_appscript_worksheet.py`
+- common/pipeline_engine.py
+- CHANGELOG.md
 Reason:
-1. Audited Google Apps Script projects via Google Apps Script CLI (`clasp`) and Google Drive API across user-owned accounts.
-2. Verified 15 core operational Google Sheets owned by `vishnu.bhagirathan@tracxn.com` (Discovery Engines 1–5, Overview Dashboard, Published MIS, Usage Based Publishing MIS, Double Dot Console, etc.) and populated functional click-through `=HYPERLINK(...)` URLs in Column E (`Sheet Link`).
-3. Mapped and updated `Old X-reqsource` and `New X-reqsource` across all 15 operational sheets adhering strictly to the `vishnu.bhagirathan@tracxn.com | Google Apps Script | <Purpose> | <Project>` format.
-4. Appended Bhavya Dubey's three Apps Script projects (`Mandate/OD MIS`, `Published MIS Backup`, `Backup MIS Tracker Report`) as rows 16–18 formatted with `bhavya.dubey@tracxn.com | GoogleAppScript | MIS | <SheetName>`.
-5. Verified live worksheet data consistency and formula execution via batch read-back.
+1. Updated `Nvidia_API_ASYNC` with strict system instruction tuning for `is_classification=True`: explicitly guides the model to compare candidate industries concisely against the company description, then conclude and output strictly the Serial Number of the industry without echoing prompt text.
+2. Calibrated token limit to `max_tokens=1000` (up from 300) and socket timeout to `270.0s` (`sock_connect=30.0s`, `sock_read=240.0s`) to ensure RL reasoning tokens complete without premature truncation.
+3. Implemented robust Dual-Extraction regex logic: prioritizes final `content`, and if empty, extracts the industry serial number directly from `reasoning_content` using terminal regex patterns.
+4. Completed parallel live benchmarking across 5 test domains against Gemini Ground Truth using isolated test keys without making any Tracxn movements (`skip_movement=True`):
+   - `nasaimpexglobal.com`: IF 6 (Food Agriculture) [MATCH 100%], Feed 11 (Food Distributors) [MATCH 100%], Latency 90.9s
+   - `butlervm.com`: IF 9 (Logistics) [MATCH 100%], Feed 6 (Hotel IT) [MATCH 100%], Latency 164.9s
+   - `icc-jet.com`: IF 13 (Aerospace) [MATCH 100%], Feed 22 (Aircraft & Parts) [MATCH 100%], Latency 151.6s
+   - `nomad-luxe.com`: IF 2 (Retail) vs GT IF 1 (Business Services), Feed 32 (Services for Retailers), Latency 184.1s
+   - `gettraction.studio`: IF 17 (Hi-Tech) vs GT IF 1 (Business Services), Feed 31 (AI Services), Latency 196.0s
 Related tests:
-- `Temp_Test/update_appscript_worksheet.py` (all 18 rows verified on worksheet `AppScript`)
+- Temp_Test/test_nim_if_dual_extraction.py (5 passed)
+- Temp_Test/test_fast_parallel_benchmark.py (5/5 completed end-to-end)
 
-
-## [2026-11-19] Standardize Tracxn API X-Request-Source Header Across All Projects
+## [2026-11-16] Implement Dedicated NIM-Only Industry Funnel Prediction with 60/40 Token Split
 Files changed:
-- `common/key_manager.py`: Updated `X-Request-Source` from `"Testing"` to `"vishnu.bhagirathan@tracxn.com | Python | Token Validation | Discovery-Engine"`
-- `common/pipeline_engine.py`: Updated `X-Request-Source` across `get_api_result`, `get_api_result_async`, and funnel movement endpoints (`Change_Domain_Funnel_Moved_Out`, `move_funnel_domain`) to `"vishnu.bhagirathan@tracxn.com | Python | ... | Discovery-Engine"`
-- `common/domain_filter_validator.py`: Updated `X-Request-Source` to `"vishnu.bhagirathan@tracxn.com | Python | Domain Filter Validation | Discovery-Engine"`
-- `common/advance_precrawl.py`: Updated `X-Request-Source` to `"vishnu.bhagirathan@tracxn.com | Python | Domain Precrawl Ingestion | Discovery-Engine"`
-- `common/tracxn_client.py`: Updated `X-Request-Source` to `"vishnu.bhagirathan@tracxn.com | Python | Tracxn API Integration | Discovery-Engine"`
-- `common/tracxn_domain_ingestor.py`: Updated `X-Request-Source` across domain ingestion endpoints to `"vishnu.bhagirathan@tracxn.com | Python | Domain Ingestion | Discovery-Engine"`
-- `common/tech_crawler.py`: Updated `X-Request-Source` to `"vishnu.bhagirathan@tracxn.com | Python | Web Scraper Utility | Discovery-Engine"`
-- `GEMINI.md`: Updated Phase 4 reference documentation header pattern to `vishnu.bhagirathan@tracxn.com | Python | Funnel Movement | Discovery-Engine`
-- Desktop external repositories: `T-API`, `DomainCreationPF`, `UsageBasedMISnew`, `EduNotAdded`, `Wipro`, `TracxnRecheck5080`, `untitled folder` (112 files updated)
-- Documents external projects: `Documents/Tracxn/Desktop`, `Documents/Tracxn/Discovery`, `Documents/Tracxn/General`, `Documents/Tracxn/CPT` (excluding `Documents/Tracxn/SR/publishing-sr(old)` and `Documents/Tracxn/SR/publishing-sr`)
-- Postman collections (448 API request items across 5 collections) updated to `"vishnu.bhagirathan@tracxn.com | Postman | API Testing | Discovery-General"`
+- common/key_manager.py
+- common/pipeline_engine.py
+- common/__init__.py
 Reason:
-1. Replaced all legacy / arbitrary `X-Request-Source` values (`"Testing"`, `"Discovery Team"`, `"Write API"`, `"123"`, `"prodAPI"`) with the newly enforced Tracxn standard: `email | tool | purpose | project`.
-2. Strictly honored exclusion rules by keeping `Documents/Tracxn/SR/publishing-sr(old)` and `Documents/Tracxn/SR/publishing-sr` untouched.
-3. Verified zero remaining unformatted legacy `X-Request-Source` occurrences across the entire target workspace.
+1. Implemented dedicated NIM Glimmer (`meta/muse-glimmer-30b`) for Industry Funnel (IF) classification in Stage 2, replacing Gemini IF inference.
+2. Enforced strict NIM-only execution for Industry Funnel: zero fallback to Gemini for IF prediction, retrying transient rate limits (HTTP 429) and timeouts strictly within the NIM key pool.
+3. Implemented `split_nim_keys_for_stages(keys, summary_ratio=0.6)` in `key_manager.py` partitioning sharded NIM keys into two disjoint sub-pools (60% to Summarization, 40% to Industry Prediction), guaranteeing 0 concurrency collisions across pipeline stages.
+4. Added classification mode support to `Nvidia_API_ASYNC` with `is_classification=True`, setting `max_tokens=300` and socket read timeout `120.0s` to accommodate Muse Glimmer's internal reasoning tokens, outputting clean industry serial numbers directly.
+5. Preserved downstream Gemini inference exclusively for Feed predictions and added `skip_movement` parameter for safe integration testing without modifying Tracxn production state.
 Related tests:
-- `Temp_Test/check_remaining.py` (0 remaining legacy occurrences in target files)
-- Python import and header dictionary validation across `common/` modules in `Discovery-Engine`
-
-## [2026-11-19] Tracxn API Audit & Standardized X-Request-Source Documentation
-Files changed:
-- Google Sheet `1SgrPxbogbUUB36lnU-75YFW1ZjyfehY_q84Yr5IBzyQ` (`Sheet1`, `gid=0`): Populated 148 Tracxn API request points across Desktop & Documents/Tracxn
-- `~/.gemini/config/skills/tracxn-api/SKILL.md`
-- `~/.gemini/config/skills/tracxn-api/references/internal-write-apis.md`
-- `~/.gemini/config/skills/tracxn-api/examples/tracxn_client.py`
-- `~/.gemini/config/skills/skill-creator/SKILL.md`
-- `~/.gemini/config/skills/skill-creator/references/output-patterns.md`
-- `Temp_Test/find_tracxn_requests.py`
-- `Temp_Test/generate_10_col_rows.py`
-- `Temp_Test/upload_10_cols_to_gsheet.py`
-Reason:
-1. Conducted comprehensive static analysis across Desktop repositories (`Discovery-Engine`, `T-API`, `DomainCreationPF`, `UsageBasedMISnew`, `EduNotAdded`, `Wipro`, `DataLegion`, `TracxnRecheck5080`) and `Documents/Tracxn` subdirectories (`CPT`, `Desktop`, `Discovery`, `General`, `SR`).
-2. Cataloged 148 Tracxn API operational points into Google Sheet `1SgrPxbogbUUB36lnU-75YFW1ZjyfehY_q84Yr5IBzyQ` across all 10 schema columns: `Folder Name`, `Programing Language`, `Username`, `Key`, `Purpose`, `Project`, `Sheet Link`, `Desktop update required?`, `Old X-reqsource`, and proposed `New X-reqsource` formatted strictly as `email | tool | purpose | project` for user pre-commit review.
-3. Updated `/tracxn-api` skill specification to mandate `X-Request-Source: email | tool | purpose | project` and updated client examples and internal write documentation.
-4. Updated `/skill-creator` skill documentation and output patterns to enforce Tracxn API audit header requirements during skill scaffolding.
-Related tests:
-- `Temp_Test/generate_10_col_rows.py` (148/148 valid rows generated)
-- `Temp_Test/upload_10_cols_to_gsheet.py` (Uploaded all 148 rows to Google Sheet `1SgrPxbogbUUB36lnU-75YFW1ZjyfehY_q84Yr5IBzyQ` via `sheet-access@grounding-487108.iam.gserviceaccount.com`)
-
+- Temp_Test/test_token_split.py (4 unit tests passed)
+- Temp_Test/test_nim_api_classification.py (passed)
 
 ## [2026-11-18] Bulk Move All 164,623 Unpublished SR(TPF) Domains to Central Funnel (100% Success)
 Files changed:
@@ -4305,6 +4304,9 @@ Related tests:
 Temp_Test/test_device_concurrency.py, Temp_Test/test_multi_sheet_fleet.py, Temp_Test/test_apps_script.py
 
 ## [2026-10-12] Embed Google Service Account Credentials in .env & Clean Files
+Files deleted:
+- creds.json
+- .env.example
 Files changed:
 - .env
 - Sheet1/config.py, Sheet1/main.py

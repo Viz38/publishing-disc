@@ -22,6 +22,7 @@ from common.key_manager import TracxnKeyManager
 from common.gsheet_circuit_breaker import is_csv_only_mode, set_csv_only_mode, is_doc_too_large_error
 from common.domain_filter_validator import is_domain_leaked, batch_validate_domains
 from common.daily_lifecycle import get_effective_budget, classify_filter_category
+from common.dynamic_domain_fetcher import DynamicDomainFetcher
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("TracxnDomainIngestor")
@@ -648,116 +649,54 @@ class TracxnDomainIngestor:
                         backlog_coverage = cov
                     continue
 
-                from_offset = 0
-                funnel_coverage = 0
-                exc_retries = 0
+                needed_for_funnel = budget - domain_added_count
+                fetcher = DynamicDomainFetcher(
+                    key_manager=self.key_manager,
+                    stagnation_item_threshold=500,
+                    max_window_coverage=85000,
+                )
 
-                while domain_added_count < budget:
-                    page_size = 100
-                    page_payload = dict(query_payload)
-                    page_payload["from"] = from_offset
-                    page_payload["size"] = page_size
+                def accept_item_fn(item: Dict[str, Any]) -> bool:
+                    nonlocal domain_added_count
+                    dom = (item.get("domain") or "").strip().lower()
+                    if not dom or "." not in dom:
+                        return False
 
-                    token = self.key_manager.get_next_token()
-                    if not token:
-                        logger.error("No active Tracxn token available!")
-                        break
+                    # Step 2: Check 3 criteria in-flight
+                    is_leaked, reason = is_domain_leaked(item)
+                    if is_leaked:
+                        logger.info(f"[{s_name}] Purging leaked domain '{dom}' in-flight (Reason: {reason})")
+                        return False
 
-                    headers = {
-                        "Content-Type": "application/json",
-                        "accessToken": token,
-                        "X-Request-Source": "vishnu.bhagirathan@tracxn.com | Python | Domain Ingestion | Discovery-Engine"
-                    }
+                    # Step 3: Check duplicates (fleet, daily, intra-batch)
+                    if dom in domain_seen:
+                        return False
 
-                    try:
-                        resp = requests.post(TRACXN_API_URL, json=page_payload, headers=headers, timeout=30)
-                        if resp.status_code == 200:
-                            data = resp.json()
-                            funnel_coverage = data.get("total_count", funnel_coverage)
-                            page_items = data.get("result", [])
-                            if not page_items:
-                                break
+                    domain_seen.add(dom)
+                    row_57 = self.parse_company_to_57col(
+                        company=item,
+                        funnel_name=f_name,
+                        funnel_id=f_id,
+                        filter_group_name=filter_group_name,
+                        filter_group_id=filter_group_id,
+                        filter_name=filter_name,
+                        filter_id=filter_id,
+                        payload_str=payload_str,
+                        added_time_str=added_time_str
+                    )
+                    new_rows_57.append(row_57)
+                    domain_added_count += 1
+                    return True
 
-                            for item in page_items:
-                                dom = item.get("domain", "").strip().lower()
-                                if not dom or "." not in dom:
-                                    continue
+                fetch_res = fetcher.fetch_for_budget(
+                    base_payload=query_payload,
+                    budget=needed_for_funnel,
+                    accept_item_fn=accept_item_fn,
+                    source_label=s_name,
+                    filter_name=filter_name,
+                )
 
-                                # Step 2: Check 3 criteria in-flight
-                                is_leaked, reason = is_domain_leaked(item)
-                                if is_leaked:
-                                    logger.info(f"[{s_name}] Purging leaked domain '{dom}' in-flight (Reason: {reason})")
-                                    continue
-
-                                # Step 3: Check duplicates (fleet, daily, intra-batch)
-                                if dom in domain_seen:
-                                    continue
-
-                                domain_seen.add(dom)
-                                row_57 = self.parse_company_to_57col(
-                                    company=item,
-                                    funnel_name=f_name,
-                                    funnel_id=f_id,
-                                    filter_group_name=filter_group_name,
-                                    filter_group_id=filter_group_id,
-                                    filter_name=filter_name,
-                                    filter_id=filter_id,
-                                    payload_str=payload_str,
-                                    added_time_str=added_time_str
-                                )
-                                new_rows_57.append(row_57)
-                                domain_added_count += 1
-                                if domain_added_count >= budget:
-                                    break
-
-                            from_offset += page_size
-                            if from_offset >= funnel_coverage:
-                                break
-                        elif resp.status_code == 403:
-                            is_unauth = False
-                            try:
-                                err_data = resp.json()
-                                if err_data.get("errorCode") == 403000000 or "unauthorized" in str(err_data.get("message", "")).lower():
-                                    is_unauth = True
-                            except Exception:
-                                if "unauthorized" in resp.text.lower():
-                                    is_unauth = True
-
-                            if is_unauth and page_payload.get("dataset") != "search":
-                                logger.info(f"Tracxn 403000000 unauthorized dataset error on '{page_payload.get('dataset')}'. Falling back to 'search' without penalizing token.")
-                                query_payload["dataset"] = "search"
-                                page_payload["dataset"] = "search"
-                                continue
-
-                            self.key_manager.handle_http_error(token, resp.status_code)
-                            logger.warning(f"Tracxn token invalid/expired (status {resp.status_code}). Rotating token...")
-                            continue
-                        elif resp.status_code == 401:
-                            self.key_manager.handle_http_error(token, resp.status_code)
-                            logger.warning(f"Tracxn token invalid/expired (status {resp.status_code}). Rotating token...")
-                            continue
-                        elif resp.status_code == 429:
-                            self.key_manager.handle_http_error(token, resp.status_code)
-                            logger.warning("Tracxn rate limit 429 hit. Rotating token...")
-                            time.sleep(2)
-                            continue
-                        else:
-                            self.key_manager.handle_http_error(token, resp.status_code)
-                            logger.warning(f"Tracxn error status {resp.status_code}: {resp.text[:200]}")
-                            break
-                    except Exception as e:
-                        exc_retries += 1
-                        logger.error(f"Tracxn request exception (attempt {exc_retries}/3): {e}")
-                        if "timeout" in str(e).lower() and query_payload.get("dataset") != "search":
-                            logger.info("Tracxn timeout hit; falling back to dataset='search'...")
-                            query_payload["dataset"] = "search"
-                            page_payload["dataset"] = "search"
-                        if exc_retries >= 3:
-                            logger.warning(f"Exceeded 3 retry attempts on payload '{filter_name}'. Skipping to next payload.")
-                            break
-                        time.sleep(2)
-                        continue
-
+                funnel_coverage = fetch_res.total_coverage
                 if f_id == "5dc559138787070a80be21ba":
                     cf_coverage = funnel_coverage
                 else:
