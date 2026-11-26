@@ -49,6 +49,9 @@ venv/
 # macOS artifacts
 .DS_Store
 status_dashboard.gs
+.clasp.json
+.claspignore
+appsscript.json
 
 # Project Architecture & Instructions (local only)
 GEMINI.md
