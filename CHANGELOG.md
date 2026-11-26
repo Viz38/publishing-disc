@@ -1,6 +1,19 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-26] Dynamic Domain Fetcher with Stagnation Pivoting and 100k Limit Slicing
+Files changed:
+- `common/dynamic_domain_fetcher.py`: Created adaptive, self-healing `DynamicDomainFetcher`. Detects duplicate saturation (>98% duplicate rate over threshold) and automatically pivots to bounded historical date windows. Recovers from Elasticsearch 100k offset limits (HTTP 422) by dynamically partitioning large queries into sub-slices starting at offset 0.
+- `common/tracxn_domain_ingestor.py`: Replaced manual, fragile pagination loop in `ingest_domains_for_sheet()` with `DynamicDomainFetcher`. Ensures large payloads (e.g. 385k leads) cleanly fulfill assigned budgets without halting at offset 100,000.
+- `common/advance_precrawl.py`: Integrated `DynamicDomainFetcher` into `fetch_domains_for_sheet()` for resilient pre-crawling.
+- `Temp_Test/test_dynamic_domain_fetcher.py`: Added 4 unit tests covering window splitting, date bounds clamping, 422 recovery, and stagnation pivoting.
+- `Temp_Test/test_live_dynamic_ingestion.py`: Added live verification script testing dynamic pivots against production Tracxn APIs.
+Reason:
+Payloads with massive historical backlogs (such as `6afaf210df32cb486f1163be` with 385,637 leads) caused ingestion to fail or halt at offset 100,000 due to Elasticsearch 100k pagination limits (`from + size must be less than or equal to 100000`) and high duplicate density in top search results. The dynamic fetcher automatically partitions the date ranges and pivots when duplicate density is high, ensuring full budget fulfillment across all active sheets.
+Related tests:
+- `Temp_Test/test_dynamic_domain_fetcher.py` (4/4 tests PASSED)
+- Live tests against 385k payload (PASSED with 2 temporal pivots)
+
 ## [2026-11-25] Removed Hashtag Disqualification from Validator to Allow Sent-Back Cases
 Files changed:
 - `common/domain_filter_validator.py`: In `is_domain_leaked()`, removed the `hashTags` disqualification block that previously flagged `bu_llm_discovery_processing`, `bu_llm_feed_prediction`, and `bu_llm_industry_prediction` as leaked.
