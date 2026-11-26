@@ -161,6 +161,32 @@ class FetchResult:
         )
 
 
+def sanitize_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Sanitizes Tracxn payload by removing UI-specific null placeholders that break
+    the /api/2.2/domains Elasticsearch index (e.g. status: ['t_null']).
+    Defaults to sorting by createdDate DESC if sort is relevance or missing.
+    """
+    p = copy.deepcopy(payload)
+    filt = p.get("filter")
+    if isinstance(filt, dict):
+        if filt.get("status") in (["t_null"], "t_null"):
+            del filt["status"]
+        if filt.get("sameAs") in (["t_null"], "t_null"):
+            del filt["sameAs"]
+        if filt.get("isInvestor") in (["t_null"], "t_null"):
+            del filt["isInvestor"]
+    
+    sort_list = p.get("sort")
+    if not sort_list or (
+        isinstance(sort_list, list)
+        and len(sort_list) > 0
+        and sort_list[0].get("sortField") == "relevance"
+    ):
+        p["sort"] = [{"order": "DESC", "sortField": "createdDate"}]
+    return p
+
+
 class DynamicDomainFetcher:
     """
     Self-healing, adaptive Tracxn API domain fetcher.
@@ -270,7 +296,7 @@ class DynamicDomainFetcher:
         total_root_coverage = 0
 
         # Phase 1: Try base query directly
-        query_payload = copy.deepcopy(base_payload)
+        query_payload = sanitize_payload(base_payload)
         from_offset = 0
         page_size = 100
         root_stagnant = False

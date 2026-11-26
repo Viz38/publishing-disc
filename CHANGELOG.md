@@ -1,6 +1,15 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-26] Sanitize Tracxn Payloads and Strip UI-Specific Null Placeholders
+Files changed:
+- `common/dynamic_domain_fetcher.py`: Added `sanitize_payload()` to automatically strip `status: ["t_null"]`, `sameAs: ["t_null"]`, and `isInvestor: "t_null"` from incoming query payloads, and default sorting to `createdDate` DESC. Prevents Elasticsearch 0-match traps caused by UI null placeholders.
+- `CF_IF Engine - Input Payload` (Sheet 4): Batch updated the 16 active P0 filter queries to remove `"status": ["t_null"]` and enforce `createdDate` DESC sort.
+Reason:
+Tracxn `/api/2.2/domains` Elasticsearch index expects status to be omitted or valid keyword. UI placeholders like `["t_null"]` returned 0 matches, preventing Sheet 4 from staging its 1,995 P0 domains.
+Related tests:
+- `Temp_Test/inspect_sheet4_payloads.py` (Verified 16 active P0 queries now return 100k+ total candidates)
+
 ## [2026-11-26] Fleet Budget Restructuring & NIM Key Partitioning
 Files changed:
 - `CF_IF Engine - Input Payload` (Sheets 1–4): Set Column F budget to 0 for all non-P0 filters. Main fleet now runs strictly P0 filters totaling 1,995 domains/day (Sheet 4), adhering to the <=5,000 domains overall cap. Backed up old budgets to `Old Budget_Before_NIM_Split`.
