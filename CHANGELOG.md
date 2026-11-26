@@ -1,6 +1,19 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-26] Fix Status Dashboard Engine State Parsing & Resolve False Offline Statuses
+Files changed:
+- `status_dashboard.gs`: Corrected endpoint response evaluation in both `renderMainFleetDashboard` and `renderTestingFleetDashboard`. When daemons return `HTTP 200 OK` with `status: "idle"` and `progress_current === 0`, `bestData` is now properly captured and assigned to host with status badge `⏸️ IDLE` or `✅ COMPLETED` rather than defaulting to `🔴 OFFLINE`. Fixed device online heartbeat recording so hosts under transient high load are correctly tracked.
+- Pushed updated container-bound script directly to spreadsheet `1eVKXWnGNsHp8WmoqXo8Pz-mB6f7V7xGleMfd7CcahSA` via `clasp push --force`.
+- `Temp_Test/render_both_dashboards.py`: Generated live visual updates and validated both "Status" (Main Fleet) and "Testing Fleet" (NIM Fleet) tabs via Google Sheets API.
+- `Temp_Test/status_dashboard.png` & `Temp_Test/testing_fleet_dashboard.png`: Captured browser visual confirmation snapshots of both live dashboard views.
+Reason:
+The dashboard previously marked healthy idle/completed engines as "🔴 OFFLINE" because the parser discarded responses where `progress_current === 0`.
+Related tests:
+- `Temp_Test/test_dashboard_dual_refresh.py` (4/4 tests PASSED)
+- `Temp_Test/test_dashboard_menu_and_control.py` (3/3 tests PASSED)
+
+
 ## [2026-11-26] 3-Way Equal NIM Key Redistribution Across Parallel Stages (Zero Collision)
 Files changed:
 - `common/key_manager.py`: Implemented `split_nim_keys_for_3_stages(keys)` to partition the NIM fleet's 40 API keys equally across all 3 parallel inference processes (14 keys for Stage 1 Summarization, 13 keys for Stage 2 Industry Funnel, 13 keys for Stage 3 Feed Prediction). Guarantees zero concurrency key collision and 100% key utilization.
