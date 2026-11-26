@@ -1,6 +1,22 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-26] Eliminate Apps Script Trigger Execution Timeouts and 502 Hangs in Status Dashboard
+Files changed:
+- `status_dashboard.gs`:
+  1. Pruned `STATUS_CONFIG.TARGET_SHEETS` to strictly contain only the single active production endpoint per sheet (`5080-sheet1`, `5080-sheet2`, `5321-sheet3`, `5321-sheet4`), removing dead fallback hosts (`5321-sheet1`, `5321-sheet2`, `5080-sheet3`, `5080-sheet4`) that were incurring 30-second Cloudflare 502 connection hangs (~120s total per cycle).
+  2. Streamlined `needsDynamicAudit` condition in both `renderMainFleetDashboard` and `renderTestingFleetDashboard` to `(!bestData && target.sheetId)`. Eliminates redundant, heavy `auditSheetDynamically` executions (which previously pulled 1.2M+ cells on the 40k row NIM sheet and hundreds of thousands of cells across main fleet sheets on every run).
+  3. Reduced Apps Script routine execution time from >360s (Google timeout kill) to ~2s.
+- Pushed updated container-bound script directly to Google Apps Script (`11P99Kmn-Eg1m4dylSR924ekGcY0OMWcsVYiJrDo48ThEAZD4ynBsaqex`) via `clasp push --force`.
+- `Temp_Test/test_dashboard_optimization.py`: Added 3 unit tests verifying single active endpoint per sheet, proper dynamic audit guards, and JavaScript syntax cleanliness.
+- `Temp_Test/generate_live_html_and_screenshots.py`: Generated live HTML representations and captured fresh Playwright visual confirmation snapshots (`status_dashboard.png` and `testing_fleet_dashboard.png`).
+Reason:
+The Google Apps Script 15-minute trigger was timing out after exceeding the 6-minute Google execution limit, causing the dashboard to freeze, paint false offline statuses, or fail to show real-time processing.
+Related tests:
+- `Temp_Test/test_dashboard_optimization.py` (3/3 tests PASSED)
+- `Temp_Test/test_dashboard_dual_refresh.py` (4/4 tests PASSED)
+- `Temp_Test/test_dashboard_menu_and_control.py` (3/3 tests PASSED)
+
 ## [2026-11-26] Fix Status Dashboard Engine State Parsing & Resolve False Offline Statuses
 Files changed:
 - `status_dashboard.gs`: Corrected endpoint response evaluation in both `renderMainFleetDashboard` and `renderTestingFleetDashboard`. When daemons return `HTTP 200 OK` with `status: "idle"` and `progress_current === 0`, `bestData` is now properly captured and assigned to host with status badge `⏸️ IDLE` or `✅ COMPLETED` rather than defaulting to `🔴 OFFLINE`. Fixed device online heartbeat recording so hosts under transient high load are correctly tracked.
