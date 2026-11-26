@@ -29,6 +29,7 @@ from common import (
     get_sharded_nim_keys,
     get_all_nim_keys,
     split_nim_keys_for_stages,
+    split_nim_keys_for_3_stages,
     FleetNIMRebalancer,
     TechCrawlerClient,
     WaterfallScraper,
@@ -3780,7 +3781,8 @@ async def Extract_AI_Engine_Output(
     config_funnel_name_Feed_Cached_Model, config_funnel_name_Feed_Cached_Gen_Date,
     config_funnel_name_Feed_Cached_Final_Status, token_rotator,
     mode="full", session=None, precomputed_summary=None,
-    token_rotator_if=None, skip_movement=False
+    token_rotator_if=None, skip_movement=False,
+    token_rotator_feed=None
 ):
 
     start_time = datetime.datetime.now()
@@ -4274,7 +4276,7 @@ async def Extract_AI_Engine_Output(
         try:
             try:
                 if Nvidia_Feed_Model:
-                    rotator_feed = token_rotator_if or token_rotator
+                    rotator_feed = token_rotator_feed or token_rotator_if or token_rotator
                     nim_feed_raw = await Nvidia_API_ASYNC(
                         input_data_for_feed,
                         token_rotator=rotator_feed,
@@ -4576,6 +4578,7 @@ async def Integrated_Process_domain(
     precomputed_summary=None,
     token_rotator_if=None,
     skip_movement=False,
+    token_rotator_feed=None,
 ):
     async with semaphore:
         try:
@@ -4852,6 +4855,7 @@ async def Integrated_Process_domain(
                 precomputed_summary=precomputed_summary,
                 token_rotator_if=token_rotator_if,
                 skip_movement=skip_movement,
+                token_rotator_feed=token_rotator_feed,
             )
 
             # Unpack AI Engine Outputs (Col AN receives summary_status, Col AO receives output_data_summery)
@@ -5781,16 +5785,22 @@ async def Integrated_Extract_domains(
 
         writer_task = asyncio.create_task(sheet_writer_worker())
 
-        # Decoupled SEDA Architecture with 60/40 NIM Key Split:
-        # Stage 1: Dedicated NIM Summarizer Producer Pool (60% of sharded keys)
-        # Stage 2: Dedicated NIM Industry Funnel Classifier (40% of sharded keys)
+        # Decoupled SEDA Architecture with NIM Key Allocation:
+        # If Nvidia_Feed_Model is active, 3-way equal split (Summary / IF / Feed).
+        # Otherwise 60/40 split between Summary and IF.
         raw_keys = token_rotator.keys if token_rotator else list(NIM_HARDCODED_KEYS)
-        summary_keys, if_keys = split_nim_keys_for_stages(raw_keys, summary_ratio=0.6)
+        if Nvidia_Feed_Model:
+            summary_keys, if_keys, feed_keys = split_nim_keys_for_3_stages(raw_keys)
+            feed_rotator = NIMKeyManager(feed_keys)
+        else:
+            summary_keys, if_keys = split_nim_keys_for_stages(raw_keys, summary_ratio=0.6)
+            feed_rotator = None
         summary_rotator = NIMKeyManager(summary_keys)
         if_rotator = NIMKeyManager(if_keys)
         logging.info(
-            f"⚡ [NIM Key 60/40 Split] Stage 1 Summary Keys: {len(summary_keys)} | "
-            f"Stage 2 IF Prediction Keys: {len(if_keys)}"
+            f"⚡ [NIM Key Allocation] Stage 1 Summary Keys: {len(summary_keys)} | "
+            f"Stage 2 IF Prediction Keys: {len(if_keys)} | "
+            f"Stage 3 Feed Prediction Keys: {len(feed_rotator.keys) if feed_rotator else 0}"
         )
 
         default_nim_workers = max(2, len(summary_keys) * 2)
@@ -6019,6 +6029,7 @@ async def Integrated_Extract_domains(
                                 write_to_sheet=False,
                                 precomputed_summary=None,
                                 token_rotator_if=if_rotator,
+                                token_rotator_feed=feed_rotator,
                             )
                         finally:
                             if is_wf_run and norm_d:
@@ -6169,6 +6180,7 @@ async def Integrated_Extract_domains(
                             write_to_sheet=False,
                             precomputed_summary=precomputed_sum,
                             token_rotator_if=if_rotator,
+                            token_rotator_feed=feed_rotator,
                         )
 
                         if isinstance(full_res, Exception) or full_res is None:
@@ -6647,7 +6659,9 @@ async def Integrated_Extract_domains(
                                 config_funnel_name_Feed_Cached_Final_Status,
                                 token_rotator,
                                 created_timestamp=c_ts,
-                                mode=mode
+                                mode=mode,
+                                token_rotator_if=if_rotator,
+                                token_rotator_feed=feed_rotator,
                             )
                             processed += 1
                             success_count += 1

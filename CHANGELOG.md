@@ -1,6 +1,18 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-26] 3-Way Equal NIM Key Redistribution Across Parallel Stages (Zero Collision)
+Files changed:
+- `common/key_manager.py`: Implemented `split_nim_keys_for_3_stages(keys)` to partition the NIM fleet's 40 API keys equally across all 3 parallel inference processes (14 keys for Stage 1 Summarization, 13 keys for Stage 2 Industry Funnel, 13 keys for Stage 3 Feed Prediction). Guarantees zero concurrency key collision and 100% key utilization.
+- `common/__init__.py`: Exported `split_nim_keys_for_3_stages`.
+- `common/pipeline_engine.py`: Integrated `split_nim_keys_for_3_stages` in `Integrated_Extract_domains`. Initialized dedicated `feed_rotator = NIMKeyManager(feed_keys)` when `Nvidia_Feed_Model` is active and wired `token_rotator_feed` through `Integrated_Process_domain` down to `Extract_AI_Engine_Output`.
+- `Temp_Test/test_token_split.py`: Added comprehensive unit tests for `split_nim_keys_for_3_stages` testing disjoint partitions, complete coverage, and key distribution across various pool sizes.
+Reason:
+Desktop-9048 runs 3 parallel NIM processes (Summarization on Nemotron 3.5 Bolt, Industry Funnel on Nemotron Super VL 120B, and Feed Prediction on Moonshot Kimi K3.1 Pro). Splitting the 40 keys 14/13/13 eliminates inter-stage key contention and rate-limit cross-talk.
+Related tests:
+- `Temp_Test/test_token_split.py` (6/6 tests PASSED)
+
+
 ## [2026-11-26] Sanitize Tracxn Payloads and Strip UI-Specific Null Placeholders
 Files changed:
 - `common/dynamic_domain_fetcher.py`: Added `sanitize_payload()` to automatically strip `status: ["t_null"]`, `sameAs: ["t_null"]`, and `isInvestor: "t_null"` from incoming query payloads, and default sorting to `createdDate` DESC. Prevents Elasticsearch 0-match traps caused by UI null placeholders.

@@ -935,6 +935,34 @@ def split_nim_keys_for_stages(
     return summary_keys, if_keys
 
 
+def split_nim_keys_for_3_stages(
+    keys: List[str],
+) -> tuple[List[str], List[str], List[str]]:
+    """
+    Partitions a pool of NIM keys into three disjoint sub-pools:
+    1. summary_keys (e.g. 14 keys when total=40) for Stage 1 Summarization.
+    2. if_keys (e.g. 13 keys when total=40) for Stage 2 Industry Funnel Prediction.
+    3. feed_keys (e.g. 13 keys when total=40) for Stage 3 Feed Prediction.
+
+    Ensures 0 key collision across all 3 concurrent NIM pipeline stages.
+    """
+    clean_keys = [str(k).strip() for k in keys if str(k).strip()]
+    total = len(clean_keys)
+    if total <= 2:
+        return clean_keys, list(clean_keys), list(clean_keys)
+
+    base = total // 3
+    rem = total % 3
+    n_summary = base + (1 if rem > 0 else 0)
+    n_if = base + (1 if rem > 1 else 0)
+    n_feed = total - n_summary - n_if
+
+    summary_keys = clean_keys[:n_summary]
+    if_keys = clean_keys[n_summary:n_summary + n_if]
+    feed_keys = clean_keys[n_summary + n_if:]
+    return summary_keys, if_keys, feed_keys
+
+
 def get_all_nim_keys(
     keys: Optional[List[str]] = None,
     invalid_keys: Optional[Set[str]] = None

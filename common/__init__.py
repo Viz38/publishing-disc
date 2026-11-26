@@ -10,6 +10,7 @@ from .key_manager import (
     get_sharded_nim_keys,
     get_all_nim_keys,
     split_nim_keys_for_stages,
+    split_nim_keys_for_3_stages,
 )
 from .fleet_rebalancer import FleetNIMRebalancer, compute_dynamic_shard
 from .tech_crawler import TechCrawlerClient, is_valid_s3_url, extract_tc_error_details
@@ -75,6 +76,7 @@ __all__ = [
     "get_sharded_nim_keys",
     "get_all_nim_keys",
     "split_nim_keys_for_stages",
+    "split_nim_keys_for_3_stages",
     "FleetNIMRebalancer",
     "compute_dynamic_shard",
     "TechCrawlerClient",
