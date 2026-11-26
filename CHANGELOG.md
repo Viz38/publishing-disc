@@ -1,6 +1,18 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-26] Transition Fleet Summarization to Nemotron 3.5 Bolt and Industry Prediction to Super VL 120B
+Files changed:
+- `common/pipeline_engine.py`: Updated `Nvidia_Base_Model` default from `meta/muse-glimmer-30b` to `nvidia/nemotron-3.5-bolt-e4b`. Added `model: Optional[str] = None` support to `Nvidia_API_ASYNC` to allow dynamic model overrides per inference phase.
+- `Sheet1/config.py`, `Sheet2/config.py`, `Sheet3/config.py`, `Sheet4/config.py`: Updated `Nvidia_Base_Model` setting default to `nvidia/nemotron-3.5-bolt-e4b`.
+- `.env`: Updated `NVIDIA_BASE_MODEL=nvidia/nemotron-3.5-bolt-e4b`.
+- `NIM-FeedPrediction` branch (`common/pipeline_engine.py`): Updated NIM Industry Prediction model to `nvidia/nemotron-3.5-super-vl-120b-a12b` with reasoning tokens extraction and safety fallbacks.
+- `Temp_Test/test_model_configuration.py`: Added unit tests verifying model configuration across all configs and API signature.
+Reason:
+User requested migrating fleet summarization from `meta/muse-glimmer-30b` to `nvidia/nemotron-3.5-bolt-e4b` across both branches, and upgrading Industry Prediction in the `NIM-FeedPrediction` branch to `nvidia/nemotron-3.5-super-vl-120b-a12b`.
+Related tests:
+- `Temp_Test/test_model_configuration.py` (2/2 tests PASSED)
+
 ## [2026-11-26] Permanent Prevention of Daily Snapshot Truncation and Fleet Export Discrepancies
 Files changed:
 - `common/dashboard_metrics.py`: In `extract_eligible_domain_records()`, implemented autonomous cache-union extraction. The extractor now evaluates both `rows` (hydrated by `cache_map`) and all eligible completed records directly from `cache_map`. Guarantees that any domain meeting Publish Funnel eligibility (`cf_if_status == "DONE"`, `if_pf_status == "DONE"`, `final_pub_funnel_name.lower().startswith("publishing funnel")`) is 100% captured even if the `rows` list passed from Google Sheets was truncated by API quotas, write buffering, or clearing cycles.
