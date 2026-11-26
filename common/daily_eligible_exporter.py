@@ -142,6 +142,7 @@ def get_eligible_records_for_sheet_dir(
     Google Sheet (when online) + local_sheet.csv + discovery_cache.csv (irrespective of CSV-only mode).
     """
     cache_map = load_cache_map(cache=cache, base_dir=sheet_dir)
+    local_rows = load_local_sheet_rows(sheet_dir)
     rows: List[List[str]] = []
 
     use_csv_only = is_csv_only_mode(sheet_dir)
@@ -155,8 +156,11 @@ def get_eligible_records_for_sheet_dir(
         except Exception as e:
             logger.warning(f"GSheet read fallback to local_sheet.csv during eligible scan ({sheet_id}): {e}")
 
-    if not rows:
-        rows = load_local_sheet_rows(sheet_dir)
+    # Prioritize local_rows if remote Google Sheet returned a truncated subset
+    if len(local_rows) > len(rows):
+        rows = local_rows
+    elif not rows:
+        rows = local_rows
 
     if not rows and cache_map:
         # Synthesize rows purely from cache map (missing profile_id if local_sheet absent)
@@ -310,18 +314,44 @@ def fetch_peer_sheet_records(
     try:
         resp = requests.get(url, headers=headers, timeout=30)
         if resp.status_code == 200:
-            return resp.json().get("records", [])
+            recs = resp.json().get("records", [])
+            if len(recs) >= 500:
+                return recs
+            # If peer returned 0 records and snapshot_date is provided, try querying peer with adjacent date
+            if snapshot_date and len(recs) == 0:
+                try:
+                    cur_dt = datetime.datetime.strptime(snapshot_date, "%Y-%m-%d")
+                    for delta_days in (-1, 1):
+                        alt_date = (cur_dt + datetime.timedelta(days=delta_days)).strftime("%Y-%m-%d")
+                        alt_url = f"{get_node_url(sheet_num).rstrip('/')}/fleet/eligible-domains?date={alt_date}"
+                        alt_resp = requests.get(alt_url, headers=headers, timeout=15)
+                        if alt_resp.status_code == 200:
+                            alt_recs = alt_resp.json().get("records", [])
+                            if len(alt_recs) > len(recs):
+                                logger.info(f"Loaded {len(alt_recs)} records from peer Sheet{sheet_num} using alternate date {alt_date}")
+                                recs = alt_recs
+                                break
+                except Exception:
+                    pass
+            if recs:
+                return recs
         else:
             logger.warning(f"Peer Sheet{sheet_num} /fleet/eligible-domains returned HTTP {resp.status_code}")
     except Exception as e:
         logger.warning(f"Failed fetching eligible domains from Sheet{sheet_num} ({url}): {e}")
 
-    # Fallback to local disk snapshot file if accessible
+    # Fallback to local disk snapshot file if accessible (e.g. co-located sheet or shared storage)
     if snapshot_date:
-        snap = load_sheet_eligible_snapshot(f"Sheet{sheet_num}", snapshot_date)
-        if snap:
-            logger.info(f"Loaded {len(snap)} records from local disk snapshot for Sheet{sheet_num}")
-            return snap
+        try:
+            cur_dt = datetime.datetime.strptime(snapshot_date, "%Y-%m-%d")
+            date_candidates = [snapshot_date, (cur_dt - datetime.timedelta(days=1)).strftime("%Y-%m-%d"), (cur_dt + datetime.timedelta(days=1)).strftime("%Y-%m-%d")]
+        except Exception:
+            date_candidates = [snapshot_date]
+        for dc in date_candidates:
+            snap = load_sheet_eligible_snapshot(f"Sheet{sheet_num}", dc)
+            if snap and len(snap) > 0:
+                logger.info(f"Loaded {len(snap)} records from local disk snapshot for Sheet{sheet_num} (date {dc})")
+                return snap
     return []
 
 
@@ -532,15 +562,37 @@ def fetch_peer_sheet_gemini_ran_count(
         resp = requests.get(url, headers=headers, timeout=30)
         if resp.status_code == 200:
             data = resp.json()
-            return int(data.get("gemini_ran_count") or 0)
-        logger.warning(f"Peer Sheet{sheet_num} /fleet/eligible-domains returned HTTP {resp.status_code}")
+            cnt = int(data.get("gemini_ran_count") or 0)
+            if cnt > 0:
+                return cnt
+            if snapshot_date and cnt == 0:
+                try:
+                    cur_dt = datetime.datetime.strptime(snapshot_date, "%Y-%m-%d")
+                    for delta_days in (-1, 1):
+                        alt_date = (cur_dt + datetime.timedelta(days=delta_days)).strftime("%Y-%m-%d")
+                        alt_url = f"{get_node_url(sheet_num).rstrip('/')}/fleet/eligible-domains?date={alt_date}"
+                        alt_resp = requests.get(alt_url, headers=headers, timeout=15)
+                        if alt_resp.status_code == 200:
+                            alt_cnt = int(alt_resp.json().get("gemini_ran_count") or 0)
+                            if alt_cnt > cnt:
+                                return alt_cnt
+                except Exception:
+                    pass
+        else:
+            logger.warning(f"Peer Sheet{sheet_num} /fleet/eligible-domains returned HTTP {resp.status_code}")
     except Exception as e:
         logger.warning(f"Failed fetching gemini_ran_count from Sheet{sheet_num} ({url}): {e}")
 
     if snapshot_date:
-        snap = load_sheet_daily_metrics_snapshot(f"Sheet{sheet_num}", snapshot_date)
-        if snap:
-            return int(snap.get("gemini_ran_count") or 0)
+        try:
+            cur_dt = datetime.datetime.strptime(snapshot_date, "%Y-%m-%d")
+            date_candidates = [snapshot_date, (cur_dt - datetime.timedelta(days=1)).strftime("%Y-%m-%d"), (cur_dt + datetime.timedelta(days=1)).strftime("%Y-%m-%d")]
+        except Exception:
+            date_candidates = [snapshot_date]
+        for dc in date_candidates:
+            snap = load_sheet_daily_metrics_snapshot(f"Sheet{sheet_num}", dc)
+            if snap and int(snap.get("gemini_ran_count") or 0) > 0:
+                return int(snap.get("gemini_ran_count") or 0)
     return 0
 
 
@@ -579,9 +631,12 @@ def update_daily_processed_counts_sheet(
     """
     ss = gc.open_by_key(spreadsheet_id)
     try:
-        ws = ss.get_worksheet_by_id(gid)
-    except Exception:
         ws = ss.worksheet("Processed Counts")
+    except Exception:
+        try:
+            ws = ss.get_worksheet_by_id(gid)
+        except Exception:
+            ws = ss.get_worksheet(0)
 
     rows = ws.get_all_values()
     target_row_idx: Optional[int] = None
