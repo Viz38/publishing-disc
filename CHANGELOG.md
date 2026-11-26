@@ -1,6 +1,23 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-26] Rename 'Status' Tab to 'Production Fleet' and Configure 'Discovery Operations - NIM Fleet 1' Hyperlink
+Files changed:
+- `Google Spreadsheet (1eVKXWnGNsHp8WmoqXo8Pz-mB6f7V7xGleMfd7CcahSA)`: Renamed tab `sheetId: 1570465616` from `"Status"` to `"Production Fleet"` via Google Sheets API `updateSheetProperties`.
+- `status_dashboard.gs`:
+  1. Updated `STATUS_CONFIG.STATUS_SHEET_NAME` to `'Production Fleet'`.
+  2. Updated `STATUS_CONFIG.NIM_TARGET_SHEETS[0]` name to `'Discovery Operations - NIM Fleet 1'`, `shortName: 'NIM Fleet 1'`, and `sheetUrl: 'https://docs.google.com/spreadsheets/d/1XT_GlvBf2BGO4cEiskpUsK2Fzc5PzB-tcRHFMubDXbk/edit?gid=115980342#gid=115980342'`.
+- `Temp_Test/deploy_clasp/status_dashboard.gs`: Mirrored changes and deployed to Google Apps Script (`11P99Kmn-Eg1m4dylSR924ekGcY0OMWcsVYiJrDo48ThEAZD4ynBsaqex`) via `clasp push --force`.
+- `Temp_Test/render_both_dashboards.py`: Updated target write ranges to `'Production Fleet'!A...` and configured `=HYPERLINK("https://docs.google.com/spreadsheets/d/1XT_GlvBf2BGO4cEiskpUsK2Fzc5PzB-tcRHFMubDXbk/edit?gid=115980342#gid=115980342", "Discovery Operations - NIM Fleet 1")` for Testing Fleet Table 1.
+- `Temp_Test/generate_live_html_and_screenshots.py`: Updated read range to `'Production Fleet'!A1:J20`.
+- `Temp_Test/test_dashboard_optimization.py`: Added unit tests `test_status_sheet_renamed_to_production_fleet` and `test_nim_fleet_renamed_to_nim_fleet_1_with_gid` (7/7 tests PASSED).
+- `Temp_Test/status_dashboard.png` & `Temp_Test/testing_fleet_dashboard.png`: Captured fresh visual confirmation snapshots reflecting `"Production Fleet"` and `"Discovery Operations - NIM Fleet 1"`.
+Reason:
+Standardize dashboard naming conventions, designate the primary tab as "Production Fleet", and uniquely identify the first NIM testing pipeline with a direct deep-link to gid 115980342.
+Related tests:
+- `Temp_Test/test_dashboard_optimization.py` (7/7 tests PASSED)
+- `Temp_Test/render_both_dashboards.py` (Google Sheets batchUpdate 200 OK)
+
 ## [2026-11-26] Integrate Cumulative Daily Processed Cache in Status Dashboard & Eliminate In-Memory Zero-Count Resets
 Files changed:
 - `Temp_Test/render_both_dashboards.py`:
