@@ -1,6 +1,25 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-27] Root-Cause Fix: Terminate System-Level Systemd Daemons on Desktop-5321 & Desktop-5080
+Files changed:
+- `Desktop-5321 (Production Host 2)`:
+  - Discovered that `discovery-cf3.service` and `discovery-filterv2.service` were installed as root system-level systemd units in `/etc/systemd/system/` (rather than `--user` units) with `Restart=always`.
+  - Executed `sudo systemctl kill --signal=SIGKILL`, `sudo systemctl stop`, and `sudo systemctl disable` on both services.
+  - Terminated all active and respawned `runner.sh`, `uvicorn`, `main.py`, `playwright`, and `camoufox` processes.
+- `Desktop-5080 (Production Host 1)`:
+  - Executed `sudo systemctl kill --signal=SIGKILL`, `sudo systemctl stop`, and `sudo systemctl disable` on `discovery-cf1.service` and `discovery-cf2.service` to prevent any restart.
+- `Operations Dashboard (Spreadsheet ID: 1eVKXWnGNsHp8WmoqXo8Pz-mB6f7V7xGleMfd7CcahSA)`:
+  - Refreshed both `Production Fleet` and `Testing Fleet` dashboard tabs via `Temp_Test/render_both_dashboards.py`.
+  - Confirmed state displays `0 / 4 Running`, `0 Active Workers`, and all pipelines are `⏸️ IDLE` / `🔴 OFFLINE`.
+Reason:
+User query investigating why Sheet 3 and Sheet 4 showed as running on the dashboard. Identified root cause as systemd root services automatically restarting `runner.sh` upon process termination.
+Related verification:
+- `ps aux | grep -E "python.*main.py|uvicorn|precrawl|runner.sh" || echo "COMPLETELY DEAD"` verified `COMPLETELY DEAD` across Desktop-5080, Desktop-5321, and Desktop-9048.
+- HTTP status checks confirmed all 4 public hostnames return HTTP 502.
+
+
+
 ## [2026-11-27] Emergency Fleet Shutdown & Environment NIM Key Physical Isolation
 Files changed:
 - `Desktop-5080 (Production Host 1)`:
