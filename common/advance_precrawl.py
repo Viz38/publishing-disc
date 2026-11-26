@@ -242,6 +242,12 @@ def fetch_domains_for_sheet(
     key_manager: Optional[TracxnKeyManager] = None,
     shared_exclusion_set: Optional[Set[str]] = None
 ) -> List[List[str]]:
+    s_name = sheet_id
+    for ts in TARGET_SHEETS:
+        if ts.get("id") == sheet_id:
+            s_name = ts.get("name", sheet_id)
+            break
+
     km = key_manager or TracxnKeyManager()
     gc = get_gspread_client()
     sh = retry_call(lambda: gc.open_by_key(sheet_id))
