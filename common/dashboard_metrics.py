@@ -142,6 +142,32 @@ def extract_eligible_domain_records(
             pf_name,
             pf_id,
         ])
+
+    # Autonomous Cache-Union Fallback: Ensure any completed eligible records in cache_map
+    # are captured even if rows passed from Google Sheets was truncated or cleared.
+    if cache_map:
+        for dom_key, c_rec in cache_map.items():
+            if not isinstance(c_rec, dict):
+                continue
+            norm_d = normalize_domain(dom_key)
+            if not norm_d or norm_d in seen:
+                continue
+            cf_if = str(c_rec.get("cf_if_status") or "").strip().upper()
+            if_pf = str(c_rec.get("if_pf_status") or "").strip().upper()
+            pf_name = str(c_rec.get("final_pub_funnel_name") or "").strip()
+            if cf_if == "DONE" and if_pf == "DONE" and pf_name.lower().startswith("publishing funnel"):
+                seen.add(norm_d)
+                dom = str(c_rec.get("domain") or dom_key).strip()
+                prof_id = str(c_rec.get("domain_profile_id") or c_rec.get("profile_id") or "").strip()
+                pf_id = str(c_rec.get("final_pub_funnel_id") or "").strip()
+                if not pf_id and pf_name and name_to_id_map and pf_name in name_to_id_map:
+                    pf_id = name_to_id_map[pf_name]
+                records.append([
+                    dom,
+                    prof_id,
+                    pf_name,
+                    pf_id,
+                ])
     return records
 
 

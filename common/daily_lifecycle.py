@@ -209,6 +209,7 @@ def _read_rows_for_snapshot(
     sheet_id: Optional[str],
     sheet_name: str,
 ) -> List[List[str]]:
+    local_rows = load_local_sheet_rows(base_dir)
     rows: List[List[str]] = []
     if not is_csv_only_mode(base_dir) and sync_gc is not None and sheet_id:
         try:
@@ -220,8 +221,17 @@ def _read_rows_for_snapshot(
         except Exception as e:
             logger.warning(f"GSheet read failed during midnight snapshot ({sheet_id}); falling back to local_sheet.csv: {e}")
 
-    if not rows:
-        rows = load_local_sheet_rows(base_dir)
+    # Prioritize local_sheet.csv if Google Sheet writebacks were throttled or truncated
+    if len(local_rows) > len(rows):
+        if rows:
+            logger.info(
+                f"ℹ️ Google Sheet returned {len(rows)} rows, but local_sheet.csv has {len(local_rows)} rows. "
+                "Using complete local_sheet.csv for snapshot."
+            )
+        rows = local_rows
+    elif not rows:
+        rows = local_rows
+
     return rows
 
 
@@ -242,6 +252,13 @@ def snapshot_sheet_before_clear(
     rows = _read_rows_for_snapshot(base_dir, sync_gc=sync_gc, sheet_id=sheet_id, sheet_name=sheet_name)
     if not rows and cache_map:
         rows = [[dom] + [""] * 56 for dom in cache_map.keys()]
+
+    # If rows has fewer items than cache_map, synthesize any missing domains from cache_map into rows
+    if cache_map and len(rows) < len(cache_map):
+        existing_doms = {str(r[0]).strip().lower() for r in rows if r and str(r[0] or "").strip()}
+        for dom in cache_map.keys():
+            if dom.strip().lower() not in existing_doms:
+                rows.append([dom] + [""] * 56)
 
     eligible_recs = extract_eligible_domain_records(rows, cache_map=cache_map)
     gemini_ran_count = count_gemini_ran_from_rows_and_cache(rows, cache_map=cache_map)
@@ -384,8 +401,22 @@ def get_eligible_domains_payload(
     date_param: Optional[str] = None,
 ) -> Dict[str, Any]:
     target_date = date_param or get_now_ist().strftime("%Y-%m-%d")
-    snap_meta = load_sheet_daily_metrics_snapshot(base_dir, target_date) if date_param else None
-    if date_param and snap_meta is not None:
+    snap_meta = load_sheet_daily_metrics_snapshot(base_dir, target_date)
+    # If requested date has no snapshot or 0 records, check adjacent date (e.g. midnight rollover)
+    if snap_meta is None or snap_meta.get("count", 0) == 0:
+        try:
+            cur_dt = datetime.datetime.strptime(target_date, "%Y-%m-%d")
+            for delta_days in (-1, 1):
+                alt_date = (cur_dt + datetime.timedelta(days=delta_days)).strftime("%Y-%m-%d")
+                alt_snap = load_sheet_daily_metrics_snapshot(base_dir, alt_date)
+                if alt_snap and alt_snap.get("count", 0) > 0:
+                    snap_meta = alt_snap
+                    target_date = alt_date
+                    break
+        except Exception:
+            pass
+
+    if date_param and snap_meta is not None and snap_meta.get("count", 0) > 0:
         return {
             "sheet": os.path.basename(os.path.abspath(base_dir)),
             "date": target_date,

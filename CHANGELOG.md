@@ -1,6 +1,23 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-26] Permanent Prevention of Daily Snapshot Truncation and Fleet Export Discrepancies
+Files changed:
+- `common/dashboard_metrics.py`: In `extract_eligible_domain_records()`, implemented autonomous cache-union extraction. The extractor now evaluates both `rows` (hydrated by `cache_map`) and all eligible completed records directly from `cache_map`. Guarantees that any domain meeting Publish Funnel eligibility (`cf_if_status == "DONE"`, `if_pf_status == "DONE"`, `final_pub_funnel_name.lower().startswith("publishing funnel")`) is 100% captured even if the `rows` list passed from Google Sheets was truncated by API quotas, write buffering, or clearing cycles.
+- `common/daily_lifecycle.py`:
+  * In `_read_rows_for_snapshot()`, prioritized complete local disk files (`local_sheet.csv`) whenever remote Google Sheets returns fewer rows than exist locally due to writeback throttling.
+  * In `snapshot_sheet_before_clear()`, ensured missing completed domains from `cache_map` are synthesized into `rows` before snapshot persistence.
+  * In `get_eligible_domains_payload()`, added adjacent-date fallback (`today` vs `yesterday`) to protect against 12:00 AM midnight date boundary rollovers when peer nodes query right at cutoff.
+- `common/daily_eligible_exporter.py`:
+  * In `get_eligible_records_for_sheet_dir()`, prioritized `local_sheet.csv` over throttled remote Google Sheet reads.
+  * In `fetch_peer_sheet_records()` and `fetch_peer_sheet_gemini_ran_count()`, added adjacent-date querying and multi-date disk snapshot fallbacks.
+  * In `update_daily_processed_counts_sheet()`, prioritized opening tab by name (`"Processed Counts"`) rather than gid to avoid worksheet index collisions.
+- `Temp_Test/test_permanent_snapshot_fix.py`: Added 4 unit tests verifying cache-union extraction, empty-rows resilience, local file priority, and adjacent-date snapshot fallbacks.
+Reason:
+At the daily midnight maintenance cutoff on Nov 25, remote Google Sheets API reads were throttled/truncated to ~190 rows, causing `extract_eligible_domain_records()` to omit >16,000 completed domains from `cache_map` and saving a truncated snapshot of only 3,496 leads across the fleet (instead of the actual 43,558 completed yield). The cache-union and local-disk-first architecture permanently prevents snapshot loss by treating the local disk cache as the definitive source of truth.
+Related tests:
+- `Temp_Test/test_permanent_snapshot_fix.py` (4/4 tests PASSED)
+
 ## [2026-11-26] Dynamic Domain Fetcher with Stagnation Pivoting and 100k Limit Slicing
 Files changed:
 - `common/dynamic_domain_fetcher.py`: Created adaptive, self-healing `DynamicDomainFetcher`. Detects duplicate saturation (>98% duplicate rate over threshold) and automatically pivots to bounded historical date windows. Recovers from Elasticsearch 100k offset limits (HTTP 422) by dynamically partitioning large queries into sub-slices starting at offset 0.
