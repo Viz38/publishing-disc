@@ -1,6 +1,29 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-26] Fleet Budget Restructuring & NIM Key Partitioning
+Files changed:
+- `CF_IF Engine - Input Payload` (Sheets 1–4): Set Column F budget to 0 for all non-P0 filters. Main fleet now runs strictly P0 filters totaling 1,995 domains/day (Sheet 4), adhering to the <=5,000 domains overall cap. Backed up old budgets to `Old Budget_Before_NIM_Split`.
+- `CF_IF Engine - Input Payload` (NIM Sheet `1XT_GlvBf2BGO4cEiskpUsK2Fzc5PzB-tcRHFMubDXbk`): Migrated 49 candidate filters (43,442 budget) cleanly into rows 5–53, establishing 50 active filters totaling 44,442 domains/day.
+- `common/key_manager.py`: Added `get_fleet_role()` and `filter_keys_for_fleet_role()`. Main fleet (`FLEET_ROLE="main"`) is strictly allocated the first 10 NIM keys (sharded across Sheets 1–4: 3, 3, 2, 2 keys), while the NIM fleet (`FLEET_ROLE="nim"`) receives all remaining 39 keys.
+- `.env`, `.env.example`: Added `FLEET_ROLE="main"` and `MAIN_FLEET_MAX_NIM_KEYS="10"`.
+Reason:
+Restructure fleet workload so high-volume discovery executes on Desktop-9048 (NIM fleet) with 39 dedicated keys, while the main fleet focuses exclusively on P0 leads capped at <=5k domains with 10 keys.
+Related tests:
+- `Temp_Test/test_nim_key_fleet_allocation.py` (2/2 tests PASSED)
+- `Temp_Test/clean_nim_payload_update.py` (Verification PASSED: 50 active filters, 44,442 budget)
+
+## [2026-11-26] Configurable NVIDIA NIM Support for Feed Prediction (`NIM-FeedPrediction` Branch Only)
+Files changed:
+- `common/pipeline_engine.py`: Added `Nvidia_Feed_Model = os.getenv("NVIDIA_Feed_MODEL", os.getenv("NVIDIA_FEED_MODEL", "")).strip()`. In `Nvidia_API_ASYNC`, enhanced classification dual-extraction regex to capture feed serial numbers (`feed`, `\d{1,3}`) from reasoning tokens. In `Extract_AI_Engine_Output`, routed feed prediction through `Nvidia_API_ASYNC` when `Nvidia_Feed_Model` is non-empty, falling back to Gemini caching/API only when empty.
+- `Sheet1/config.py`, `Sheet2/config.py`, `Sheet3/config.py`, `Sheet4/config.py`: Added `Nvidia_Feed_Model: str = os.getenv("NVIDIA_Feed_MODEL", os.getenv("NVIDIA_FEED_MODEL", "")).strip()`.
+- `.env`, `.env.example`: Added `NVIDIA_Feed_MODEL="moonshotai/kimi-k3.1-pro"`.
+Reason:
+Enable end-to-end LLM inference via NVIDIA NIM in the `NIM-FeedPrediction` branch by making the feed prediction model configurable via `NVIDIA_Feed_MODEL` (configured to `moonshotai/kimi-k3.1-pro`), falling back to Gemini only when the variable is empty.
+Related tests:
+- `Temp_Test/test_feed_nim_routing.py` (4/4 tests PASSED)
+
+
 ## [2026-11-26] Optimize Dynamic Domain Fetcher for Deep Historical Lead Harvesting
 Files changed:
 - `common/dynamic_domain_fetcher.py`: In Phase 2 temporal windows, enforced `createdDate` DESC sort (`order: "DESC", sortField: "createdDate"`) to prioritize the newest uncollected leads and bypass stagnant historical offsets. Raised `stagnation_item_threshold` default from 500 to 2,500 items.

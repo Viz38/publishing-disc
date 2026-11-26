@@ -828,6 +828,36 @@ class NIMKeyManager:
         return cls(keys=sharded)
 
 
+def get_fleet_role() -> str:
+    """Detects fleet role ('main' or 'nim') from FLEET_ROLE env or hostname."""
+    role = os.getenv("FLEET_ROLE", "").strip().lower()
+    if role in ("main", "nim"):
+        return role
+    hostname = os.uname().nodename.lower()
+    if any(tag in hostname for tag in ("9048", "048")):
+        return "nim"
+    if any(tag in hostname for tag in ("5080", "508", "5321", "532")):
+        return "main"
+    return ""
+
+
+def filter_keys_for_fleet_role(valid_keys: List[str]) -> List[str]:
+    """
+    Partitions NIM keys according to fleet allocation:
+    - Main fleet: receives the first MAIN_FLEET_MAX_NIM_KEYS keys (default 10).
+    - NIM fleet: receives all remaining keys (e.g. 39 keys out of 49).
+    """
+    role = get_fleet_role()
+    max_main_keys_raw = os.getenv("MAIN_FLEET_MAX_NIM_KEYS", "10").strip()
+    max_main_keys = int(max_main_keys_raw) if max_main_keys_raw.isdigit() else 10
+
+    if role == "main":
+        return valid_keys[:max_main_keys]
+    elif role == "nim":
+        return valid_keys[max_main_keys:]
+    return valid_keys
+
+
 def get_sharded_nim_keys(
     sheet_num: int,
     total_sheets: int = 4,
@@ -864,6 +894,9 @@ def get_sharded_nim_keys(
     if not valid_candidates:
         valid_candidates = [k for k in raw_keys if k]
 
+    # Partition based on fleet role (main fleet gets 10 keys; NIM fleet gets remaining 39 keys)
+    valid_candidates = filter_keys_for_fleet_role(valid_candidates)
+
     # Interleaved round-robin distribution:
     # Sheet 1 gets indices 0, 4, 8, ...
     # Sheet 2 gets indices 1, 5, 9, ...
@@ -898,5 +931,9 @@ def get_all_nim_keys(
         k for k in raw_keys
         if k and k not in bad_keys and not NIMKeyManager.is_key_expired_or_invalid(k)
     ]
-    return valid_candidates if valid_candidates else [k for k in raw_keys if k]
+    if not valid_candidates:
+        valid_candidates = [k for k in raw_keys if k]
+
+    # Partition based on fleet role (main fleet gets 10 keys; NIM fleet gets remaining 39 keys)
+    return filter_keys_for_fleet_role(valid_candidates)
 
