@@ -172,7 +172,7 @@ class DynamicDomainFetcher:
         self,
         key_manager: Any,
         post_fn: Optional[Callable[..., Any]] = None,
-        stagnation_item_threshold: int = 500,
+        stagnation_item_threshold: int = 2500,
         max_window_coverage: int = 85000,
         base_url: str = TRACXN_API_URL,
     ):
@@ -360,6 +360,7 @@ class DynamicDomainFetcher:
                 "min": w_start.strftime("%Y-%m-%dT%H:%M:%S+00:00"),
                 "max": w_end.strftime("%Y-%m-%dT%H:%M:%S+00:00"),
             }
+            win_payload["sort"] = [{"order": "DESC", "sortField": "createdDate"}]
             win_payload["from"] = 0
             win_payload["size"] = page_size
 

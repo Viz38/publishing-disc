@@ -381,7 +381,7 @@ def fetch_domains_for_sheet(
 
             fetcher = DynamicDomainFetcher(
                 key_manager=km,
-                stagnation_item_threshold=500,
+                stagnation_item_threshold=2500,
                 max_window_coverage=85000,
             )
             needed_for_budget = effective_budget - domain_added_count

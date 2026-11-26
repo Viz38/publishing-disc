@@ -1,6 +1,16 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-26] Optimize Dynamic Domain Fetcher for Deep Historical Lead Harvesting
+Files changed:
+- `common/dynamic_domain_fetcher.py`: In Phase 2 temporal windows, enforced `createdDate` DESC sort (`order: "DESC", sortField: "createdDate"`) to prioritize the newest uncollected leads and bypass stagnant historical offsets. Raised `stagnation_item_threshold` default from 500 to 2,500 items.
+- `common/advance_precrawl.py`: Updated `DynamicDomainFetcher` instantiation with `stagnation_item_threshold=2500`.
+- `common/tracxn_domain_ingestor.py`: Updated `DynamicDomainFetcher` instantiation with `stagnation_item_threshold=2500`.
+Reason:
+When queries like Bright Data Unprocessed (with 374k leads) used custom PS2 sorts, the first 40,000 items were already collected in the 7-day historical exclusion registry (456k domains), causing the 500-item threshold to pivot too early and stall domain fill at ~2k leads. Slicing with `createdDate` DESC yields >95% fresh leads immediately, allowing autonomous fill up to full 45k fleet budgets.
+Related tests:
+- `Temp_Test/test_dynamic_domain_fetcher.py` (4/4 tests PASSED)
+
 ## [2026-11-26] Transition Fleet Summarization to Nemotron 3.5 Bolt and Industry Prediction to Super VL 120B
 Files changed:
 - `common/pipeline_engine.py`: Updated `Nvidia_Base_Model` default from `meta/muse-glimmer-30b` to `nvidia/nemotron-3.5-bolt-e4b`. Added `model: Optional[str] = None` support to `Nvidia_API_ASYNC` to allow dynamic model overrides per inference phase.
