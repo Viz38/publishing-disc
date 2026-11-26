@@ -501,7 +501,7 @@ TRACXN_KEY_MANAGER = TracxnKeyManager()
 TRACXN_CLIENT = TracxnClient(token_rotator=TRACXN_KEY_MANAGER)
 BACKLOG_MANAGER = BacklogManager()
 
-Nvidia_Base_Model  = "meta/muse-glimmer-30b"
+Nvidia_Base_Model  = os.getenv("NVIDIA_BASE_MODEL", "nvidia/nemotron-3.5-bolt-e4b")
 Nvidia_Endpoint = "https://integrate.api.nvidia.com/v1/chat/completions"
 
 # Dedicated sharded NIM API keys for Sheet 1 (sharded across 4 sheets fleet-wide = zero key collision)
@@ -1016,7 +1016,13 @@ def store_cached_nim_summary(content_hash: str, summary: str, max_entries: int =
                 _NIM_CONTENT_HASH_CACHE.pop(k, None)
         _NIM_CONTENT_HASH_CACHE[content_hash] = summary
 
-async def Nvidia_API_ASYNC(promptMsg, token_rotator: NIMKeyManager = None, max_attempts: int = None, session: aiohttp.ClientSession = None):
+async def Nvidia_API_ASYNC(
+    promptMsg,
+    token_rotator: NIMKeyManager = None,
+    max_attempts: int = None,
+    session: aiohttp.ClientSession = None,
+    model: Optional[str] = None,
+):
     global _nim_use_unverified_ssl
     if is_pre_cutoff_window() or is_5am_ist_cutoff():
         logging.info("⏰ [Pre-Cutoff Wind-Down] Skipping outbound NVIDIA NIM API call during 11:00-11:30 PM window.")
@@ -1033,7 +1039,7 @@ async def Nvidia_API_ASYNC(promptMsg, token_rotator: NIMKeyManager = None, max_a
         max_attempts = min(4, int(tt)) if isinstance(tt, (int, float)) and int(tt) > 0 else 4
 
     payload = {
-        "model": Nvidia_Base_Model,
+        "model": model or Nvidia_Base_Model,
         "messages": [
             {"role": "system", "content": system_instruction},
             {"role": "user", "content": str(promptMsg)}
