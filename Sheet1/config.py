@@ -42,7 +42,8 @@ class Settings:
     BATCH_SIZE: int = int(os.getenv("BATCH_SIZE", "100"))
 
     # Nvidia NIM Configuration
-    Nvidia_Base_Model: str = os.getenv("NVIDIA_BASE_MODEL", "meta/muse-glimmer-30b")
+    Nvidia_Base_Model: str = os.getenv("NVIDIA_BASE_MODEL", "nvidia/nemotron-3.5-bolt-e4b")
+    Nvidia_IF_Model: str = os.getenv("NVIDIA_IF_MODEL", "nvidia/nemotron-3.5-super-vl-120b-a12b")
     Nvidia_Endpoint: str = os.getenv("NVIDIA_ENDPOINT", "https://integrate.api.nvidia.com/v1/chat/completions")
     NIM_API_KEYS: List[str] = field(default_factory=lambda: [
         k.strip() for k in os.getenv("NIM_API_KEYS", "").split(",") if k.strip()

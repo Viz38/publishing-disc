@@ -506,7 +506,8 @@ TRACXN_KEY_MANAGER = TracxnKeyManager()
 TRACXN_CLIENT = TracxnClient(token_rotator=TRACXN_KEY_MANAGER)
 BACKLOG_MANAGER = BacklogManager()
 
-Nvidia_Base_Model  = "meta/muse-glimmer-30b"
+Nvidia_Base_Model  = os.getenv("NVIDIA_BASE_MODEL", "nvidia/nemotron-3.5-bolt-e4b")
+Nvidia_IF_Model = os.getenv("NVIDIA_IF_MODEL", "nvidia/nemotron-3.5-super-vl-120b-a12b")
 Nvidia_Endpoint = "https://integrate.api.nvidia.com/v1/chat/completions"
 
 # Dedicated sharded NIM API keys for Sheet 1 (uses FLEET_SHEETS; 100% of keys when FLEET_SHEETS=1)
@@ -1029,6 +1030,7 @@ async def Nvidia_API_ASYNC(
     system_instruction: Optional[str] = None,
     max_tokens: Optional[int] = None,
     is_classification: bool = False,
+    model: Optional[str] = None,
 ):
     global _nim_use_unverified_ssl
     if is_pre_cutoff_window() or is_5am_ist_cutoff():
@@ -1060,7 +1062,7 @@ async def Nvidia_API_ASYNC(
         max_attempts = min(5, int(tt)) if isinstance(tt, (int, float)) and int(tt) > 0 else 5
 
     payload = {
-        "model": Nvidia_Base_Model,
+        "model": model or Nvidia_Base_Model,
         "messages": [
             {"role": "system", "content": system_instruction},
             {"role": "user", "content": str(promptMsg)}
@@ -4024,7 +4026,7 @@ async def Extract_AI_Engine_Output(
             input_data_for_if = Utility_Replace_Response(domain, input_data_for_if, replacable_char_Domain)
 
             try:
-                # NIM-Only Industry Funnel Prediction via meta/muse-glimmer-30b
+                # NIM-Only Industry Funnel Prediction via nvidia/nemotron-3.5-super-vl-120b-a12b
                 # Uses dedicated IF key manager (token_rotator_if), retries within NIM pool on 429/timeouts, ZERO Gemini fallback
                 rotator_if = token_rotator_if or token_rotator
                 nim_if_raw = await Nvidia_API_ASYNC(
@@ -4034,13 +4036,14 @@ async def Extract_AI_Engine_Output(
                     session=session,
                     is_classification=True,
                     max_tokens=1000,
+                    model=Nvidia_IF_Model,
                 )
                 if isinstance(nim_if_raw, dict):
                     output_data_if = nim_if_raw.get("output", "")
                 else:
                     output_data_if = str(nim_if_raw or "").strip()
-                logging.info(f"NIM Glimmer IF prediction raw output for {domain}: '{output_data_if}'")
-                output_data_if_llm_model = Nvidia_Base_Model
+                logging.info(f"NIM Super-VL-120B IF prediction raw output for {domain}: '{output_data_if}'")
+                output_data_if_llm_model = Nvidia_IF_Model
             except Exception as error:
                 logging.error(f"Issue during NIM IF Prediction for domain {domain}: {error}")
                 output_data_if = ""
