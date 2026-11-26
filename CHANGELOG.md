@@ -1,6 +1,28 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-27] Emergency Fleet Shutdown & Environment NIM Key Physical Isolation
+Files changed:
+- `Desktop-5080 (Production Host 1)`:
+  - Updated `/home/tracxn-ds-508/Desktop/publishing-disc/.env` to strictly contain the first 10 unique NIM keys (`NIM_API_KEYS`).
+  - Stopped and disabled user systemd services `discovery-cf1.service` and `discovery-cf2.service` (`systemctl --user stop/disable`).
+  - Backed up crontab to `~/crontab.bak` and cleared crontab (`crontab -r`).
+  - Terminated all active `main.py`, `uvicorn`, and `runner.sh` processes; created `.stop_requested` guard.
+- `Desktop-5321 (Production Host 2)`:
+  - Updated `/home/tracxn-ds-532/Desktop/publishing-disc/.env` to strictly contain the first 10 unique NIM keys (`NIM_API_KEYS`).
+  - Stopped and disabled user systemd services `discovery-cf3.service` and `discovery-filterv2.service` (`systemctl --user stop/disable`).
+  - Backed up crontab to `~/crontab.bak` and cleared crontab (`crontab -r`).
+  - Terminated all active `main.py`, `uvicorn`, and `runner.sh` processes; created `.stop_requested` guard.
+- `Desktop-9048 (Testing Fleet Host)`:
+  - Updated `/home/tracxn-ds-048/Desktop/publishing-disc/.env` to strictly contain the remaining 40 unique NIM keys (`NIM_API_KEYS`), ensuring zero overlap with Main Fleet.
+  - Backed up crontab to `~/crontab.bak` and cleared crontab (`crontab -r`).
+  - Terminated all active `main.py`, ingestion, and background processes; created `.stop_requested` guard.
+Reason:
+User emergency shutdown directive to halt all fleet execution and daemons overnight, and physically isolate the 50 NIM keys (10 for Main Fleet, 40 for Testing Fleet) in the respective `.env` files with zero code modification.
+Related verification:
+- `Temp_Test/verify_everything_stopped.py` (Confirmed `ALL DEAD` across Desktop-5080, Desktop-5321, and Desktop-9048).
+
+
 ## [2026-11-26] Fix Testing Fleet Waterfall Capping & Completed Count Alignment
 Files changed:
 - `status_dashboard.gs`:
