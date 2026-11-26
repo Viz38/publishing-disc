@@ -1,6 +1,20 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-26] Synchronize Direct Live Fleet Counts to Overview Dashboard & Fix Apps Script Token Lookup
+Files changed:
+- `status_dashboard.gs`: Removed reliance on `PropertiesService.getScriptProperties().getProperty('SERVICE_AUTH_TOKEN')` and hardcoded `STATUS_CONFIG.AUTH_TOKEN` (`'Tracxn@SR'`) across all API fetch points. Eliminates 401 Unauthorized errors caused by stale/missing Script Properties. Synchronized with `Temp_Test/deploy_clasp/status_dashboard.gs` and deployed cleanly via `clasp push --force`.
+- `Google Spreadsheet (1eVKXWnGNsHp8WmoqXo8Pz-mB6f7V7xGleMfd7CcahSA)`: Deleted lingering/recreated `"Status"` tab via Sheets API; verified workbook strictly contains only 2 sheets: `"Production Fleet"` (`1570465616`) and `"Testing Fleet"` (`2106361058`).
+- `Temp_Test/render_both_dashboards.py`: Successfully refreshed both `"Production Fleet"` and `"Testing Fleet"` dashboards with live API data from all 5 endpoints:
+  - Total Main Fleet processed: **11,858 / 18,355 domains** (64.6% progress; Sheet 1: 2,712, Sheet 2: 1,601, Sheet 3: 5,611, Sheet 4: 1,934).
+  - NIM Fleet 1 (Desktop-9048): **42 / 40,420 domains** (TC: 22,844 scraped, NIM: 439 summarized, 91 active workers).
+- `Temp_Test/test_dashboard_optimization.py`: Verified all 8 unit tests passed cleanly (8/8 PASSED).
+Reason:
+Ensure that dashboard refresh reflects true ground-truth fleet counts and workbook maintains strict 2-sheet structure without authorization failures.
+Related tests:
+- `Temp_Test/test_dashboard_optimization.py` (8/8 tests PASSED)
+
+
 ## [2026-11-26] Enforce Strict 2-Sheet Workbook Layout: Delete Extraneous 'Status' Tab
 Files changed:
 - `Google Spreadsheet (1eVKXWnGNsHp8WmoqXo8Pz-mB6f7V7xGleMfd7CcahSA)`: Issued `deleteSheet` API call to delete extraneous tab `sheetId: 1561339830` ("Status"). The workbook now strictly contains only 2 sheets: `"Production Fleet"` (`sheetId: 1570465616`) and `"Testing Fleet"` (`sheetId: 2106361058`).
