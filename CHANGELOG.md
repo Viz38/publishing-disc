@@ -1,6 +1,17 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-26] Enforce Strict 2-Sheet Workbook Layout: Delete Extraneous 'Status' Tab
+Files changed:
+- `Google Spreadsheet (1eVKXWnGNsHp8WmoqXo8Pz-mB6f7V7xGleMfd7CcahSA)`: Issued `deleteSheet` API call to delete extraneous tab `sheetId: 1561339830` ("Status"). The workbook now strictly contains only 2 sheets: `"Production Fleet"` (`sheetId: 1570465616`) and `"Testing Fleet"` (`sheetId: 2106361058`).
+- `status_dashboard.gs`: Added automatic cleanup guard in `renderMainFleetDashboard` to detect and delete any legacy `"Status"` tab if encountered, preventing old tabs from lingering. Deployed to Apps Script (`11P99Kmn-Eg1m4dylSR924ekGcY0OMWcsVYiJrDo48ThEAZD4ynBsaqex`) via `clasp push --force`.
+- `Temp_Test/test_dashboard_optimization.py`: Added unit test `test_legacy_status_sheet_cleanup_guard_present` (10/10 tests PASSED).
+Reason:
+Ensure the Overview Dashboard workbook contains strictly the two designated production and testing tabs without legacy tab duplication.
+Related tests:
+- `Temp_Test/test_dashboard_optimization.py` (8/8 tests PASSED)
+- `Temp_Test/test_dashboard_metrics_hydration.py` (2/2 tests PASSED)
+
 ## [2026-11-26] Enable Daemon Status API Hydration from Discovery Cache & Eliminate Zero-Count Overwrite in Apps Script
 Files changed:
 - `common/dashboard_metrics.py`: Updated `build_sheet_status_payload()` to automatically hydrate cumulative phase counts directly from `discovery_cache.csv` whenever `progress_total == 0` or `active == False`. Guarantees that `/discovery/status` HTTP endpoints on all hosts continuously serve true completed numbers (Sheet 1: 2,712/3,740, Sheet 2: 1,601/2,002, Sheet 4: 1,934/3,383) rather than resetting to `0 / 0` when pipelines exit.
