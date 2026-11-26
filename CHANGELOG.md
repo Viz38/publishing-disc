@@ -1,6 +1,20 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-26] Fix Testing Fleet Waterfall Capping & Completed Count Alignment
+Files changed:
+- `status_dashboard.gs`:
+  - Fixed Tracxn movement denominator and ceiling in `renderTestingFleetDashboard`: In CF->IF mode (where Feed predictions are 0), `tracxnResolved` is now capped against `nimIfResolved` instead of being artificially crushed to 0 by `nimFeedResolved`. Tracxn Movements now accurately shows `42 / 44` instead of `0 / 0`.
+  - Fixed Row 10 (Total Row) `Completed` count: Changed fallback to use `(totalEligibleCompleted > 0) ? totalEligibleCompleted : totalCurrent`, resolving the discrepancy where Row 9 showed 42 while Row 10 showed 0.
+  - Synchronized with `Temp_Test/deploy_clasp/status_dashboard.gs` and deployed via `clasp push --force`.
+- `Temp_Test/render_both_dashboards.py` & `Temp_Test/render_testing_fleet_sheet.py`: Updated `trx_den` fallback calculation to use `nim_if` when `nim_feed` is 0.
+- `Google Spreadsheet (1eVKXWnGNsHp8WmoqXo8Pz-mB6f7V7xGleMfd7CcahSA)`: Updated live `"Testing Fleet"` dashboard with exact matched counts (`42 / 44` movements, `42` total completed).
+Reason:
+Ensure the Testing Fleet table displays logically consistent stage progress and prevents zero-capping when downstream feed predictions are not applicable in CF->IF mode.
+Related tests:
+- `Temp_Test/test_dashboard_optimization.py` (8/8 tests PASSED)
+
+
 ## [2026-11-26] Synchronize Direct Live Fleet Counts to Overview Dashboard & Fix Apps Script Token Lookup
 Files changed:
 - `status_dashboard.gs`: Removed reliance on `PropertiesService.getScriptProperties().getProperty('SERVICE_AUTH_TOKEN')` and hardcoded `STATUS_CONFIG.AUTH_TOKEN` (`'Tracxn@SR'`) across all API fetch points. Eliminates 401 Unauthorized errors caused by stale/missing Script Properties. Synchronized with `Temp_Test/deploy_clasp/status_dashboard.gs` and deployed cleanly via `clasp push --force`.
