@@ -1,14 +1,16 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
-## [2026-11-26] Eliminate Apps Script Trigger Execution Timeouts and 502 Hangs in Status Dashboard
+## [2026-11-26] Eliminate Apps Script Trigger Execution Timeouts, Restricted User-Agent Headers, and 502 Hangs in Status Dashboard
 Files changed:
 - `status_dashboard.gs`:
-  1. Pruned `STATUS_CONFIG.TARGET_SHEETS` to strictly contain only the single active production endpoint per sheet (`5080-sheet1`, `5080-sheet2`, `5321-sheet3`, `5321-sheet4`), removing dead fallback hosts (`5321-sheet1`, `5321-sheet2`, `5080-sheet3`, `5080-sheet4`) that were incurring 30-second Cloudflare 502 connection hangs (~120s total per cycle).
-  2. Streamlined `needsDynamicAudit` condition in both `renderMainFleetDashboard` and `renderTestingFleetDashboard` to `(!bestData && target.sheetId)`. Eliminates redundant, heavy `auditSheetDynamically` executions (which previously pulled 1.2M+ cells on the 40k row NIM sheet and hundreds of thousands of cells across main fleet sheets on every run).
-  3. Reduced Apps Script routine execution time from >360s (Google timeout kill) to ~2s.
+  1. Removed restricted header `'User-Agent'` across all `UrlFetchApp.fetch` calls. In Google Apps Script runtime, setting `'User-Agent'` in request headers throws an `ArgumentException: Header "User-Agent" is not allowed`, which caused all API queries to silently abort into `catch (e)`, falsely painting all physical hosts and sheets as `🔴 OFFLINE`.
+  2. Pruned `STATUS_CONFIG.TARGET_SHEETS` to strictly contain only the single active production endpoint per sheet (`5080-sheet1`, `5080-sheet2`, `5321-sheet3`, `5321-sheet4`), removing dead fallback hosts (`5321-sheet1`, `5321-sheet2`, `5080-sheet3`, `5080-sheet4`) that were incurring 30-second Cloudflare 502 connection hangs (~120s total per cycle).
+  3. Streamlined `needsDynamicAudit` condition in both `renderMainFleetDashboard` and `renderTestingFleetDashboard` to `(!bestData && target.sheetId)`. Eliminates redundant, heavy `auditSheetDynamically` executions (which previously pulled 1.2M+ cells on the 40k row NIM sheet and hundreds of thousands of cells across main fleet sheets on every run).
+  4. Fixed `current` count assignment in Table 1 for both Main Fleet and NIM Fleet: falls back to `completedCount` when `eligibleCompletedCount` is unpopulated/zero (`(eligibleCompletedCount > 0) ? eligibleCompletedCount : completedCount`).
+  5. Reduced Apps Script routine execution time from >360s (Google timeout kill) to ~2s.
 - Pushed updated container-bound script directly to Google Apps Script (`11P99Kmn-Eg1m4dylSR924ekGcY0OMWcsVYiJrDo48ThEAZD4ynBsaqex`) via `clasp push --force`.
-- `Temp_Test/test_dashboard_optimization.py`: Added 3 unit tests verifying single active endpoint per sheet, proper dynamic audit guards, and JavaScript syntax cleanliness.
+- `Temp_Test/test_dashboard_optimization.py`: Added 5 unit tests verifying single active endpoint per sheet, proper dynamic audit guards, elimination of restricted User-Agent headers, completed count fallback, and JavaScript syntax cleanliness.
 - `Temp_Test/generate_live_html_and_screenshots.py`: Generated live HTML representations and captured fresh Playwright visual confirmation snapshots (`status_dashboard.png` and `testing_fleet_dashboard.png`).
 Reason:
 The Google Apps Script 15-minute trigger was timing out after exceeding the 6-minute Google execution limit, causing the dashboard to freeze, paint false offline statuses, or fail to show real-time processing.
