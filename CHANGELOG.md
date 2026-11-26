@@ -5,7 +5,7 @@ All notable changes to this project are documented here.
 Files changed:
 - `common/pipeline_engine.py`: Updated `Nvidia_Base_Model` default from `meta/muse-glimmer-30b` to `nvidia/nemotron-3.5-bolt-e4b`. Added `model: Optional[str] = None` support to `Nvidia_API_ASYNC` to allow dynamic model overrides per inference phase.
 - `Sheet1/config.py`, `Sheet2/config.py`, `Sheet3/config.py`, `Sheet4/config.py`: Updated `Nvidia_Base_Model` setting default to `nvidia/nemotron-3.5-bolt-e4b`.
-- `.env`: Updated `NVIDIA_BASE_MODEL=nvidia/nemotron-3.5-bolt-e4b`.
+- `.env`, `.env.example`: Added `NVIDIA_BASE_MODEL=nvidia/nemotron-3.5-bolt-e4b` and `NVIDIA_IF_MODEL=nvidia/nemotron-3.5-super-vl-120b-a12b` so that in future for industry only if we want to change the model again, it is easier.
 - `NIM-FeedPrediction` branch (`common/pipeline_engine.py`): Updated NIM Industry Prediction model to `nvidia/nemotron-3.5-super-vl-120b-a12b` with reasoning tokens extraction and safety fallbacks.
 - `Temp_Test/test_model_configuration.py`: Added unit tests verifying model configuration across all configs and API signature.
 Reason:
