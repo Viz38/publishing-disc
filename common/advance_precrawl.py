@@ -190,12 +190,12 @@ def initialize_fleet_exclusion_pool(gc=None) -> Set[str]:
 
     for s_target in FLEET_TARGET_SHEETS:
         try:
-            target_sh = gc.open_by_key(s_target["id"])
+            target_sh = retry_call(lambda: gc.open_by_key(s_target["id"]), max_retries=3, delay=2)
             try:
-                target_db_ws = target_sh.worksheet("CF_IF_Engine_Database")
+                target_db_ws = retry_call(lambda: target_sh.worksheet("CF_IF_Engine_Database"), max_retries=2, delay=1)
             except Exception:
-                target_db_ws = target_sh.get_worksheet(0)
-            col_a_vals = target_db_ws.col_values(1)
+                target_db_ws = retry_call(lambda: target_sh.get_worksheet(0), max_retries=2, delay=1)
+            col_a_vals = retry_call(lambda: target_db_ws.col_values(1), max_retries=3, delay=2)
             for d in col_a_vals[2:]:
                 d_clean = d.strip().lower()
                 if d_clean:
@@ -244,9 +244,9 @@ def fetch_domains_for_sheet(
 ) -> List[List[str]]:
     km = key_manager or TracxnKeyManager()
     gc = get_gspread_client()
-    sh = gc.open_by_key(sheet_id)
-    payload_ws = sh.worksheet("CF_IF Engine - Input Payload")
-    payload_rows = payload_ws.get_all_values()
+    sh = retry_call(lambda: gc.open_by_key(sheet_id))
+    payload_ws = retry_call(lambda: sh.worksheet("CF_IF Engine - Input Payload"))
+    payload_rows = retry_call(lambda: payload_ws.get_all_values())
 
     # Calculate total budget from payload tab if target_count is default or None
     # Advance pre-crawl prepares domains for the NEXT day's run (tomorrow in IST)
