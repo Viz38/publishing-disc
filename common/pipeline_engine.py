@@ -508,6 +508,7 @@ BACKLOG_MANAGER = BacklogManager()
 
 Nvidia_Base_Model  = os.getenv("NVIDIA_BASE_MODEL", "nvidia/nemotron-3.5-bolt-e4b")
 Nvidia_IF_Model = os.getenv("NVIDIA_IF_MODEL", "nvidia/nemotron-3.5-super-vl-120b-a12b")
+Nvidia_Feed_Model = os.getenv("NVIDIA_Feed_MODEL", os.getenv("NVIDIA_FEED_MODEL", "")).strip()
 Nvidia_Endpoint = "https://integrate.api.nvidia.com/v1/chat/completions"
 
 # Dedicated sharded NIM API keys for Sheet 1 (uses FLEET_SHEETS; 100% of keys when FLEET_SHEETS=1)
@@ -1128,14 +1129,14 @@ async def Nvidia_API_ASYNC(
                                     final_val = raw_content
                                 elif reasoning:
                                     matches = re.findall(
-                                        r'(?:output|classify|industry|number|is|select|belongs to|category)\s*(?:as|is|to|:)?\s*["\']?(\d{1,2}|MARKED_IRRELEVANT|ESCALATED)["\']?',
+                                        r'(?:output|classify|industry|feed|number|is|select|belongs to|category)\s*(?:as|is|to|:)?\s*["\']?(\d{1,3}|MARKED_IRRELEVANT|ESCALATED)["\']?',
                                         reasoning,
                                         re.IGNORECASE
                                     )
                                     if matches:
                                         final_val = matches[-1]
                                     else:
-                                        trail_m = re.findall(r'\b(\d{1,2}|MARKED_IRRELEVANT|ESCALATED)\b', reasoning[-200:])
+                                        trail_m = re.findall(r'\b(\d{1,3}|MARKED_IRRELEVANT|ESCALATED)\b', reasoning[-200:])
                                         if trail_m:
                                             final_val = trail_m[-1]
                                 if final_val:
@@ -4272,43 +4273,67 @@ async def Extract_AI_Engine_Output(
         
         try:
             try:
-                # output_data_feed = Gemini_API(input_data_for_feed)
-                current_valid_dates = get_valid_dates()
-                use_feed_cache = (
-                    GEMINI_TOKEN == token_for_feed_cache_id 
-                    and clean_date(date_prompt_for_feed_cache_id) in current_valid_dates 
-                    and status_for_feed_cache_id in ("Sucess", "Success")
-                    and base_prompt_for_feed_cache_id
-                )
-                if use_feed_cache:
-                    try:
-                        output_data_feed = await Gemini_API_WITH_CACHE(input_sumry_for_feed, GEMINI_TOKEN, base_prompt_for_feed_cache_id, session=session)
-                    except Exception as e_fcache:
-                        logging.warning(f"⚠️ Feed Prediction Cache failed ({e_fcache}). Seamlessly falling back to direct Gemini_API_ASYNC for {domain}...")
+                if Nvidia_Feed_Model:
+                    rotator_feed = token_rotator_if or token_rotator
+                    nim_feed_raw = await Nvidia_API_ASYNC(
+                        input_data_for_feed,
+                        token_rotator=rotator_feed,
+                        max_attempts=5,
+                        session=session,
+                        is_classification=True,
+                        max_tokens=1000,
+                        model=Nvidia_Feed_Model,
+                        system_instruction=(
+                            "You are an expert market research analyst. "
+                            "Classify the company into the predefined feed serial number from the prompt. "
+                            "Do not repeat or echo the prompt text. "
+                            "Provide concise, direct reasoning comparing candidate feeds against the company description, then conclude and output strictly the Serial Number of the feed (e.g. \"1\")."
+                        ),
+                    )
+                    if isinstance(nim_feed_raw, dict):
+                        output_data_feed = nim_feed_raw.get("output", "")
+                    else:
+                        output_data_feed = str(nim_feed_raw or "").strip()
+                    logging.info(f"NIM {Nvidia_Feed_Model} Feed prediction raw output for {domain}: '{output_data_feed}'")
+                    output_data_feed_llm_model = Nvidia_Feed_Model
+                else:
+                    # output_data_feed = Gemini_API(input_data_for_feed)
+                    current_valid_dates = get_valid_dates()
+                    use_feed_cache = (
+                        GEMINI_TOKEN == token_for_feed_cache_id 
+                        and clean_date(date_prompt_for_feed_cache_id) in current_valid_dates 
+                        and status_for_feed_cache_id in ("Sucess", "Success")
+                        and base_prompt_for_feed_cache_id
+                    )
+                    if use_feed_cache:
+                        try:
+                            output_data_feed = await Gemini_API_WITH_CACHE(input_sumry_for_feed, GEMINI_TOKEN, base_prompt_for_feed_cache_id, session=session)
+                        except Exception as e_fcache:
+                            logging.warning(f"⚠️ Feed Prediction Cache failed ({e_fcache}). Seamlessly falling back to direct Gemini_API_ASYNC for {domain}...")
+                            output_data_feed = await Gemini_API_ASYNC(input_data_for_feed, GEMINI_TOKEN, session=session)
+                    else:
                         output_data_feed = await Gemini_API_ASYNC(input_data_for_feed, GEMINI_TOKEN, session=session)
-                else:
-                    output_data_feed = await Gemini_API_ASYNC(input_data_for_feed, GEMINI_TOKEN, session=session)
 
-                if isinstance(output_data_feed, dict) and not output_data_feed.get("output"):
-                    logging.warning(f"⚠️ Feed Prediction output empty. Retrying direct Gemini_API_ASYNC for {domain}...")
-                    output_data_feed = await Gemini_API_ASYNC(input_data_for_feed, GEMINI_TOKEN, session=session)
+                    if isinstance(output_data_feed, dict) and not output_data_feed.get("output"):
+                        logging.warning(f"⚠️ Feed Prediction output empty. Retrying direct Gemini_API_ASYNC for {domain}...")
+                        output_data_feed = await Gemini_API_ASYNC(input_data_for_feed, GEMINI_TOKEN, session=session)
 
-                if isinstance(output_data_feed, dict):
-                    output_data_feed_input_Token = output_data_feed.get("input_Token","")
-                    output_data_feed_thought_Token = output_data_feed.get("thinking_Token","")
-                    output_data_feed_cache_Token = output_data_feed.get("cached_Token","")
-                    output_data_feed_output_Token = output_data_feed.get("output_Token","")
-                    output_data_feed_total_Token = output_data_feed.get("total_Token","")
-                    output_data_feed_llm_model = output_data_feed.get("model","")
-                    output_data_feed = output_data_feed.get("output","")
-                else:
-                    output_data_feed = ""
+                    if isinstance(output_data_feed, dict):
+                        output_data_feed_input_Token = output_data_feed.get("input_Token","")
+                        output_data_feed_thought_Token = output_data_feed.get("thinking_Token","")
+                        output_data_feed_cache_Token = output_data_feed.get("cached_Token","")
+                        output_data_feed_output_Token = output_data_feed.get("output_Token","")
+                        output_data_feed_total_Token = output_data_feed.get("total_Token","")
+                        output_data_feed_llm_model = output_data_feed.get("model","")
+                        output_data_feed = output_data_feed.get("output","")
+                    else:
+                        output_data_feed = ""
 
                 print("output_data_feed - ")
                 print(output_data_feed)
 
             except Exception as e:
-                logging.error(f"Gemini API (Feed) failed: {e}")
+                logging.error(f"Prediction API (Feed) failed: {e}")
                 output_data_feed = ""
                 output_data_feed_input_Token = ""
                 output_data_feed_thought_Token = ""
@@ -4318,7 +4343,7 @@ async def Extract_AI_Engine_Output(
                 output_data_feed_llm_model = ""
 
         except Exception as error:
-            logging.error(f"Issue is coming with this IF Prediction result: {error}")
+            logging.error(f"Issue is coming with this Feed Prediction result: {error}")
 
     # logging.info(f"Fourth Gemini Result Feed - {output_data_feed}")
 

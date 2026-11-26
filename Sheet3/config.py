@@ -38,6 +38,7 @@ class Settings:
     # Nvidia NIM Configuration
     Nvidia_Base_Model: str = os.getenv("NVIDIA_BASE_MODEL", "nvidia/nemotron-3.5-bolt-e4b")
     Nvidia_IF_Model: str = os.getenv("NVIDIA_IF_MODEL", "nvidia/nemotron-3.5-super-vl-120b-a12b")
+    Nvidia_Feed_Model: str = os.getenv("NVIDIA_Feed_MODEL", os.getenv("NVIDIA_FEED_MODEL", "")).strip()
     Nvidia_Endpoint: str = os.getenv("NVIDIA_ENDPOINT", "https://integrate.api.nvidia.com/v1/chat/completions")
     NIM_API_KEYS: List[str] = field(default_factory=lambda: [
         k.strip() for k in os.getenv("NIM_API_KEYS", "").split(",") if k.strip()

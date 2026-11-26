@@ -1,6 +1,17 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-26] Configurable NVIDIA NIM Support for Feed Prediction (`NIM-FeedPrediction` Branch Only)
+Files changed:
+- `common/pipeline_engine.py`: Added `Nvidia_Feed_Model = os.getenv("NVIDIA_Feed_MODEL", os.getenv("NVIDIA_FEED_MODEL", "")).strip()`. In `Nvidia_API_ASYNC`, enhanced classification dual-extraction regex to capture feed serial numbers (`feed`, `\d{1,3}`) from reasoning tokens. In `Extract_AI_Engine_Output`, routed feed prediction through `Nvidia_API_ASYNC` when `Nvidia_Feed_Model` is non-empty, falling back to Gemini caching/API only when empty.
+- `Sheet1/config.py`, `Sheet2/config.py`, `Sheet3/config.py`, `Sheet4/config.py`: Added `Nvidia_Feed_Model: str = os.getenv("NVIDIA_Feed_MODEL", os.getenv("NVIDIA_FEED_MODEL", "")).strip()`.
+- `.env`, `.env.example`: Added `NVIDIA_Feed_MODEL="moonshotai/kimi-k3.1-pro"`.
+Reason:
+Enable end-to-end LLM inference via NVIDIA NIM in the `NIM-FeedPrediction` branch by making the feed prediction model configurable via `NVIDIA_Feed_MODEL` (configured to `moonshotai/kimi-k3.1-pro`), falling back to Gemini only when the variable is empty.
+Related tests:
+- `Temp_Test/test_feed_nim_routing.py` (4/4 tests PASSED)
+
+
 ## [2026-11-26] Optimize Dynamic Domain Fetcher for Deep Historical Lead Harvesting
 Files changed:
 - `common/dynamic_domain_fetcher.py`: In Phase 2 temporal windows, enforced `createdDate` DESC sort (`order: "DESC", sortField: "createdDate"`) to prioritize the newest uncollected leads and bypass stagnant historical offsets. Raised `stagnation_item_threshold` default from 500 to 2,500 items.
