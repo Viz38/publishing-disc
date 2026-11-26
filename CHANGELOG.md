@@ -1,6 +1,24 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-26] Integrate Cumulative Daily Processed Cache in Status Dashboard & Eliminate In-Memory Zero-Count Resets
+Files changed:
+- `Temp_Test/render_both_dashboards.py`:
+  1. Integrated `CUMULATIVE_CACHE_FALLBACK` for completed/idle engines when daemon in-memory progress resets to `progress_total: 0`. Pulls verified daily cumulative counts directly from `discovery_cache.csv` across physical hosts:
+     - Sheet 1 (Desktop-5080): 4,627 / 4,627 (100.0%)
+     - Sheet 2 (Desktop-5080): 3,038 / 3,038 (100.0%)
+     - Sheet 3 (Desktop-5321): 5,611 / 9,230 (60.8%) [Active running PID 3268533]
+     - Sheet 4 (Desktop-5321): 3,904 / 3,904 (100.0%)
+     - Total Main Fleet: 17,180 / 20,799 (82.6%) completed domains.
+  2. Synced live Google Sheet `1eVKXWnGNsHp8WmoqXo8Pz-mB6f7V7xGleMfd7CcahSA` across both "Status" and "Testing Fleet" tabs via Primary Service Account.
+- `Temp_Test/deploy_clasp/status_dashboard.gs`: Synchronized container-bound script repository with root, permanently eliminating restricted `'User-Agent'` headers and deploying to Apps Script project `11P99Kmn-Eg1m4dylSR924ekGcY0OMWcsVYiJrDo48ThEAZD4ynBsaqex` via `clasp push --force`.
+- `Temp_Test/status_dashboard.png` & `Temp_Test/testing_fleet_dashboard.png`: Captured fresh Playwright visual snapshots reflecting true 17,180 completed domains and all physical hosts online.
+Reason:
+When pipelines finish their scheduled batches and exit, `/discovery/status` resets in-memory `progress_total` and `progress_current` to 0, which caused the dashboard to display 0 completed domains despite 17,180 domains having been successfully processed today across Sheets 1-4.
+Related tests:
+- `Temp_Test/test_dashboard_optimization.py` (5/5 tests PASSED)
+- `Temp_Test/render_both_dashboards.py` (Updated Google Sheets successfully)
+
 ## [2026-11-26] Eliminate Apps Script Trigger Execution Timeouts, Restricted User-Agent Headers, and 502 Hangs in Status Dashboard
 Files changed:
 - `status_dashboard.gs`:
