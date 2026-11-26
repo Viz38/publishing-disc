@@ -652,7 +652,7 @@ class TracxnDomainIngestor:
                 needed_for_funnel = budget - domain_added_count
                 fetcher = DynamicDomainFetcher(
                     key_manager=self.key_manager,
-                    stagnation_item_threshold=500,
+                    stagnation_item_threshold=2500,
                     max_window_coverage=85000,
                 )
 

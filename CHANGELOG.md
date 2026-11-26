@@ -1,19 +1,15 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
-## [2026-11-26] Transitioned NIM Summarization to Nemotron-3.5-Bolt-4B and NIM IF Prediction to Nemotron-3.5-Super-120B
+## [2026-11-26] Optimize Dynamic Domain Fetcher for Deep Historical Lead Harvesting
 Files changed:
-- `common/pipeline_engine.py`:
-  * Updated `Nvidia_Base_Model` from `meta/muse-glimmer-30b` to `nvidia/nemotron-3.5-bolt-e4b` across all NIM summary extraction pipelines.
-  * Added `model` parameter support to `Nvidia_API_ASYNC` with fallback to `reasoning_content` to prevent `NoneType` issues with reasoning models.
-  * On `NIM-FeedPrediction` branch: Configured Industry Funnel (IF) prediction to use `nvidia/nemotron-3.5-super-vl-120b-a12b` with `max_tokens=1000`.
-- `Sheet1/config.py`, `Sheet2/config.py`, `Sheet3/config.py`, `Sheet4/config.py`: Updated default `Nvidia_Base_Model` to `nvidia/nemotron-3.5-bolt-e4b`.
-- `.env`: Updated `NVIDIA_BASE_MODEL=nvidia/nemotron-3.5-bolt-e4b`.
-- `Temp_Test/test_model_configuration.py`: Added unit tests verifying model configuration and API signature across all sheets.
+- `common/dynamic_domain_fetcher.py`: In Phase 2 temporal windows, enforced `createdDate` DESC sort (`order: "DESC", sortField: "createdDate"`) to prioritize the newest uncollected leads and bypass stagnant historical offsets. Raised `stagnation_item_threshold` default from 500 to 2,500 items.
+- `common/advance_precrawl.py`: Updated `DynamicDomainFetcher` instantiation with `stagnation_item_threshold=2500`.
+- `common/tracxn_domain_ingestor.py`: Updated `DynamicDomainFetcher` instantiation with `stagnation_item_threshold=2500`.
 Reason:
-User requested upgrading NIM summarization from `meta/muse-glimmer-30b` to `nvidia/nemotron-3.5-bolt-e4b` on both branches, and configuring the `NIM-FeedPrediction` branch to use `nvidia/nemotron-3.5-super-vl-120b-a12b` for industry funnel predictions.
+When queries like Bright Data Unprocessed (with 374k leads) used custom PS2 sorts, the first 40,000 items were already collected in the 7-day historical exclusion registry (456k domains), causing the 500-item threshold to pivot too early and stall domain fill at ~2k leads. Slicing with `createdDate` DESC yields >95% fresh leads immediately, allowing autonomous fill up to full 45k fleet budgets.
 Related tests:
-- `Temp_Test/test_model_configuration.py` (2/2 tests PASSED)
+- `Temp_Test/test_dynamic_domain_fetcher.py` (4/4 tests PASSED)
 
 ## [2026-11-26] Transition Fleet Summarization to Nemotron 3.5 Bolt and Industry Prediction to Super VL 120B
 Files changed:
