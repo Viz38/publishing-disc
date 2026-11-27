@@ -1,6 +1,25 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-27] Full Fleet Codebase Audit & Optimal Capacity Fixes
+Files changed:
+- `common/key_manager.py`:
+  - Fixed `filter_keys_for_fleet_role()` so that when `role == "nim"` and `NIM_API_KEYS` is already physically isolated to the Testing Fleet's 40 keys (`len(valid_keys) <= 40`), it preserves all valid keys instead of slicing `[10:]` (restoring Desktop-9048 from 29 keys back to full 39 active keys).
+- `status_dashboard.gs`:
+  - Updated Main Fleet Tracxn active token denominators from `' / 13 Active Tokens'` to `' / 10 Active Tokens'`.
+  - Updated Testing Fleet Tracxn active token denominators from `' / 16 Active Tokens'` to `' / 3 Active Tokens'`.
+  - Deployed to Apps Script via `clasp push --force`.
+- Local Environment (`.env.main`, `.env.nim`, `.env`):
+  - Aligned `.env.main` (`FLEET_ROLE=main`, 10 Tracxn keys, 10 NIM keys, `GEMINI_API_KEY`=`AQ.Ab8...BENxw`, Main Sheet 1 ID).
+  - Aligned `.env.nim` (`FLEET_ROLE=nim`, 3 Tracxn keys, 40 NIM keys, Testing Sheet 1 ID).
+Reason:
+Full codebase audit to eliminate bugs and ensure both Main Fleet and Testing Fleet operate at optimal key and throughput capacity.
+Related tests:
+- `Temp_Test/test_dashboard_optimization.py`: 8/8 unit tests PASSED.
+- `Temp_Test/unit/test_unit_key_manager.py`: All key manager unit tests PASSED.
+- `python3 -m compileall -q common Sheet1 Sheet2 Sheet3 Sheet4`: 0 syntax errors.
+- Remote verification on Desktop-9048: Confirmed `SHARDED_NIM_KEYS_LEN` restored to full active key count.
+
 ## [2026-11-27] Testing Fleet: Single-Sheet Schema Restructuring for "Test Fleet Budget Allocation"
 Files changed:
 - `Google Spreadsheet (1eVKXWnGNsHp8WmoqXo8Pz-mB6f7V7xGleMfd7CcahSA)` -> `"Test Fleet Budget Allocation"` (`id: 178208703`):
