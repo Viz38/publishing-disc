@@ -1,6 +1,25 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-27] Export & Consolidate 26 Nov Fleet Run into Google Sheet (59,135 Domains)
+Files changed:
+- `Google Spreadsheet (1aVuS_KrevqrEaiG27Qig9QpcoiwZ0eSd9y4I5-zTUtc)` -> `"Sheet1"`:
+  - Formatted sheet to 57 columns (Cols A:BE) and 59,187 rows matching the official Sheet 1 master schema (`CF_IF_Engine_Database`).
+  - Added Row 1 section header banners and Row 2 57-column master headers.
+  - Exported and consolidated all processed records from yesterday's 26 Nov run across both Main Fleet (`Desktop-5080`, `Desktop-5321`) and Testing/NIM Fleet (`Desktop-9048`).
+  - Uploaded 59,135 unique domains in 2,000-row chunks via Primary Service Account (`GOOGLE_SERVICE_ACCOUNT_JSON`).
+  - Preserved `"Raw Data Appended - csv only"` convention in Col AD to prevent cell payload bloat while maintaining full 57-column mapping integrity.
+  - Prioritized ordering with all 10,692 completed Tracxn movement / terminal review records at the top (Rows 3–10,694), followed by Gemini predictions and evaluated domains.
+- `status_dashboard.gs`:
+  - Updated `triggerFleetAdvancePreCrawl()` to concatenate `STATUS_CONFIG.TARGET_SHEETS` (Main Fleet Engines 1–4) and `STATUS_CONFIG.NIM_TARGET_SHEETS` (Testing Fleet Engine 5), dispatching advance pre-crawl signals in parallel across all 5 sheets.
+  - Deployed to Google Apps Script via `clasp push --force`.
+Reason:
+User directive to export the full log of all domains from yesterday's run where Tracxn movement occurred, consolidating across both Main Fleet and Testing/NIM Fleet in standard 57-column format into spreadsheet `1aVuS_KrevqrEaiG27Qig9QpcoiwZ0eSd9y4I5-zTUtc`.
+Related tests:
+- `Temp_Test/verify_uploaded_sheet.py`: Verified 59,187 rows x 57 columns, 59,135 non-empty domain rows, Row 1/2 master headers intact, Col AX/AZ movement statuses and timestamps verified.
+- `Temp_Test/download_all_exports.py`: Successfully extracted 7,665 rows from Desktop-5080, 13,504 rows from Desktop-5321, and 43,190 rows from Desktop-9048.
+- `Temp_Test/consolidate_and_upload_run.py`: Deduplicated into 59,135 unique domains with 100% chunked upload success.
+
 ## [2026-11-27] Dispatch Advance Pre-Fetch Signals Across Main Fleet & Testing Fleet
 Files changed:
 - `status_dashboard.gs`:
