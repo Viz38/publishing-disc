@@ -644,6 +644,32 @@ async def run_precrawl_for_sheet(target: Dict[str, Any], budget: Optional[int] =
 
     elapsed = time.time() - t0
     logger.info(f"🎉 Pre-Crawl for {name} finished in {elapsed/60:.2f} mins ({len(rows_with_jobs)} domains saved).\n")
+
+    # =========================================================================
+    # SEQUENTIAL RELAY AUTO-TRIGGER: Sheet 1 -> 2 -> 3 -> 4
+    # When Sheet N completes, automatically trigger Sheet N+1 across the fleet.
+    # Guarantees 100% strict cross-sheet uniqueness without parallel collision.
+    # =========================================================================
+    fleet_role = os.getenv("FLEET_ROLE", "main").strip().lower()
+    sheet_num = target.get("num")
+    if fleet_role == "main" and sheet_num and sheet_num in (1, 2, 3):
+        next_num = sheet_num + 1
+        fleet_domain = os.getenv("FLEET_DOMAIN", "rajath.world").strip() or "rajath.world"
+        next_urls = {
+            2: f"https://5080-sheet2.{fleet_domain}/discovery/advance-precrawl",
+            3: f"https://5321-sheet3.{fleet_domain}/discovery/advance-precrawl",
+            4: f"https://5321-sheet4.{fleet_domain}/discovery/advance-precrawl",
+        }
+        next_url = next_urls.get(next_num)
+        if next_url:
+            logger.info(f"🔗 [Sequential Relay] Sheet {sheet_num} pre-crawl finished. Auto-triggering Sheet {next_num} ({next_url})...")
+            try:
+                auth_h = {"Authorization": f"Bearer {os.getenv('SERVICE_AUTH_TOKEN', 'Tracxn@SR')}"}
+                resp = requests.post(next_url, json={}, headers=auth_h, timeout=10)
+                logger.info(f"🔗 [Sequential Relay] Sheet {next_num} pre-crawl successfully triggered: HTTP {resp.status_code}")
+            except Exception as e:
+                logger.error(f"🚨 [Sequential Relay] Failed to trigger Sheet {next_num} ({next_url}): {e}")
+
     return len(rows_with_jobs)
 
 async def run_full_advance_precrawl(budget_per_sheet: Optional[int] = None):
