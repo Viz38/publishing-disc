@@ -349,15 +349,32 @@ def fetch_cumulative_sheet_domains(
 
         for ws in worksheets:
             title = ws.title.strip()
+            # Ignore log/audit/config tabs (e.g. 'Daily Logs')
+            if "log" in title.lower() or "config" in title.lower() or "audit" in title.lower():
+                continue
+
+            # Check if title matches standard date format
             tab_date = None
-            for fmt in ["%d%b%Y", "%d%B%Y"]:
+            for fmt in ["%d%b%Y", "%d%B%Y", "%d-%b-%Y", "%Y-%m-%d"]:
                 try:
                     tab_date = datetime.datetime.strptime(title, fmt).date()
                     break
                 except ValueError:
                     continue
 
-            if tab_date and cutoff_date <= tab_date <= now_ist:
+            # Per operational design: exactly 7 rolling daily sheets are present in this spreadsheet.
+            # If date parsed, check the cutoff window; if sheet names change or don't parse as date,
+            # include all data tabs (Cols <= 10) so no day is ever missed.
+            is_data_sheet = False
+            if tab_date is not None:
+                if cutoff_date <= tab_date <= now_ist:
+                    is_data_sheet = True
+            else:
+                col_c = getattr(ws, "col_count", 0)
+                if col_c <= 10:
+                    is_data_sheet = True
+
+            if is_data_sheet:
                 try:
                     col_vals = retry_gspread_call(lambda: ws.col_values(1))
                     cnt = 0
