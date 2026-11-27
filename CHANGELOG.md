@@ -1,6 +1,27 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-27] Dispatch Advance Pre-Fetch Signals Across Main Fleet & Testing Fleet
+Files changed:
+- `status_dashboard.gs`:
+  - Updated `triggerFleetAdvancePreCrawl()` to concatenate `STATUS_CONFIG.TARGET_SHEETS` (Main Fleet Engines 1–4) and `STATUS_CONFIG.NIM_TARGET_SHEETS` (Testing Fleet Engine 5), dispatching advance pre-crawl signals in parallel across all 5 sheets.
+  - Updated `launchFleetAdvancePreCrawlUi()` confirmation prompt, toast messages, and result alerts to reflect both Main and Testing fleets (5 sheets).
+  - Pushed to Google Apps Script via `clasp push --force`.
+- Remote Fleet Workers (`Desktop-5080`, `Desktop-5321`, `Desktop-9048`):
+  - Dispatched `POST /discovery/advance-precrawl` in parallel to all 5 engines.
+  - Spawned isolated background pre-crawl subprocesses:
+    - Engine 1 (CF-1 on Desktop-5080): PID 2786099 (reading from `Production Budget Allocation`, 285 Saturday budget)
+    - Engine 2 (CF-2 on Desktop-5080): PID 2786100 (reading from `Production Budget Allocation`, 283 Saturday budget)
+    - Engine 3 (CF-3 on Desktop-5321): PID 1975686 (reading from `Production Budget Allocation`, 279 Saturday budget)
+    - Engine 4 (Filter-V2 on Desktop-5321): PID 1975713 (reading from `Production Budget Allocation`, 279 Saturday budget)
+    - Engine 5 (NIM Fleet 1 on Desktop-9048): PID 1474079 (reading from `Test Fleet Budget Allocation`, 24 Saturday budget)
+Reason:
+User directive to send prefetch domain signals across both fleets.
+Related tests:
+- `Temp_Test/dispatch_fleet_prefetch.py`: All 5 engines returned HTTP 200 with detached PIDs.
+- `Temp_Test/monitor_prefetch_logs.py`: Confirmed active execution in `precrawl_run.log`, payload loading from assigned tabs, and cumulative 7-day exclusion pool caching.
+
+
 ## [2026-11-27] Full Fleet Codebase Audit & Optimal Capacity Fixes
 Files changed:
 - `common/key_manager.py`:
