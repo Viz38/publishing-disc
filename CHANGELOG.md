@@ -1,6 +1,37 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-27] Cross-Fleet 7-Day Cumulative Deduplication & Sequential Relay Exporter
+Files changed:
+- `common/fleet_deduplicator.py`:
+  - Added `CUMULATIVE_DEDUP_SHEET_ID = "1p4wg5rlfpn8xPwVCWuDnyWdSCwha9pjXSIMISjF84Sg"`.
+  - Implemented `fetch_cumulative_sheet_domains(days=7, cache_ttl_seconds=3600)` with 1-hour disk cache in `Logs/daily_registry/cumulative_7day_cache.json` (caches 99,607 domains across all rolling date tabs).
+  - Integrated `fetch_cumulative_sheet_domains()` into `DailyProcessedRegistry.get_historical_processed()` so both Main Fleet and Testing Fleet pre-filters exclude all 7-day cumulative domains before ingestion and crawling.
+- `common/daily_eligible_exporter.py`:
+  - Implemented `RELAY_EXPORT_NODES` mapping for the 5-node sequential chain:
+    - Node 1: Sheet 1 (CF-1) -> triggers Node 2 (`https://5080-sheet2.rajath.world/fleet/export-eligible`)
+    - Node 2: Sheet 2 (CF-2) -> triggers Node 3 (`https://5321-sheet3.rajath.world/fleet/export-eligible`)
+    - Node 3: Sheet 3 (CF-3) -> triggers Node 4 (`https://5321-sheet4.rajath.world/fleet/export-eligible`)
+    - Node 4: Sheet 4 (Filter-V2) -> triggers Node 5 (`https://9048-sheet1.rajath.world/fleet/export-eligible`)
+    - Node 5: Testing Fleet Sheet 1 -> terminates chain with completion log.
+  - Implemented `trigger_next_relay_node(next_sheet_num)` with retry logic and bearer token authentication.
+  - Implemented `export_sheet_eligible_relay_node(sheet_num)`:
+    - Node 1: Inits `B1` date in red bold, writes `B3:E3` headers, clears `B4:E`, writes Sheet 1 eligible rows, signals Node 2.
+    - Nodes 2–5: Scans column B to find next empty row, appends unique eligible records, and signals the next node.
+- `common/fleet_orchestrator.py`:
+  - Added Node 5 (`Testing Fleet Sheet 1`, host `9048-sheet1.rajath.world`, port 8769) to default fleet directory.
+  - Updated `is_node_local` to detect Node 5 when running on Desktop-9048 (`FLEET_ROLE == "nim"`).
+- `Sheet1/api.py`, `Sheet2/api.py`, `Sheet3/api.py`, `Sheet4/api.py`:
+  - Added authenticated endpoint `@app.post("/fleet/export-eligible")` supporting background execution for non-blocking relay signaling.
+- `.gitignore`:
+  - Enforced `Temp_Test/` exclusion.
+Reason:
+User directive to reorganize deduplication against the master 7-day cumulative sheet (`1p4wg5rlfpn8xPwVCWuDnyWdSCwha9pjXSIMISjF84Sg`) and establish a strict sequential inter-fleet export relay to staging sheet (`1DCKvQcAQgTKGnWquYNOH6SlGgCun8yq8HD8Zj0AIJ-Y`).
+Related tests:
+- `Temp_Test/test_cumulative_dedup_integration.py` (3 passed)
+- `Temp_Test/test_relay_export.py` (4 passed)
+- `Temp_Test/test_export_endpoint.py` (2 passed)
+
 ## [2026-11-27] Consolidated Export of All 18,807 Verified Eligible Domains
 Files changed:
 - `Discovery Daily Processing Sheet (1DCKvQcAQgTKGnWquYNOH6SlGgCun8yq8HD8Zj0AIJ-Y, gid=0)`:

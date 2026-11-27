@@ -41,20 +41,34 @@ def build_fleet_nodes() -> Dict[int, Dict[str, Any]]:
         2: {"name": "Sheet 2 (CF-2)", "port": 8770, "host": f"5080-sheet2.{fleet_domain}", "folder": "Sheet2", "id": "1QGraMZOJjc-EIZlt_CieOVpr1jxw6tLa_QnWgWHou5I"},
         3: {"name": "Sheet 3 (CF-3)", "port": 8771, "host": f"5321-sheet3.{fleet_domain}", "folder": "Sheet3", "id": "1MHdkFCsoAY0V7ix_pJ5SpWFq3EFpJEug2ntJk1FkEl8"},
         4: {"name": "Sheet 4 (Filter-V2)", "port": 8772, "host": f"5321-sheet4.{fleet_domain}", "folder": "Sheet4", "id": "1z3wH--c2qHGlNqW0e-6Mc8IVqh_kN5_fbWjILM4FxQM"},
+        5: {"name": "Testing Fleet Sheet 1", "port": 8769, "host": f"9048-sheet1.{fleet_domain}", "folder": "Sheet1", "id": "1XT_GlvBf2BGO4cEiskpUsK2Fzc5PzB-tcRHFMubDXbk"},
     }
     nodes: Dict[int, Dict[str, Any]] = {}
-    for num in range(1, fleet_count + 1):
-        d = defaults[num]
-        env_id = os.getenv(f"SHEET{num}_ID", "").strip()
-        env_port = os.getenv(f"SHEET{num}_PORT", "").strip()
-        env_host = os.getenv(f"SHEET{num}_HOST", "").strip()
-        nodes[num] = {
-            "name": d["name"],
-            "port": int(env_port) if env_port.isdigit() else d["port"],
-            "host": env_host or d["host"],
-            "folder": d["folder"],
-            "id": env_id or d["id"],
-        }
+    for num in range(1, max(fleet_count, 4) + 1):
+        if num in defaults:
+            d = defaults[num]
+            env_id = os.getenv(f"SHEET{num}_ID", "").strip()
+            env_port = os.getenv(f"SHEET{num}_PORT", "").strip()
+            env_host = os.getenv(f"SHEET{num}_HOST", "").strip()
+            nodes[num] = {
+                "name": d["name"],
+                "port": int(env_port) if env_port.isdigit() else d["port"],
+                "host": env_host or d["host"],
+                "folder": d["folder"],
+                "id": env_id or d["id"],
+            }
+    # Include Node 5 (Testing Fleet) in directory for relay signaling and peer lookup
+    d5 = defaults[5]
+    env_id5 = os.getenv("SHEET5_ID", "").strip()
+    env_port5 = os.getenv("SHEET5_PORT", "").strip()
+    env_host5 = os.getenv("SHEET5_HOST", "").strip()
+    nodes[5] = {
+        "name": d5["name"],
+        "port": int(env_port5) if env_port5.isdigit() else d5["port"],
+        "host": env_host5 or d5["host"],
+        "folder": d5["folder"],
+        "id": env_id5 or d5["id"],
+    }
     return nodes
 
 
@@ -70,6 +84,9 @@ def get_auth_headers() -> Dict[str, str]:
 def is_node_local(sheet_num: int) -> bool:
     hostname = socket.gethostname().lower()
     fleet_host_id = os.getenv("FLEET_HOST_ID", "").strip().lower()
+    fleet_role = os.getenv("FLEET_ROLE", "").strip().lower()
+    if sheet_num == 5:
+        return fleet_role == "nim" or "9048" in hostname or "048" in hostname
     if len(FLEET_NODES) == 1 and sheet_num in FLEET_NODES:
         if fleet_host_id and (fleet_host_id in hostname or fleet_host_id.lstrip("9") in hostname):
             return True
