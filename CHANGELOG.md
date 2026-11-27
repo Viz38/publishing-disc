@@ -1,6 +1,21 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-27] Consolidated Export of All 18,807 Verified Eligible Domains
+Files changed:
+- `Discovery Daily Processing Sheet (1DCKvQcAQgTKGnWquYNOH6SlGgCun8yq8HD8Zj0AIJ-Y, gid=0)`:
+  - Formatted `B1` to `27 Nov 2026` in bold red date format.
+  - Set `B3:E3` headers: `['Domains', 'Domain Profile ID', 'Publish Funnel Name', 'Publish Funnel ID']`.
+  - Cleared legacy/stale rows (`B4:E50535`) and wrote all 18,807 unique, verified eligible domains across yesterday's 26 Nov run (15,601 domains) and today's 27 Nov batch (3,207 domains) across Main Sheets 1–4.
+  - Verified 100% field completeness across all 18,807 rows with zero missing Profile IDs, Funnel Names, or Funnel IDs.
+Reason:
+User directive to recover all eligible domains from the fleet prior to architectural refactoring. Resolved the gap where only 3,690 of yesterday's 15,601 completed domains had been written.
+Related verification:
+- Direct readback verified exactly 18,807 data rows in `B4:B18810` with zero trailing rows.
+- Local backup persisted to `Temp_Test/yesterday_snapshots/exported_18807_eligible_backup.json`.
+
+
+
 ## [2026-11-27] Root-Cause Fix: Terminate System-Level Systemd Daemons on Desktop-5321 & Desktop-5080
 Files changed:
 - `Desktop-5321 (Production Host 2)`:
