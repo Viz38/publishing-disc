@@ -1,6 +1,18 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-27] Install Headless Midnight Safety Net Crontabs & Verify 24x7 Automation
+Files changed:
+- `Desktop-5080 (Primary Production Host)`:
+  - Installed crontab `15 0 * * * /bin/bash /home/tracxn-ds-508/Desktop/publishing-disc/run_daily_precrawl.sh >> /home/tracxn-ds-508/Desktop/publishing-disc/Logs/cron_precrawl.log 2>&1`.
+- `Desktop-5321 (Secondary Production Host)`:
+  - Installed crontab `15 0 * * * /bin/bash /home/tracxn-ds-532/Desktop/publishing-disc/run_daily_precrawl.sh >> /home/tracxn-ds-532/Desktop/publishing-disc/Logs/cron_precrawl.log 2>&1`.
+Reason:
+Ensure 100% autonomous 24x7 operation starting tonight at 12:00 AM IST. Verified active systemd services (`discovery-cf1`, `discovery-cf2` on 5080; `discovery-cf3`, `discovery-filterv2` on 5321), Autonomous Daily Guardian in `api.py` for 12:05 AM `next_day_pre_crawl.csv` pickup, and 12:15 AM cron safety net for idle detection and Day T+1 prefetch dispatch.
+Related tests:
+- `Temp_Test/verify_crontab_fleet.py`
+
+
 ## [2026-11-27] Recover and Move 61 Missing Domains to Central Funnel (Backlog) & Inspect 3 Desktop Logs
 Files changed:
 - `Google Spreadsheet (1aVuS_KrevqrEaiG27Qig9QpcoiwZ0eSd9y4I5-zTUtc)` -> Tab `Sheet1`:
