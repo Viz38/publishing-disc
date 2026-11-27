@@ -1,6 +1,28 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-27] Multi-Fleet Budget Integration: Test Fleet Budget Allocation for NIM & Purge of Local Payload Tabs
+Files changed:
+- `common/budget_allocator.py`:
+  - Added multi-fleet resolution (`resolve_fleet_and_sheet`):
+    - Main Fleet (Sheets 1-4) targets `"Production Budget Allocation"` tab in Operations Dashboard (`1eVKXWnGNsHp8WmoqXo8Pz-mB6f7V7xGleMfd7CcahSA`).
+    - Testing / NIM Fleet (`1XT_GlvBf2BGO4cEiskpUsK2Fzc5PzB-tcRHFMubDXbk`) targets `"Test Fleet Budget Allocation"` tab in Operations Dashboard (`1eVKXWnGNsHp8WmoqXo8Pz-mB6f7V7xGleMfd7CcahSA`).
+  - Implemented automatic sheet slice resolution for testing sheets, reading 321 payload definitions and slicing Sheet 1 budget while keeping budget allocations intact.
+  - Hardened local tab fallback against `WorksheetNotFound` so engines fail safely and gracefully without crashing if local tabs are deleted.
+- Google Sheets (5 Fleet Databases):
+  - Safely backed up all local `"CF_IF Engine - Input Payload"` tabs to `Temp_Test/payload_tabs_backup/`:
+    - Sheet 1 (CF-1): `1IWXqnR52IzpFewE0QS0tlJFT65nJE_fmIoJs8ps9nZo` (13 rows backed up)
+    - Sheet 2 (CF-2): `1QGraMZOJjc-EIZlt_CieOVpr1jxw6tLa_QnWgWHou5I` (10 rows backed up)
+    - Sheet 3 (CF-3): `1MHdkFCsoAY0V7ix_pJ5SpWFq3EFpJEug2ntJk1FkEl8` (39 rows backed up)
+    - Sheet 4 (Filter-V2): `1z3wH--c2qHGlNqW0e-6Mc8IVqh_kN5_fbWjILM4FxQM` (294 rows backed up)
+    - Testing Fleet Sheet 1 (NIM): `1XT_GlvBf2BGO4cEiskpUsK2Fzc5PzB-tcRHFMubDXbk` (53 rows backed up)
+  - Permanently deleted the deprecated `"CF_IF Engine - Input Payload"` worksheet from all 5 databases.
+Reason:
+User directive to link the NIM Fleet to the new `"Test Fleet Budget Allocation"` master tab in the Operations Dashboard without altering its current budgeting, and delete obsolete local payload allocation tabs across all 5 sheets.
+Related tests:
+- Integration test `Temp_Test/test_multi_fleet_allocator.py`: Validated resolution and live loading of 321 payloads for both Main Fleet (Sheet 1) and NIM Fleet (Sheet 1).
+- End-to-end 5-sheet test: Confirmed all 5 sheets load from their respective master tabs in the Operations Dashboard without relying on local payload tabs.
+
 ## [2026-11-27] Fleet Budget Allocation: 5,000 Domains/Day Target Across P0, OD, and OR Payloads
 Files changed:
 - `Google Spreadsheet (1eVKXWnGNsHp8WmoqXo8Pz-mB6f7V7xGleMfd7CcahSA)`:
