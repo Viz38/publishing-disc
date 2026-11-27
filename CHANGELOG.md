@@ -1,6 +1,27 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-27] Testing Fleet: Single-Sheet Schema Restructuring for "Test Fleet Budget Allocation"
+Files changed:
+- `Google Spreadsheet (1eVKXWnGNsHp8WmoqXo8Pz-mB6f7V7xGleMfd7CcahSA)` -> `"Test Fleet Budget Allocation"` (`id: 178208703`):
+  - Backed up prior 15-column state to `Temp_Test/test_fleet_budget_allocation_backup.json`.
+  - Restructured tab from 15 columns to 12 columns by removing unused `Sheet 2 Budget`, `Sheet 3 Budget`, and `Sheet 4 Budget` columns.
+  - Updated Row 1 banner text to `"TEST FLEET BUDGET ALLOCATION — TESTING FLEET (NIM) MASTER PAYLOAD REPOSITORY"`.
+  - Re-aligned Column I (`Sheet 1 Budget`) to match `Overall Fleet Budget` (allocating full 20, 20, 60 domains directly to Sheet 1).
+  - Shifted payload and platform link columns: Col J (`New Updated Payload`), Col K (`Platform Payload`), Col L (`Platform Link`).
+  - Applied professional executive styling (Dark Navy banner, soft Slate Blue header, green accent on Sheet 1 budget, center-aligned values).
+- `common/budget_allocator.py`:
+  - Updated `load_payload_rows_for_sheet()` to dynamically detect 12-column single-sheet schema (`target_ws == TEST_BUDGET_WORKSHEET_NAME` or `header_cols <= 12`).
+  - Mapped single-sheet columns: Sheet 1 Budget at index 8, New Updated Payload at index 9, Platform Payload at index 10, Platform Link at index 11.
+  - Maintained backward-compatible 15-column 4-way budget splitting for `"Production Budget Allocation"` (Main Fleet Sheets 1–4).
+Reason:
+User directive to modify `"Test Fleet Budget Allocation"` to reflect strictly 1 sheet instead of 4, since the Testing Fleet (NIM Fleet) has only 1 sheet (`Discovery Operations - Engine 5 (NIM Industry Prediction)` on Desktop-9048).
+Related tests:
+- `Temp_Test/test_multi_fleet_allocator_v2.py`:
+  - Verified Testing Fleet loads 321 rows with full 20, 20, 60 budgets from the 12-column schema.
+  - Verified Main Fleet continues loading 321 rows with 4-way budget splitting from the 15-column schema.
+  - All unit assertions PASSED.
+
 ## [2026-11-27] Main Fleet: Update GEMINI_API_KEY and GEMINI_TOKEN Credentials
 Files changed:
 - `Desktop-5080 (Main Fleet Host 1)` (`/home/tracxn-ds-508/Desktop/publishing-disc/.env`):
@@ -19,6 +40,30 @@ Related tests:
   - Verified Desktop-5080: `GEMINI_API_KEY` and `GEMINI_TOKEN` match `AQ.Ab8...BENxw`, active `main.py` = 0.
   - Verified Desktop-5321: `GEMINI_API_KEY` and `GEMINI_TOKEN` match `AQ.Ab8...BENxw`, active `main.py` = 0.
   - Verified Fleet Endpoints: Sheets 1–4 report `active=False` and `status='idle'`.
+
+## [2026-11-27] Fleet Tracxn API Key Physical Partitioning & Isolation (10 Main Fleet, 3 Testing Fleet)
+Files changed:
+- `Desktop-5080 (Main Fleet Host 1)` (`/home/tracxn-ds-508/Desktop/publishing-disc/.env`):
+  - Configured `TRACXN_API_TOKENS` with strictly the 10 Main Fleet Tracxn keys (128-char JWT tokens: Token 1, 2, 3, 6, 8, 9, 10, 11, 12, 13).
+  - Backed up prior `.env` to `.env.bak_keys_<timestamp>`.
+- `Desktop-5321 (Main Fleet Host 2)` (`/home/tracxn-ds-532/Desktop/publishing-disc/.env`):
+  - Configured `TRACXN_API_TOKENS` with strictly the 10 Main Fleet Tracxn keys (exact parity with Desktop-5080).
+  - Backed up prior `.env` to `.env.bak_keys_<timestamp>`.
+- `Desktop-9048 (Testing Fleet Host)` (`/home/tracxn-ds-048/Desktop/publishing-disc/.env`):
+  - Configured `TRACXN_API_TOKENS` with strictly the 3 Testing Fleet Tracxn keys (128-char JWT tokens: Token 14, 15, 16).
+  - Backed up prior `.env` to `.env.bak_keys_<timestamp>`.
+- Local Environment (`.env`, `.env.main`, `.env.nim`):
+  - Configured branch-aligned environment files: `.env.main` (10 Main Fleet keys) and `.env.nim` (3 Testing Fleet keys).
+  - Aligned local active `.env` on `NIM-FeedPrediction` branch to strictly use the 3 Testing Fleet keys.
+Reason:
+User directive to partition the 13 active Tracxn API keys: assign 10 keys to the Main Fleet and 3 keys to the Testing Fleet, keep only the respective keys on the respective remote desktops to prevent key overlapping and rate-limit contention, and adjust the local environment across branches to mirror the remote desktop environments.
+Related tests:
+- `Temp_Test/verify_final_key_isolation.py`:
+  - Verified Desktop-5080: exactly 10 tokens (all 128 chars), active `main.py` count = 0 (IDLE).
+  - Verified Desktop-5321: exactly 10 tokens (all 128 chars), active `main.py` count = 0 (IDLE).
+  - Verified Desktop-9048: exactly 3 tokens (all 128 chars), active `main.py` count = 0 (IDLE).
+  - Verified Set Disjointness: Main Fleet keys intersect Testing Fleet keys = empty set (Zero Overlap).
+  - Verified Fleet Status: All 5 engines confirmed 100% STOPPED and IDLE (`ZERO_MAIN_PY`).
 
 ## [2026-11-27] Fleet Tracxn API Key Physical Partitioning & Isolation (10 Main Fleet, 3 Testing Fleet)
 Files changed:
