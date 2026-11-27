@@ -461,16 +461,19 @@ class TracxnDomainIngestor:
 
         sh = retry_call(lambda: self.gc.open_by_key(s_id))
 
-        # 1. Read Payload Tab
+        # 1. Read Payload Tab (from master 'Production Budget Allocation' for Main Fleet, or local tab fallback)
+        from common.budget_allocator import load_payload_rows_for_sheet
         try:
-            payload_ws = sh.worksheet("CF_IF Engine - Input Payload")
-            payload_rows = retry_call(lambda: payload_ws.get_all_values())
+            payload_rows, source_desc = retry_call(
+                lambda: load_payload_rows_for_sheet(self.gc, s_id, s_name, sheet_cfg.get("sheet_num"))
+            )
+            logger.info(f"[{s_name}] Payloads loaded successfully from {source_desc} ({len(payload_rows)-2} definition rows)")
         except Exception as e:
-            logger.error(f"[{s_name}] Missing or unreadable 'CF_IF Engine - Input Payload' tab: {e}")
+            logger.error(f"[{s_name}] Failed to load payloads: {e}")
             return 0
 
         if len(payload_rows) < 3:
-            logger.warning(f"[{s_name}] No payload definitions in 'CF_IF Engine - Input Payload'.")
+            logger.warning(f"[{s_name}] No payload definitions in '{source_desc}'.")
             return 0
 
         # Get Database Worksheet
