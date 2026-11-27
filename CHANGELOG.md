@@ -1,6 +1,24 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-27] Recover and Move 61 Missing Domains to Central Funnel (Backlog) & Inspect 3 Desktop Logs
+Files changed:
+- `Google Spreadsheet (1aVuS_KrevqrEaiG27Qig9QpcoiwZ0eSd9y4I5-zTUtc)` -> Tab `Sheet1`:
+  - Populated **Column L (`Domain Profile ID`)** for 61 recovered rows with their verified Tracxn entity IDs.
+  - Populated **Column AY (`CF->IF Movement`)** with `DONE` and **Column AZ (`Movement Time`)** with `27/Nov/2026 12:18:18`.
+  - Total moved domains in spreadsheet reached **10,688 / 10,692 (99.96%)**.
+- `Logs & Desktops Inspected`:
+  - Connected and searched across all 3 fleet desktops: **Desktop-5080**, **Desktop-5321**, and **Desktop-9048**.
+  - Inspected `Sheet1/Logs/`, `Sheet2/Logs/`, `Sheet3/Logs/`, `Sheet4/Logs/`, `discovery.log`, and daily exports (`export_5080_nov26.csv`, `export_5321_nov26.csv`, `export_9048_nov26.csv`).
+  - Traced historical logs for the 4 remaining unassigned third-party URLs (`aureolis.substack.com`, `briks-brussels-dinner-2027.lovable.app`, `sup-assessment-prod-577638392815.auth.us-east-1.amazoncognito.com`, `cipla-article-frontend.onrender.com`).
+Reason:
+User requested finding the 65 missing domains by inspecting yesterday's logs across the fleet desktops. Resolved 61 via direct entity API queries, verified logs across all 3 production desktops, and moved all 61 recovered domains into Central Funnel (Backlog).
+Related tests:
+- `Temp_Test/query_all_65_direct.py`
+- `Temp_Test/fast_check_3_desktops.py`
+- `Temp_Test/move_recovered_61_to_backlog.py`
+
+
 ## [2026-11-27] Bulk Move 10,692 Pruned Run Domains to Central Funnel (Backlog) & Writeback
 Files changed:
 - `Temp_Test/bulk_move_sheet_to_backlog.py`:
