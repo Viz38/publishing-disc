@@ -20,6 +20,48 @@ from common.local_cache import IST_TZ, get_now_ist
 
 logger = logging.getLogger(__name__)
 
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+FLEET_DOMAIN = os.getenv("FLEET_DOMAIN", "rajath.world").strip() or "rajath.world"
+
+RELAY_EXPORT_NODES: Dict[int, Dict[str, Any]] = {
+    1: {
+        "sheet_num": 1,
+        "name": "Sheet 1 (CF-1)",
+        "folder": "Sheet1",
+        "next_sheet_num": 2,
+        "next_url": f"https://5080-sheet2.{FLEET_DOMAIN}/fleet/export-eligible",
+    },
+    2: {
+        "sheet_num": 2,
+        "name": "Sheet 2 (CF-2)",
+        "folder": "Sheet2",
+        "next_sheet_num": 3,
+        "next_url": f"https://5321-sheet3.{FLEET_DOMAIN}/fleet/export-eligible",
+    },
+    3: {
+        "sheet_num": 3,
+        "name": "Sheet 3 (CF-3)",
+        "folder": "Sheet3",
+        "next_sheet_num": 4,
+        "next_url": f"https://5321-sheet4.{FLEET_DOMAIN}/fleet/export-eligible",
+    },
+    4: {
+        "sheet_num": 4,
+        "name": "Sheet 4 (Filter-V2)",
+        "folder": "Sheet4",
+        "next_sheet_num": 5,
+        "next_url": f"https://9048-sheet1.{FLEET_DOMAIN}/fleet/export-eligible",
+    },
+    5: {
+        "sheet_num": 5,
+        "name": "Testing Fleet Sheet 1",
+        "folder": "Sheet1",
+        "next_sheet_num": None,
+        "next_url": None,
+    },
+}
+
 DAILY_PROCESSING_SHEET_ID = "1DCKvQcAQgTKGnWquYNOH6SlGgCun8yq8HD8Zj0AIJ-Y"
 DAILY_PROCESSING_GID = 0
 
@@ -701,3 +743,214 @@ def update_daily_processed_counts_sheet(
         "accepted": int(accepted_count),
         "processing": int(gemini_processing_count),
     }
+
+
+def trigger_next_relay_node(
+    next_sheet_num: int,
+    snapshot_date: Optional[str] = None,
+    auth_token: Optional[str] = None,
+    max_retries: int = 3,
+) -> bool:
+    """
+    Triggers the next sheet in the sequential relay chain via HTTP POST to /fleet/export-eligible.
+    """
+    import requests
+    node_info = RELAY_EXPORT_NODES.get(next_sheet_num)
+    if not node_info:
+        logger.info(f"🏁 Node {next_sheet_num} not found. Reached end of relay chain.")
+        return True
+
+    # The target URL to reach the next node
+    url_map = {
+        2: RELAY_EXPORT_NODES[1]["next_url"],
+        3: RELAY_EXPORT_NODES[2]["next_url"],
+        4: RELAY_EXPORT_NODES[3]["next_url"],
+        5: RELAY_EXPORT_NODES[4]["next_url"],
+    }
+    target_url = url_map.get(next_sheet_num)
+    if not target_url:
+        logger.info(f"🏁 No target URL for node {next_sheet_num}. End of relay chain.")
+        return True
+
+    token = auth_token or os.getenv("SERVICE_AUTH_TOKEN", "Tracxn@SR")
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    payload = {
+        "sheet_num": next_sheet_num,
+        "snapshot_date": snapshot_date,
+        "trigger_next": True,
+    }
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            logger.info(f"📡 Signaling next relay node {next_sheet_num} at {target_url} (attempt {attempt}/{max_retries})...")
+            resp = requests.post(target_url, json=payload, headers=headers, timeout=120)
+            if resp.status_code == 200:
+                logger.info(f"✅ Node {next_sheet_num} accepted relay export trigger: {resp.text[:200]}")
+                return True
+            else:
+                logger.warning(f"⚠️ Node {next_sheet_num} returned HTTP {resp.status_code}: {resp.text[:200]}")
+        except Exception as e:
+            logger.warning(f"⚠️ Relay signal attempt {attempt} to node {next_sheet_num} failed: {e}")
+        time.sleep(3)
+
+    logger.error(f"❌ Failed to signal next relay node {next_sheet_num} after {max_retries} attempts.")
+    return False
+
+
+def export_sheet_eligible_relay_node(
+    sheet_num: int,
+    snapshot_date: Optional[str] = None,
+    local_records: Optional[List[List[str]]] = None,
+    gc: Any = None,
+    spreadsheet_id: str = DAILY_PROCESSING_SHEET_ID,
+    gid: int = DAILY_PROCESSING_GID,
+    trigger_next: bool = True,
+    verify_live_tracxn: bool = True,
+    auth_token: Optional[str] = None,
+) -> int:
+    """
+    Executes one node in the sequential relay export chain (Sheet 1 -> 2 -> 3 -> 4 -> Testing Fleet Sheet 1).
+    - If sheet_num == 1: Clears B4:E, sets B1 date in red bold (#FF0000), sets B3:E3 headers,
+      writes Sheet 1's eligible domains from B4, and triggers Sheet 2.
+    - If sheet_num in (2, 3, 4, 5): Reads column B to find the next empty row,
+      appends this sheet's unique eligible domains, and triggers the next node in the chain.
+    - If sheet_num == 5 (Testing Fleet): Appends domains and logs chain completion.
+    """
+    if gc is None:
+        from common.advance_precrawl import get_gspread_client
+        gc = get_gspread_client()
+
+    node_info = RELAY_EXPORT_NODES.get(sheet_num)
+    if not node_info:
+        raise ValueError(f"Unknown relay node: {sheet_num}. Valid nodes: {list(RELAY_EXPORT_NODES.keys())}")
+
+    folder_name = node_info["folder"]
+    sheet_dir = os.path.join(BASE_DIR, folder_name)
+
+    # 1. Collect records for this node
+    raw_recs: List[List[str]] = []
+    if local_records is not None:
+        raw_recs = local_records
+    else:
+        if snapshot_date:
+            snap_recs = load_sheet_eligible_snapshot(sheet_dir, snapshot_date)
+            if snap_recs:
+                raw_recs = snap_recs
+        if not raw_recs:
+            raw_recs = get_eligible_records_for_sheet_dir(sheet_dir=sheet_dir, gspread_client=gc)
+
+    # 2. Live Tracxn API validation if enabled
+    accepted_domains = None
+    if verify_live_tracxn and raw_recs:
+        cand_domains = [str(r[0]).strip() for r in raw_recs if r and str(r[0] or "").strip()]
+        if cand_domains:
+            try:
+                accepted_domains, _ = filter_unpublished_non_sameas_domains(cand_domains)
+            except Exception as e:
+                logger.error(f"Error during live Tracxn API check for node {sheet_num}: {e}")
+
+    # 3. Open target Google Sheet
+    ss = gc.open_by_key(spreadsheet_id)
+    try:
+        ws = ss.get_worksheet_by_id(gid)
+    except Exception:
+        ws = ss.worksheet("Sheet1")
+
+    cur_cols = getattr(ws, "col_count", 5)
+    name_to_id = load_funnel_name_to_id_map(gc)
+
+    # 4. Handle Node 1 (First in Chain: Clears & inits header/date) vs Subsequent Nodes
+    if sheet_num == 1:
+        cur_rows = getattr(ws, "row_count", 0)
+        max_clear_row = max(cur_rows if isinstance(cur_rows, int) else 0, 50000)
+        ws.batch_clear([f"B4:E{max_clear_row}"])
+
+        ws.update(
+            range_name="B3:E3",
+            values=[["Domains", "Domain Profile ID", "Publish Funnel Name", "Publish Funnel ID"]],
+            value_input_option="USER_ENTERED",
+        )
+
+        now_dt = get_now_ist()
+        date_str = now_dt.strftime("%d %b %Y")
+        ws.update(range_name="B1", values=[[date_str]], value_input_option="USER_ENTERED")
+        try:
+            ws.format(
+                "B1",
+                {
+                    "textFormat": {
+                        "foregroundColor": {"red": 1.0, "green": 0.0, "blue": 0.0},
+                        "bold": True,
+                    },
+                    "numberFormat": {
+                        "type": "DATE",
+                        "pattern": "dd mmm yyyy",
+                    },
+                },
+            )
+        except Exception as fe:
+            logger.debug(f"Could not format B1: {fe}")
+
+        start_row = 4
+        existing_seen: Set[str] = set()
+    else:
+        col_b_vals = ws.col_values(2)
+        existing_seen = set()
+        for idx, val in enumerate(col_b_vals):
+            if idx >= 3 and val:  # Row 4+ (0-indexed >= 3)
+                nd = normalize_domain(val)
+                if nd:
+                    existing_seen.add(nd)
+        start_row = max(4, len(col_b_vals) + 1)
+
+    # 5. Clean, dedupe, and format rows to write
+    clean_rows: List[List[str]] = []
+    seen = set(existing_seen)
+    for r in raw_recs:
+        if not r or not str(r[0] or "").strip():
+            continue
+        dom = str(r[0]).strip()
+        nd = normalize_domain(dom)
+        if not nd or nd in seen:
+            continue
+        if accepted_domains is not None and nd not in accepted_domains:
+            continue
+        seen.add(nd)
+        prof_id = str(r[1]).strip() if len(r) > 1 and r[1] is not None else ""
+        funnel_name = str(r[2]).strip() if len(r) > 2 and r[2] is not None else ""
+        funnel_id = str(r[3]).strip() if len(r) > 3 and r[3] is not None else ""
+        if not funnel_id and funnel_name and funnel_name in name_to_id:
+            funnel_id = name_to_id[funnel_name]
+        clean_rows.append([dom, prof_id, funnel_name, funnel_id])
+
+    # 6. Write to Google Sheet in chunks
+    if clean_rows:
+        needed_total_rows = start_row + len(clean_rows) + 10
+        cur_ws_rows = getattr(ws, "row_count", 0)
+        if isinstance(cur_ws_rows, int) and cur_ws_rows < needed_total_rows:
+            ws.resize(rows=needed_total_rows, cols=max(5, cur_cols if isinstance(cur_cols, int) else 5))
+
+        CHUNK = 2500
+        for idx in range(0, len(clean_rows), CHUNK):
+            chunk = clean_rows[idx : idx + CHUNK]
+            s_r = start_row + idx
+            e_r = s_r + len(chunk) - 1
+            ws.update(range_name=f"B{s_r}:E{e_r}", values=chunk, value_input_option="RAW")
+            if idx + CHUNK < len(clean_rows):
+                time.sleep(0.5)
+
+        logger.info(
+            f"📤 Relay Node {sheet_num} ({node_info['name']}): Wrote {len(clean_rows)} domains to B{start_row}:E{start_row + len(clean_rows) - 1}"
+        )
+    else:
+        logger.info(f"ℹ️ Relay Node {sheet_num} ({node_info['name']}): 0 new clean records to write.")
+
+    # 7. Trigger next node in relay chain
+    next_node = node_info.get("next_sheet_num")
+    if trigger_next and next_node:
+        logger.info(f"🚀 Relay Node {sheet_num} triggering next node {next_node}...")
+        trigger_next_relay_node(next_node, snapshot_date=snapshot_date, auth_token=auth_token)
+    elif not next_node:
+        logger.info(f"🎉 Sequential relay export complete! Reached final node {sheet_num}.")
+
+    return len(clean_rows)

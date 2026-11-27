@@ -54,5 +54,6 @@ status_dashboard.gs
 GEMINI.md
 
 BrightDataSet2_DiscoveryRun.xlsx
-CHANGELOG.md
 24Nov.txt
+.playwright-mcp/
+Temp_Test/

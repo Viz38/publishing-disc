@@ -15,6 +15,7 @@ import sys
 import json
 import csv
 import glob
+import time
 import logging
 import datetime
 from typing import List, Dict, Tuple, Set, Optional, Any, Iterable, Union
@@ -32,6 +33,8 @@ TARGET_SHEETS = [
     {"num": 3, "id": "1MHdkFCsoAY0V7ix_pJ5SpWFq3EFpJEug2ntJk1FkEl8", "name": "Sheet 3 (CF-3)"},
     {"num": 4, "id": "1z3wH--c2qHGlNqW0e-6Mc8IVqh_kN5_fbWjILM4FxQM", "name": "Sheet 4 (Filter-V2)"},
 ]
+
+CUMULATIVE_DEDUP_SHEET_ID = "1p4wg5rlfpn8xPwVCWuDnyWdSCwha9pjXSIMISjF84Sg"
 
 def get_today_ist() -> str:
     """Returns today's date formatted as YYYY-MM-DD in Asia/Kolkata timezone."""
@@ -161,11 +164,13 @@ class DailyProcessedRegistry:
         self,
         days: int = 7,
         target_date: Optional[Union[datetime.date, datetime.datetime, str]] = None,
-        include_peer_endpoints: bool = True
+        include_peer_endpoints: bool = True,
+        include_cumulative_sheet: bool = True
     ) -> Set[str]:
         """
         Retrieves all domains processed within a rolling window of `days` up to target_date (inclusive).
-        Aggregates local daily registry files, bootstraps missing days, and merges peer fleet domains.
+        Aggregates local daily registry files, bootstraps missing days, merges peer fleet domains,
+        and pulls from the 7-day cumulative master sheet (1p4wg5rlfpn8xPwVCWuDnyWdSCwha9pjXSIMISjF84Sg).
         """
         if target_date is None:
             now_utc = datetime.datetime.now(datetime.timezone.utc)
@@ -185,6 +190,15 @@ class DailyProcessedRegistry:
             d_str = d_curr.strftime("%Y-%m-%d")
             daily_doms = self.get_daily_processed(d_str, allow_bootstrap=True)
             historical_pool.update(daily_doms)
+
+        if include_cumulative_sheet:
+            try:
+                cum_doms = fetch_cumulative_sheet_domains(days=days, root_dir=self.root_dir)
+                if cum_doms:
+                    logger.info(f"Merged {len(cum_doms)} historical domains from 7-day cumulative sheet.")
+                    historical_pool.update(cum_doms)
+            except Exception as ce:
+                logger.warning(f"Could not fetch cumulative sheet domains: {ce}")
 
         if include_peer_endpoints:
             peer_doms = fetch_fleet_peer_historical_domains(days=days)
@@ -272,6 +286,117 @@ def fetch_fleet_peer_historical_domains(days: int = 7) -> Set[str]:
             continue
 
     return peer_domains
+
+
+def fetch_cumulative_sheet_domains(
+    days: int = 7,
+    cache_ttl_seconds: int = 3600,
+    force_refresh: bool = False,
+    root_dir: Optional[str] = None
+) -> Set[str]:
+    """
+    Fetches processed domains from the master 7-day cumulative Google Sheet
+    (1p4wg5rlfpn8xPwVCWuDnyWdSCwha9pjXSIMISjF84Sg).
+    Parses rolling date tabs (e.g. '27Nov2026', '26Nov2026') up to `days` days back.
+    Maintains a local disk cache in Logs/daily_registry/cumulative_7day_cache.json
+    with TTL to prevent excessive Google Sheets API calls across fleet nodes.
+    """
+    base_dir = root_dir or BASE_DIR
+    cache_dir = os.path.join(base_dir, "Logs", "daily_registry")
+    os.makedirs(cache_dir, exist_ok=True)
+    cache_file = os.path.join(cache_dir, "cumulative_7day_cache.json")
+
+    now_ts = time.time()
+    today_str = get_today_ist()
+
+    # 1. Check local disk cache first
+    if not force_refresh and os.path.exists(cache_file):
+        try:
+            with open(cache_file, "r", encoding="utf-8") as f:
+                cached = json.load(f)
+            cached_ts = cached.get("timestamp", 0)
+            cached_domains = cached.get("domains", [])
+            if (now_ts - cached_ts < cache_ttl_seconds) and cached_domains:
+                logger.info(f"Loaded {len(cached_domains)} cumulative domains from local disk cache ({cache_file}).")
+                return set(d.strip().lower() for d in cached_domains if d and "." in d)
+        except Exception as ce:
+            logger.debug(f"Failed to read cumulative cache file: {ce}")
+
+    # 2. Fetch from live Google Sheet
+    domains: Set[str] = set()
+    tab_counts: Dict[str, int] = {}
+    try:
+        from common.advance_precrawl import get_gspread_client
+        gc = get_gspread_client()
+        sh = retry_gspread_call(lambda: gc.open_by_key(CUMULATIVE_DEDUP_SHEET_ID))
+        worksheets = retry_gspread_call(lambda: sh.worksheets())
+
+        now_utc = datetime.datetime.now(datetime.timezone.utc)
+        now_ist = (now_utc + datetime.timedelta(hours=5, minutes=30)).date()
+        cutoff_date = now_ist - datetime.timedelta(days=days)
+
+        for ws in worksheets:
+            title = ws.title.strip()
+            tab_date = None
+            for fmt in ["%d%b%Y", "%d%B%Y"]:
+                try:
+                    tab_date = datetime.datetime.strptime(title, fmt).date()
+                    break
+                except ValueError:
+                    continue
+
+            if tab_date and cutoff_date <= tab_date <= now_ist:
+                try:
+                    col_vals = retry_gspread_call(lambda: ws.col_values(1))
+                    cnt = 0
+                    for val in col_vals:
+                        if val:
+                            d = val.strip().lower()
+                            if "." in d and " " not in d and d != "domains" and not d.startswith("title"):
+                                domains.add(d)
+                                cnt += 1
+                    tab_counts[title] = cnt
+                    logger.info(f"Loaded {cnt} domains from cumulative sheet tab '{title}'")
+                except Exception as we:
+                    logger.warning(f"Error fetching column A from tab '{title}': {we}")
+
+        if domains:
+            temp_cache = f"{cache_file}.tmp.{os.getpid()}"
+            try:
+                with open(temp_cache, "w", encoding="utf-8") as f:
+                    json.dump({
+                        "timestamp": now_ts,
+                        "date": today_str,
+                        "days": days,
+                        "tab_counts": tab_counts,
+                        "domains": sorted(list(domains))
+                    }, f)
+                os.replace(temp_cache, cache_file)
+                logger.info(f"Cached {len(domains)} cumulative domains to {cache_file}.")
+            except Exception as swe:
+                logger.debug(f"Error caching cumulative domains: {swe}")
+                if os.path.exists(temp_cache):
+                    try:
+                        os.remove(temp_cache)
+                    except Exception:
+                        pass
+            return domains
+
+    except Exception as e:
+        logger.error(f"Failed to fetch cumulative sheet domains from Google Sheets: {e}")
+        # Resilient fallback: return stale cache if available
+        if os.path.exists(cache_file):
+            try:
+                with open(cache_file, "r", encoding="utf-8") as f:
+                    cached = json.load(f)
+                cached_domains = cached.get("domains", [])
+                if cached_domains:
+                    logger.info(f"Fallback: using {len(cached_domains)} domains from existing cache.")
+                    return set(d.strip().lower() for d in cached_domains if d and "." in d)
+            except Exception:
+                pass
+
+    return domains
 
 
 def identify_fleet_duplicates(

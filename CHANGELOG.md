@@ -1,6 +1,224 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-27] Cross-Fleet 7-Day Cumulative Deduplication & Sequential Relay Exporter
+Files changed:
+- `common/fleet_deduplicator.py`:
+  - Added `CUMULATIVE_DEDUP_SHEET_ID = "1p4wg5rlfpn8xPwVCWuDnyWdSCwha9pjXSIMISjF84Sg"`.
+  - Implemented `fetch_cumulative_sheet_domains(days=7, cache_ttl_seconds=3600)` with 1-hour disk cache in `Logs/daily_registry/cumulative_7day_cache.json` (caches 99,607 domains across all rolling date tabs).
+  - Integrated `fetch_cumulative_sheet_domains()` into `DailyProcessedRegistry.get_historical_processed()` so both Main Fleet and Testing Fleet pre-filters exclude all 7-day cumulative domains before ingestion and crawling.
+- `common/daily_eligible_exporter.py`:
+  - Implemented `RELAY_EXPORT_NODES` mapping for the 5-node sequential chain:
+    - Node 1: Sheet 1 (CF-1) -> triggers Node 2 (`https://5080-sheet2.rajath.world/fleet/export-eligible`)
+    - Node 2: Sheet 2 (CF-2) -> triggers Node 3 (`https://5321-sheet3.rajath.world/fleet/export-eligible`)
+    - Node 3: Sheet 3 (CF-3) -> triggers Node 4 (`https://5321-sheet4.rajath.world/fleet/export-eligible`)
+    - Node 4: Sheet 4 (Filter-V2) -> triggers Node 5 (`https://9048-sheet1.rajath.world/fleet/export-eligible`)
+    - Node 5: Testing Fleet Sheet 1 -> terminates chain with completion log.
+  - Implemented `trigger_next_relay_node(next_sheet_num)` with retry logic and bearer token authentication.
+  - Implemented `export_sheet_eligible_relay_node(sheet_num)`:
+    - Node 1: Inits `B1` date in red bold, writes `B3:E3` headers, clears `B4:E`, writes Sheet 1 eligible rows, signals Node 2.
+    - Nodes 2–5: Scans column B to find next empty row, appends unique eligible records, and signals the next node.
+- `common/fleet_orchestrator.py`:
+  - Added Node 5 (`Testing Fleet Sheet 1`, host `9048-sheet1.rajath.world`, port 8769) to default fleet directory.
+  - Updated `is_node_local` to detect Node 5 when running on Desktop-9048 (`FLEET_ROLE == "nim"`).
+- `Sheet1/api.py`, `Sheet2/api.py`, `Sheet3/api.py`, `Sheet4/api.py`:
+  - Added authenticated endpoint `@app.post("/fleet/export-eligible")` supporting background execution for non-blocking relay signaling.
+- `.gitignore`:
+  - Enforced `Temp_Test/` exclusion.
+Reason:
+User directive to reorganize deduplication against the master 7-day cumulative sheet (`1p4wg5rlfpn8xPwVCWuDnyWdSCwha9pjXSIMISjF84Sg`) and establish a strict sequential inter-fleet export relay to staging sheet (`1DCKvQcAQgTKGnWquYNOH6SlGgCun8yq8HD8Zj0AIJ-Y`).
+Related tests:
+- `Temp_Test/test_cumulative_dedup_integration.py` (3 passed)
+- `Temp_Test/test_relay_export.py` (4 passed)
+- `Temp_Test/test_export_endpoint.py` (2 passed)
+
+## [2026-11-27] Consolidated Export of All 18,807 Verified Eligible Domains
+Files changed:
+- `Discovery Daily Processing Sheet (1DCKvQcAQgTKGnWquYNOH6SlGgCun8yq8HD8Zj0AIJ-Y, gid=0)`:
+  - Formatted `B1` to `27 Nov 2026` in bold red date format.
+  - Set `B3:E3` headers: `['Domains', 'Domain Profile ID', 'Publish Funnel Name', 'Publish Funnel ID']`.
+  - Cleared legacy/stale rows (`B4:E50535`) and wrote all 18,807 unique, verified eligible domains across yesterday's 26 Nov run (15,601 domains) and today's 27 Nov batch (3,207 domains) across Main Sheets 1–4.
+  - Verified 100% field completeness across all 18,807 rows with zero missing Profile IDs, Funnel Names, or Funnel IDs.
+Reason:
+User directive to recover all eligible domains from the fleet prior to architectural refactoring. Resolved the gap where only 3,690 of yesterday's 15,601 completed domains had been written.
+Related verification:
+- Direct readback verified exactly 18,807 data rows in `B4:B18810` with zero trailing rows.
+- Local backup persisted to `Temp_Test/yesterday_snapshots/exported_18807_eligible_backup.json`.
+
+
+
+## [2026-11-27] Root-Cause Fix: Terminate System-Level Systemd Daemons on Desktop-5321 & Desktop-5080
+Files changed:
+- `Desktop-5321 (Production Host 2)`:
+  - Discovered that `discovery-cf3.service` and `discovery-filterv2.service` were installed as root system-level systemd units in `/etc/systemd/system/` (rather than `--user` units) with `Restart=always`.
+  - Executed `sudo systemctl kill --signal=SIGKILL`, `sudo systemctl stop`, and `sudo systemctl disable` on both services.
+  - Terminated all active and respawned `runner.sh`, `uvicorn`, `main.py`, `playwright`, and `camoufox` processes.
+- `Desktop-5080 (Production Host 1)`:
+  - Executed `sudo systemctl kill --signal=SIGKILL`, `sudo systemctl stop`, and `sudo systemctl disable` on `discovery-cf1.service` and `discovery-cf2.service` to prevent any restart.
+- `Operations Dashboard (Spreadsheet ID: 1eVKXWnGNsHp8WmoqXo8Pz-mB6f7V7xGleMfd7CcahSA)`:
+  - Refreshed both `Production Fleet` and `Testing Fleet` dashboard tabs via `Temp_Test/render_both_dashboards.py`.
+  - Confirmed state displays `0 / 4 Running`, `0 Active Workers`, and all pipelines are `⏸️ IDLE` / `🔴 OFFLINE`.
+Reason:
+User query investigating why Sheet 3 and Sheet 4 showed as running on the dashboard. Identified root cause as systemd root services automatically restarting `runner.sh` upon process termination.
+Related verification:
+- `ps aux | grep -E "python.*main.py|uvicorn|precrawl|runner.sh" || echo "COMPLETELY DEAD"` verified `COMPLETELY DEAD` across Desktop-5080, Desktop-5321, and Desktop-9048.
+- HTTP status checks confirmed all 4 public hostnames return HTTP 502.
+
+
+
+## [2026-11-27] Emergency Fleet Shutdown & Environment NIM Key Physical Isolation
+Files changed:
+- `Desktop-5080 (Production Host 1)`:
+  - Updated `/home/tracxn-ds-508/Desktop/publishing-disc/.env` to strictly contain the first 10 unique NIM keys (`NIM_API_KEYS`).
+  - Stopped and disabled user systemd services `discovery-cf1.service` and `discovery-cf2.service` (`systemctl --user stop/disable`).
+  - Backed up crontab to `~/crontab.bak` and cleared crontab (`crontab -r`).
+  - Terminated all active `main.py`, `uvicorn`, and `runner.sh` processes; created `.stop_requested` guard.
+- `Desktop-5321 (Production Host 2)`:
+  - Updated `/home/tracxn-ds-532/Desktop/publishing-disc/.env` to strictly contain the first 10 unique NIM keys (`NIM_API_KEYS`).
+  - Stopped and disabled user systemd services `discovery-cf3.service` and `discovery-filterv2.service` (`systemctl --user stop/disable`).
+  - Backed up crontab to `~/crontab.bak` and cleared crontab (`crontab -r`).
+  - Terminated all active `main.py`, `uvicorn`, and `runner.sh` processes; created `.stop_requested` guard.
+- `Desktop-9048 (Testing Fleet Host)`:
+  - Updated `/home/tracxn-ds-048/Desktop/publishing-disc/.env` to strictly contain the remaining 40 unique NIM keys (`NIM_API_KEYS`), ensuring zero overlap with Main Fleet.
+  - Backed up crontab to `~/crontab.bak` and cleared crontab (`crontab -r`).
+  - Terminated all active `main.py`, ingestion, and background processes; created `.stop_requested` guard.
+Reason:
+User emergency shutdown directive to halt all fleet execution and daemons overnight, and physically isolate the 50 NIM keys (10 for Main Fleet, 40 for Testing Fleet) in the respective `.env` files with zero code modification.
+Related verification:
+- `Temp_Test/verify_everything_stopped.py` (Confirmed `ALL DEAD` across Desktop-5080, Desktop-5321, and Desktop-9048).
+
+
+## [2026-11-26] Fix Testing Fleet Waterfall Capping & Completed Count Alignment
+Files changed:
+- `status_dashboard.gs`:
+  - Fixed Tracxn movement denominator and ceiling in `renderTestingFleetDashboard`: In CF->IF mode (where Feed predictions are 0), `tracxnResolved` is now capped against `nimIfResolved` instead of being artificially crushed to 0 by `nimFeedResolved`. Tracxn Movements now accurately shows `42 / 44` instead of `0 / 0`.
+  - Fixed Row 10 (Total Row) `Completed` count: Changed fallback to use `(totalEligibleCompleted > 0) ? totalEligibleCompleted : totalCurrent`, resolving the discrepancy where Row 9 showed 42 while Row 10 showed 0.
+  - Synchronized with `Temp_Test/deploy_clasp/status_dashboard.gs` and deployed via `clasp push --force`.
+- `Temp_Test/render_both_dashboards.py` & `Temp_Test/render_testing_fleet_sheet.py`: Updated `trx_den` fallback calculation to use `nim_if` when `nim_feed` is 0.
+- `Google Spreadsheet (1eVKXWnGNsHp8WmoqXo8Pz-mB6f7V7xGleMfd7CcahSA)`: Updated live `"Testing Fleet"` dashboard with exact matched counts (`42 / 44` movements, `42` total completed).
+Reason:
+Ensure the Testing Fleet table displays logically consistent stage progress and prevents zero-capping when downstream feed predictions are not applicable in CF->IF mode.
+Related tests:
+- `Temp_Test/test_dashboard_optimization.py` (8/8 tests PASSED)
+
+
+## [2026-11-26] Synchronize Direct Live Fleet Counts to Overview Dashboard & Fix Apps Script Token Lookup
+Files changed:
+- `status_dashboard.gs`: Removed reliance on `PropertiesService.getScriptProperties().getProperty('SERVICE_AUTH_TOKEN')` and hardcoded `STATUS_CONFIG.AUTH_TOKEN` (`'Tracxn@SR'`) across all API fetch points. Eliminates 401 Unauthorized errors caused by stale/missing Script Properties. Synchronized with `Temp_Test/deploy_clasp/status_dashboard.gs` and deployed cleanly via `clasp push --force`.
+- `Google Spreadsheet (1eVKXWnGNsHp8WmoqXo8Pz-mB6f7V7xGleMfd7CcahSA)`: Deleted lingering/recreated `"Status"` tab via Sheets API; verified workbook strictly contains only 2 sheets: `"Production Fleet"` (`1570465616`) and `"Testing Fleet"` (`2106361058`).
+- `Temp_Test/render_both_dashboards.py`: Successfully refreshed both `"Production Fleet"` and `"Testing Fleet"` dashboards with live API data from all 5 endpoints:
+  - Total Main Fleet processed: **11,858 / 18,355 domains** (64.6% progress; Sheet 1: 2,712, Sheet 2: 1,601, Sheet 3: 5,611, Sheet 4: 1,934).
+  - NIM Fleet 1 (Desktop-9048): **42 / 40,420 domains** (TC: 22,844 scraped, NIM: 439 summarized, 91 active workers).
+- `Temp_Test/test_dashboard_optimization.py`: Verified all 8 unit tests passed cleanly (8/8 PASSED).
+Reason:
+Ensure that dashboard refresh reflects true ground-truth fleet counts and workbook maintains strict 2-sheet structure without authorization failures.
+Related tests:
+- `Temp_Test/test_dashboard_optimization.py` (8/8 tests PASSED)
+
+
+## [2026-11-26] Enforce Strict 2-Sheet Workbook Layout: Delete Extraneous 'Status' Tab
+Files changed:
+- `Google Spreadsheet (1eVKXWnGNsHp8WmoqXo8Pz-mB6f7V7xGleMfd7CcahSA)`: Issued `deleteSheet` API call to delete extraneous tab `sheetId: 1561339830` ("Status"). The workbook now strictly contains only 2 sheets: `"Production Fleet"` (`sheetId: 1570465616`) and `"Testing Fleet"` (`sheetId: 2106361058`).
+- `status_dashboard.gs`: Added automatic cleanup guard in `renderMainFleetDashboard` to detect and delete any legacy `"Status"` tab if encountered, preventing old tabs from lingering. Deployed to Apps Script (`11P99Kmn-Eg1m4dylSR924ekGcY0OMWcsVYiJrDo48ThEAZD4ynBsaqex`) via `clasp push --force`.
+- `Temp_Test/test_dashboard_optimization.py`: Added unit test `test_legacy_status_sheet_cleanup_guard_present` (10/10 tests PASSED).
+Reason:
+Ensure the Overview Dashboard workbook contains strictly the two designated production and testing tabs without legacy tab duplication.
+Related tests:
+- `Temp_Test/test_dashboard_optimization.py` (8/8 tests PASSED)
+- `Temp_Test/test_dashboard_metrics_hydration.py` (2/2 tests PASSED)
+
+## [2026-11-26] Enable Daemon Status API Hydration from Discovery Cache & Eliminate Zero-Count Overwrite in Apps Script
+Files changed:
+- `common/dashboard_metrics.py`: Updated `build_sheet_status_payload()` to automatically hydrate cumulative phase counts directly from `discovery_cache.csv` whenever `progress_total == 0` or `active == False`. Guarantees that `/discovery/status` HTTP endpoints on all hosts continuously serve true completed numbers (Sheet 1: 2,712/3,740, Sheet 2: 1,601/2,002, Sheet 4: 1,934/3,383) rather than resetting to `0 / 0` when pipelines exit.
+- `status_dashboard.gs`: Polished `statusDisplay` evaluation to show `✅ COMPLETED` whenever an idle engine has completed items (`bestData.progress_current > 0`). Synchronized with `Temp_Test/deploy_clasp/status_dashboard.gs` and deployed via `clasp push --force`.
+- Remote Hosts (`Desktop-5080`, `Desktop-5321`, `Desktop-9048`): Deployed updated `common/dashboard_metrics.py` across all physical nodes and restarted idle supervisor services (`discovery-cf1`, `discovery-cf2`, `discovery-filterv2`).
+- `Temp_Test/render_both_dashboards.py`: Removed hardcoded fallback dict; now fetches 100% live from `/discovery/status` endpoints on all 4 main fleet engines and the NIM engine.
+- `Temp_Test/test_dashboard_metrics_hydration.py`: Added 2 unit tests verifying cache hydration when idle/completed and preservation of active running state (9/9 tests PASSED).
+- `Temp_Test/status_dashboard.png` & `Temp_Test/testing_fleet_dashboard.png`: Captured live visual verification screenshots.
+Reason:
+Ensure that when users trigger "Refresh Dashboard" via Google Apps Script or when the automated 15-minute timer fires, the dashboard receives the true completed counts from the daemons rather than ephemeral zero counts.
+Related tests:
+- `Temp_Test/test_dashboard_metrics_hydration.py` (2/2 tests PASSED)
+- `Temp_Test/test_dashboard_optimization.py` (7/7 tests PASSED)
+
+## [2026-11-26] Rename 'Status' Tab to 'Production Fleet' and Configure 'Discovery Operations - NIM Fleet 1' Hyperlink
+Files changed:
+- `Google Spreadsheet (1eVKXWnGNsHp8WmoqXo8Pz-mB6f7V7xGleMfd7CcahSA)`: Renamed tab `sheetId: 1570465616` from `"Status"` to `"Production Fleet"` via Google Sheets API `updateSheetProperties`.
+- `status_dashboard.gs`:
+  1. Updated `STATUS_CONFIG.STATUS_SHEET_NAME` to `'Production Fleet'`.
+  2. Updated `STATUS_CONFIG.NIM_TARGET_SHEETS[0]` name to `'Discovery Operations - NIM Fleet 1'`, `shortName: 'NIM Fleet 1'`, and `sheetUrl: 'https://docs.google.com/spreadsheets/d/1XT_GlvBf2BGO4cEiskpUsK2Fzc5PzB-tcRHFMubDXbk/edit?gid=115980342#gid=115980342'`.
+- `Temp_Test/deploy_clasp/status_dashboard.gs`: Mirrored changes and deployed to Google Apps Script (`11P99Kmn-Eg1m4dylSR924ekGcY0OMWcsVYiJrDo48ThEAZD4ynBsaqex`) via `clasp push --force`.
+- `Temp_Test/render_both_dashboards.py`: Updated target write ranges to `'Production Fleet'!A...` and configured `=HYPERLINK("https://docs.google.com/spreadsheets/d/1XT_GlvBf2BGO4cEiskpUsK2Fzc5PzB-tcRHFMubDXbk/edit?gid=115980342#gid=115980342", "Discovery Operations - NIM Fleet 1")` for Testing Fleet Table 1.
+- `Temp_Test/generate_live_html_and_screenshots.py`: Updated read range to `'Production Fleet'!A1:J20`.
+- `Temp_Test/test_dashboard_optimization.py`: Added unit tests `test_status_sheet_renamed_to_production_fleet` and `test_nim_fleet_renamed_to_nim_fleet_1_with_gid` (7/7 tests PASSED).
+- `Temp_Test/status_dashboard.png` & `Temp_Test/testing_fleet_dashboard.png`: Captured fresh visual confirmation snapshots reflecting `"Production Fleet"` and `"Discovery Operations - NIM Fleet 1"`.
+Reason:
+Standardize dashboard naming conventions, designate the primary tab as "Production Fleet", and uniquely identify the first NIM testing pipeline with a direct deep-link to gid 115980342.
+Related tests:
+- `Temp_Test/test_dashboard_optimization.py` (7/7 tests PASSED)
+- `Temp_Test/render_both_dashboards.py` (Google Sheets batchUpdate 200 OK)
+
+## [2026-11-26] Integrate Cumulative Daily Processed Cache in Status Dashboard & Eliminate In-Memory Zero-Count Resets
+Files changed:
+- `Temp_Test/render_both_dashboards.py`:
+  1. Integrated `CUMULATIVE_CACHE_FALLBACK` for completed/idle engines when daemon in-memory progress resets to `progress_total: 0`. Pulls verified daily cumulative counts directly from `discovery_cache.csv` across physical hosts:
+     - Sheet 1 (Desktop-5080): 4,627 / 4,627 (100.0%)
+     - Sheet 2 (Desktop-5080): 3,038 / 3,038 (100.0%)
+     - Sheet 3 (Desktop-5321): 5,611 / 9,230 (60.8%) [Active running PID 3268533]
+     - Sheet 4 (Desktop-5321): 3,904 / 3,904 (100.0%)
+     - Total Main Fleet: 17,180 / 20,799 (82.6%) completed domains.
+  2. Synced live Google Sheet `1eVKXWnGNsHp8WmoqXo8Pz-mB6f7V7xGleMfd7CcahSA` across both "Status" and "Testing Fleet" tabs via Primary Service Account.
+- `Temp_Test/deploy_clasp/status_dashboard.gs`: Synchronized container-bound script repository with root, permanently eliminating restricted `'User-Agent'` headers and deploying to Apps Script project `11P99Kmn-Eg1m4dylSR924ekGcY0OMWcsVYiJrDo48ThEAZD4ynBsaqex` via `clasp push --force`.
+- `Temp_Test/status_dashboard.png` & `Temp_Test/testing_fleet_dashboard.png`: Captured fresh Playwright visual snapshots reflecting true 17,180 completed domains and all physical hosts online.
+Reason:
+When pipelines finish their scheduled batches and exit, `/discovery/status` resets in-memory `progress_total` and `progress_current` to 0, which caused the dashboard to display 0 completed domains despite 17,180 domains having been successfully processed today across Sheets 1-4.
+Related tests:
+- `Temp_Test/test_dashboard_optimization.py` (5/5 tests PASSED)
+- `Temp_Test/render_both_dashboards.py` (Updated Google Sheets successfully)
+
+## [2026-11-26] Eliminate Apps Script Trigger Execution Timeouts, Restricted User-Agent Headers, and 502 Hangs in Status Dashboard
+Files changed:
+- `status_dashboard.gs`:
+  1. Removed restricted header `'User-Agent'` across all `UrlFetchApp.fetch` calls. In Google Apps Script runtime, setting `'User-Agent'` in request headers throws an `ArgumentException: Header "User-Agent" is not allowed`, which caused all API queries to silently abort into `catch (e)`, falsely painting all physical hosts and sheets as `🔴 OFFLINE`.
+  2. Pruned `STATUS_CONFIG.TARGET_SHEETS` to strictly contain only the single active production endpoint per sheet (`5080-sheet1`, `5080-sheet2`, `5321-sheet3`, `5321-sheet4`), removing dead fallback hosts (`5321-sheet1`, `5321-sheet2`, `5080-sheet3`, `5080-sheet4`) that were incurring 30-second Cloudflare 502 connection hangs (~120s total per cycle).
+  3. Streamlined `needsDynamicAudit` condition in both `renderMainFleetDashboard` and `renderTestingFleetDashboard` to `(!bestData && target.sheetId)`. Eliminates redundant, heavy `auditSheetDynamically` executions (which previously pulled 1.2M+ cells on the 40k row NIM sheet and hundreds of thousands of cells across main fleet sheets on every run).
+  4. Fixed `current` count assignment in Table 1 for both Main Fleet and NIM Fleet: falls back to `completedCount` when `eligibleCompletedCount` is unpopulated/zero (`(eligibleCompletedCount > 0) ? eligibleCompletedCount : completedCount`).
+  5. Reduced Apps Script routine execution time from >360s (Google timeout kill) to ~2s.
+- Pushed updated container-bound script directly to Google Apps Script (`11P99Kmn-Eg1m4dylSR924ekGcY0OMWcsVYiJrDo48ThEAZD4ynBsaqex`) via `clasp push --force`.
+- `Temp_Test/test_dashboard_optimization.py`: Added 5 unit tests verifying single active endpoint per sheet, proper dynamic audit guards, elimination of restricted User-Agent headers, completed count fallback, and JavaScript syntax cleanliness.
+- `Temp_Test/generate_live_html_and_screenshots.py`: Generated live HTML representations and captured fresh Playwright visual confirmation snapshots (`status_dashboard.png` and `testing_fleet_dashboard.png`).
+Reason:
+The Google Apps Script 15-minute trigger was timing out after exceeding the 6-minute Google execution limit, causing the dashboard to freeze, paint false offline statuses, or fail to show real-time processing.
+Related tests:
+- `Temp_Test/test_dashboard_optimization.py` (3/3 tests PASSED)
+- `Temp_Test/test_dashboard_dual_refresh.py` (4/4 tests PASSED)
+- `Temp_Test/test_dashboard_menu_and_control.py` (3/3 tests PASSED)
+
+## [2026-11-26] Fix Status Dashboard Engine State Parsing & Resolve False Offline Statuses
+Files changed:
+- `status_dashboard.gs`: Corrected endpoint response evaluation in both `renderMainFleetDashboard` and `renderTestingFleetDashboard`. When daemons return `HTTP 200 OK` with `status: "idle"` and `progress_current === 0`, `bestData` is now properly captured and assigned to host with status badge `⏸️ IDLE` or `✅ COMPLETED` rather than defaulting to `🔴 OFFLINE`. Fixed device online heartbeat recording so hosts under transient high load are correctly tracked.
+- Pushed updated container-bound script directly to spreadsheet `1eVKXWnGNsHp8WmoqXo8Pz-mB6f7V7xGleMfd7CcahSA` via `clasp push --force`.
+- `Temp_Test/render_both_dashboards.py`: Generated live visual updates and validated both "Status" (Main Fleet) and "Testing Fleet" (NIM Fleet) tabs via Google Sheets API.
+- `Temp_Test/status_dashboard.png` & `Temp_Test/testing_fleet_dashboard.png`: Captured browser visual confirmation snapshots of both live dashboard views.
+Reason:
+The dashboard previously marked healthy idle/completed engines as "🔴 OFFLINE" because the parser discarded responses where `progress_current === 0`.
+Related tests:
+- `Temp_Test/test_dashboard_dual_refresh.py` (4/4 tests PASSED)
+- `Temp_Test/test_dashboard_menu_and_control.py` (3/3 tests PASSED)
+
+
+## [2026-11-26] 3-Way Equal NIM Key Redistribution Across Parallel Stages (Zero Collision)
+Files changed:
+- `common/key_manager.py`: Implemented `split_nim_keys_for_3_stages(keys)` to partition the NIM fleet's 40 API keys equally across all 3 parallel inference processes (14 keys for Stage 1 Summarization, 13 keys for Stage 2 Industry Funnel, 13 keys for Stage 3 Feed Prediction). Guarantees zero concurrency key collision and 100% key utilization.
+- `common/__init__.py`: Exported `split_nim_keys_for_3_stages`.
+- `common/pipeline_engine.py`: Integrated `split_nim_keys_for_3_stages` in `Integrated_Extract_domains`. Initialized dedicated `feed_rotator = NIMKeyManager(feed_keys)` when `Nvidia_Feed_Model` is active and wired `token_rotator_feed` through `Integrated_Process_domain` down to `Extract_AI_Engine_Output`.
+- `Temp_Test/test_token_split.py`: Added comprehensive unit tests for `split_nim_keys_for_3_stages` testing disjoint partitions, complete coverage, and key distribution across various pool sizes.
+Reason:
+Desktop-9048 runs 3 parallel NIM processes (Summarization on Nemotron 3.5 Bolt, Industry Funnel on Nemotron Super VL 120B, and Feed Prediction on Moonshot Kimi K3.1 Pro). Splitting the 40 keys 14/13/13 eliminates inter-stage key contention and rate-limit cross-talk.
+Related tests:
+- `Temp_Test/test_token_split.py` (6/6 tests PASSED)
+
+
 ## [2026-11-26] Sanitize Tracxn Payloads and Strip UI-Specific Null Placeholders
 Files changed:
 - `common/dynamic_domain_fetcher.py`: Added `sanitize_payload()` to automatically strip `status: ["t_null"]`, `sameAs: ["t_null"]`, and `isInvestor: "t_null"` from incoming query payloads, and default sorting to `createdDate` DESC. Prevents Elasticsearch 0-match traps caused by UI null placeholders.

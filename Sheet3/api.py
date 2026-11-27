@@ -1087,6 +1087,41 @@ async def orchestrate_precrawl_route():
     report = await orchestrate_fleet_precrawl_relay()
     return report
 
+class ExportEligibleRequest(BaseModel):
+    sheet_num: Optional[int] = None
+    snapshot_date: Optional[str] = None
+    trigger_next: bool = True
+
+@app.post("/fleet/export-eligible", dependencies=[Depends(verify_token)])
+async def fleet_export_eligible_route(
+    background_tasks: BackgroundTasks,
+    req: Optional[ExportEligibleRequest] = None
+):
+    folder_name = os.path.basename(BASE_DIR)
+    default_num = int(folder_name.replace("Sheet", "") if "Sheet" in folder_name else 3)
+    from common.key_manager import get_fleet_role
+    if get_fleet_role() == "nim" and (req is None or not req.sheet_num):
+        target_num = 5
+    else:
+        target_num = req.sheet_num if (req and req.sheet_num) else default_num
+
+    snap_date = req.snapshot_date if req else None
+    trig_next = req.trigger_next if req else True
+
+    from common.daily_eligible_exporter import export_sheet_eligible_relay_node
+    background_tasks.add_task(
+        export_sheet_eligible_relay_node,
+        sheet_num=target_num,
+        snapshot_date=snap_date,
+        trigger_next=trig_next,
+    )
+    return {
+        "status": "accepted",
+        "sheet_num": target_num,
+        "folder": folder_name,
+        "message": f"Relay export started in background for node {target_num}"
+    }
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=settings.DISCOVERY_PORT)
