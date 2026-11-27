@@ -110,7 +110,7 @@ class TracxnKeyManager:
         """
         headers = {
             "Content-Type": "application/json",
-            "X-Request-Source": "vishnu.bhagirathan@tracxn.com | Python | Token Validation | Discovery-Engine",
+            "X-Request-Source": "vishnu.bhagirathan@tracxn.com | Python | Token Validation | Discovery Engine 5",
             "accessToken": token,
         }
         payload = {"jobId": "preflight_probe_test"}
@@ -817,15 +817,24 @@ class NIMKeyManager:
     def for_sheet(
         cls,
         sheet_num: int,
-        total_sheets: int = 4,
+        total_sheets: Optional[int] = None,
         keys: Optional[List[str]] = None
     ) -> "NIMKeyManager":
-        sharded = get_sharded_nim_keys(sheet_num, total_sheets=total_sheets, keys=keys)
+        eff_total = total_sheets if total_sheets is not None else get_fleet_sheet_count()
+        sharded = get_sharded_nim_keys(sheet_num, total_sheets=eff_total, keys=keys)
         logger.info(
-            f"Initialized dedicated NIMKeyManager for Sheet {sheet_num}/{total_sheets} "
+            f"Initialized dedicated NIMKeyManager for Sheet {sheet_num}/{eff_total} "
             f"with {len(sharded)} isolated keys (0 cross-process collisions)."
         )
         return cls(keys=sharded)
+
+
+def get_fleet_sheet_count() -> int:
+    """Returns configured number of active fleet sheets from FLEET_SHEETS env (default 4, clamped 1..4)."""
+    raw = os.getenv("FLEET_SHEETS", "").strip()
+    if raw.isdigit():
+        return max(1, min(4, int(raw)))
+    return 4
 
 
 def get_fleet_role() -> str:
@@ -863,7 +872,7 @@ def filter_keys_for_fleet_role(valid_keys: List[str]) -> List[str]:
 
 def get_sharded_nim_keys(
     sheet_num: int,
-    total_sheets: int = 4,
+    total_sheets: Optional[int] = None,
     keys: Optional[List[str]] = None,
     invalid_keys: Optional[Set[str]] = None
 ) -> List[str]:
@@ -874,8 +883,9 @@ def get_sharded_nim_keys(
     all sheets, completely avoiding clustered stalling.
     Ensures 0 key collision across parallel sheet processes.
     """
-    if sheet_num < 1 or sheet_num > total_sheets:
-        raise ValueError(f"sheet_num must be between 1 and {total_sheets}, got {sheet_num}")
+    eff_total = total_sheets if total_sheets is not None else get_fleet_sheet_count()
+    if sheet_num < 1 or sheet_num > eff_total:
+        raise ValueError(f"sheet_num must be between 1 and {eff_total}, got {sheet_num}")
 
     if keys is not None:
         raw_keys = [str(k).strip() for k in keys if str(k).strip()]
@@ -900,13 +910,60 @@ def get_sharded_nim_keys(
     # Partition based on fleet role (main fleet gets 10 keys; NIM fleet gets remaining 39 keys)
     valid_candidates = filter_keys_for_fleet_role(valid_candidates)
 
-    # Interleaved round-robin distribution:
-    # Sheet 1 gets indices 0, 4, 8, ...
-    # Sheet 2 gets indices 1, 5, 9, ...
-    # Sheet 3 gets indices 2, 6, 10, ...
-    # Sheet 4 gets indices 3, 7, 11, ...
-    assigned = [k for idx, k in enumerate(valid_candidates) if idx % total_sheets == (sheet_num - 1)]
+    # Interleaved round-robin distribution across eff_total sheets:
+    # When FLEET_SHEETS=1, Sheet 1 receives 100% of valid keys.
+    assigned = [k for idx, k in enumerate(valid_candidates) if idx % eff_total == (sheet_num - 1)]
     return assigned
+
+
+def split_nim_keys_for_stages(
+    keys: List[str],
+    summary_ratio: float = 0.6,
+) -> tuple[List[str], List[str]]:
+    """
+    Partitions a pool of NIM keys into two disjoint sub-pools:
+    1. summary_keys (default 60% of keys) for Stage 1 Summarization.
+    2. if_keys (default 40% of keys) for Stage 2 Industry Funnel Prediction.
+
+    Ensures 0 key collision between Summarization workers and Industry Funnel workers.
+    """
+    clean_keys = [str(k).strip() for k in keys if str(k).strip()]
+    total = len(clean_keys)
+    if total <= 1:
+        return clean_keys, list(clean_keys)
+
+    num_summary = max(1, min(total - 1, round(total * summary_ratio)))
+    summary_keys = clean_keys[:num_summary]
+    if_keys = clean_keys[num_summary:]
+    return summary_keys, if_keys
+
+
+def split_nim_keys_for_3_stages(
+    keys: List[str],
+) -> tuple[List[str], List[str], List[str]]:
+    """
+    Partitions a pool of NIM keys into three disjoint sub-pools:
+    1. summary_keys (e.g. 14 keys when total=40) for Stage 1 Summarization.
+    2. if_keys (e.g. 13 keys when total=40) for Stage 2 Industry Funnel Prediction.
+    3. feed_keys (e.g. 13 keys when total=40) for Stage 3 Feed Prediction.
+
+    Ensures 0 key collision across all 3 concurrent NIM pipeline stages.
+    """
+    clean_keys = [str(k).strip() for k in keys if str(k).strip()]
+    total = len(clean_keys)
+    if total <= 2:
+        return clean_keys, list(clean_keys), list(clean_keys)
+
+    base = total // 3
+    rem = total % 3
+    n_summary = base + (1 if rem > 0 else 0)
+    n_if = base + (1 if rem > 1 else 0)
+    n_feed = total - n_summary - n_if
+
+    summary_keys = clean_keys[:n_summary]
+    if_keys = clean_keys[n_summary:n_summary + n_if]
+    feed_keys = clean_keys[n_summary + n_if:]
+    return summary_keys, if_keys, feed_keys
 
 
 def get_all_nim_keys(
@@ -939,4 +996,3 @@ def get_all_nim_keys(
 
     # Partition based on fleet role (main fleet gets 10 keys; NIM fleet gets remaining 39 keys)
     return filter_keys_for_fleet_role(valid_candidates)
-
