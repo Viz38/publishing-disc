@@ -1,6 +1,30 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-27] Fleet Tracxn API Key Physical Partitioning & Isolation (10 Main Fleet, 3 Testing Fleet)
+Files changed:
+- `Desktop-5080 (Main Fleet Host 1)` (`/home/tracxn-ds-508/Desktop/publishing-disc/.env`):
+  - Configured `TRACXN_API_TOKENS` with strictly the 10 Main Fleet Tracxn keys (128-char JWT tokens: Token 1, 2, 3, 6, 8, 9, 10, 11, 12, 13).
+  - Backed up prior `.env` to `.env.bak_keys_<timestamp>`.
+- `Desktop-5321 (Main Fleet Host 2)` (`/home/tracxn-ds-532/Desktop/publishing-disc/.env`):
+  - Configured `TRACXN_API_TOKENS` with strictly the 10 Main Fleet Tracxn keys (exact parity with Desktop-5080).
+  - Backed up prior `.env` to `.env.bak_keys_<timestamp>`.
+- `Desktop-9048 (Testing Fleet Host)` (`/home/tracxn-ds-048/Desktop/publishing-disc/.env`):
+  - Configured `TRACXN_API_TOKENS` with strictly the 3 Testing Fleet Tracxn keys (128-char JWT tokens: Token 14, 15, 16).
+  - Backed up prior `.env` to `.env.bak_keys_<timestamp>`.
+- Local Environment (`.env`, `.env.main`, `.env.nim`):
+  - Configured branch-aligned environment files: `.env.main` (10 Main Fleet keys) and `.env.nim` (3 Testing Fleet keys).
+  - Aligned local active `.env` on `NIM-FeedPrediction` branch to strictly use the 3 Testing Fleet keys.
+Reason:
+User directive to partition the 13 active Tracxn API keys: assign 10 keys to the Main Fleet and 3 keys to the Testing Fleet, keep only the respective keys on the respective remote desktops to prevent key overlapping and rate-limit contention, and adjust the local environment across branches to mirror the remote desktop environments.
+Related tests:
+- `Temp_Test/verify_final_key_isolation.py`:
+  - Verified Desktop-5080: exactly 10 tokens (all 128 chars), active `main.py` count = 0 (IDLE).
+  - Verified Desktop-5321: exactly 10 tokens (all 128 chars), active `main.py` count = 0 (IDLE).
+  - Verified Desktop-9048: exactly 3 tokens (all 128 chars), active `main.py` count = 0 (IDLE).
+  - Verified Set Disjointness: Main Fleet keys intersect Testing Fleet keys = empty set (Zero Overlap).
+  - Verified Fleet Status: All 5 engines confirmed 100% STOPPED and IDLE (`ZERO_MAIN_PY`).
+
 ## [2026-11-27] Operations Dashboard: Strict 4-Sheet Workbook Enforcement & Permanent Pruning of Extraneous "Status" Tab
 Files changed:
 - `Google Spreadsheet (1eVKXWnGNsHp8WmoqXo8Pz-mB6f7V7xGleMfd7CcahSA)`:
