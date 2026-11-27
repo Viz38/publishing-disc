@@ -90,6 +90,10 @@ def get_effective_budget(
 
     # weekday(): Monday=0, Tuesday=1, Wednesday=2, Thursday=3, Friday=4, Saturday=5, Sunday=6
     if target_date.weekday() in (5, 6):
+        # Exclude testing / NIM fleet and explicit one-shot runs from weekend 10k fleet reductions
+        if os.getenv("FLEET_ROLE", "main").strip().lower() == "nim" or os.getenv("ONE_SHOT_MODE", "false").strip().lower() in ("true", "1", "yes"):
+            return base_budget
+
         if filter_group_name or filter_name or payload_str:
             cat = classify_filter_category(filter_group_name, filter_name, payload_str)
             if cat == "bright_data_set3":
