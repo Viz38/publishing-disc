@@ -1,6 +1,28 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-27] Enforce Strict Sequential Fleet Pre-Fetch Relay (Sheets 1 -> 2 -> 3 -> 4, Main Fleet Only)
+Files changed:
+- `common/advance_precrawl.py`:
+  - Added automatic sequential relay auto-trigger at completion of each sheet pre-crawl (`sheet_num in (1, 2, 3)` automatically triggers Sheet N+1 via REST endpoint).
+  - Guarantees 100% strict cross-sheet uniqueness: each subsequent sheet queries `/fleet/staged-domains` from preceding sheets and inherits newly claimed domains in its exclusion pool before fetching its budget slice.
+  - Restricted auto-trigger to `fleet_role == "main"` to prevent test fleet interference.
+- `status_dashboard.gs`:
+  - Updated `triggerFleetAdvancePreCrawl()` to trigger Main Fleet Sequential Relay starting at Sheet 1 (`POST /discovery/advance-precrawl` on Engine 1), which cascades Sheet 1 -> 2 -> 3 -> 4 automatically.
+  - Excluded Testing / NIM Fleet from advance pre-crawl per user directive.
+  - Updated `launchFleetAdvancePreCrawlUi()` confirmation dialog and toast messaging.
+  - Deployed to Google Apps Script via `clasp push --force`.
+- Remote Fleet Workers (`Desktop-5080`, `Desktop-5321`, `Desktop-9048`):
+  - Terminated previous parallel in-flight processes and dropped all partial staging files (`next_day_pre_crawl.csv`, `staged_domains.json`, `.precrawl.pid`).
+  - Synced git branches (`origin/main` on 5080/5321, `origin/NIM-FeedPrediction` on 9048).
+  - Launched Sheet 1 (CF-1) isolated background process (PID 2789057) to initiate the sequential relay across the Main Fleet.
+Reason:
+User directive to drop previously fetched domains, exclude NIM fleet, and enforce strictly sequential pre-fetch across the Main Fleet so that sheet-wise domains are guaranteed unique in all edge cases.
+Related tests:
+- `Temp_Test/clean_and_stop_fleet_prefetch.py`: Cleaned all previous staging CSVs/JSONs across all nodes.
+- Verified PID 2789057 running exclusively on Desktop-5080 (0 pre-crawl processes on Desktop-5321 and Desktop-9048).
+- Clasp deployment verified (appsscript.json, status_dashboard.gs pushed).
+
 ## [2026-11-27] Export & Consolidate 26 Nov Fleet Run into Google Sheet (59,135 Domains)
 Files changed:
 - `Google Spreadsheet (1aVuS_KrevqrEaiG27Qig9QpcoiwZ0eSd9y4I5-zTUtc)` -> `"Sheet1"`:
