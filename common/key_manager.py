@@ -853,13 +853,13 @@ def get_fleet_role() -> str:
 def filter_keys_for_fleet_role(valid_keys: List[str]) -> List[str]:
     """
     Partitions NIM keys according to fleet allocation:
-    - Main fleet: receives the first MAIN_FLEET_MAX_NIM_KEYS keys (default 10).
+    - Main fleet: receives the first MAIN_FLEET_MAX_NIM_KEYS keys (default 40).
     - NIM fleet: receives all remaining keys when reading from a shared pool (>40 keys),
       or all keys directly when .env is already physically isolated (<=40 keys).
     """
     role = get_fleet_role()
-    max_main_keys_raw = os.getenv("MAIN_FLEET_MAX_NIM_KEYS", "10").strip()
-    max_main_keys = int(max_main_keys_raw) if max_main_keys_raw.isdigit() else 10
+    max_main_keys_raw = os.getenv("MAIN_FLEET_MAX_NIM_KEYS", "40").strip()
+    max_main_keys = int(max_main_keys_raw) if max_main_keys_raw.isdigit() else 40
 
     if role == "main":
         return valid_keys[:max_main_keys]
