@@ -1,6 +1,25 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-27] Main Fleet: Update GEMINI_API_KEY and GEMINI_TOKEN Credentials
+Files changed:
+- `Desktop-5080 (Main Fleet Host 1)` (`/home/tracxn-ds-508/Desktop/publishing-disc/.env`):
+  - Updated `GEMINI_API_KEY` and `GEMINI_TOKEN` to new active key (`AQ.Ab8...BENxw`).
+  - Verified remote environment variables and confirmed active `main.py` count = 0 (IDLE).
+- `Desktop-5321 (Main Fleet Host 2)` (`/home/tracxn-ds-532/Desktop/publishing-disc/.env`):
+  - Updated `GEMINI_API_KEY` and `GEMINI_TOKEN` to new active key (`AQ.Ab8...BENxw`).
+  - Verified remote environment variables and confirmed active `main.py` count = 0 (IDLE).
+- Local Environment (`.env.main`):
+  - Updated `GEMINI_API_KEY` and `GEMINI_TOKEN` to new active key (`AQ.Ab8...BENxw`).
+Reason:
+User directive to update `GEMINI_API_KEY` and `GEMINI_TOKEN` across the Main Fleet production hosts and local main environment.
+Related tests:
+- `Temp_Test/deploy_gemini_key_main_fleet.py`:
+  - Verified local `.env.main` contains matching 53-character key.
+  - Verified Desktop-5080: `GEMINI_API_KEY` and `GEMINI_TOKEN` match `AQ.Ab8...BENxw`, active `main.py` = 0.
+  - Verified Desktop-5321: `GEMINI_API_KEY` and `GEMINI_TOKEN` match `AQ.Ab8...BENxw`, active `main.py` = 0.
+  - Verified Fleet Endpoints: Sheets 1–4 report `active=False` and `status='idle'`.
+
 ## [2026-11-27] Fleet Tracxn API Key Physical Partitioning & Isolation (10 Main Fleet, 3 Testing Fleet)
 Files changed:
 - `Desktop-5080 (Main Fleet Host 1)` (`/home/tracxn-ds-508/Desktop/publishing-disc/.env`):
