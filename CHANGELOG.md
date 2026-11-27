@@ -1,6 +1,30 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-27] Apply Complete Sheet 1 Master Formatting to 26 Nov Run Spreadsheet
+Files changed:
+- `Google Spreadsheet (1aVuS_KrevqrEaiG27Qig9QpcoiwZ0eSd9y4I5-zTUtc)` -> Tab `Sheet1`:
+  - **Grid Properties**: Configured `frozenRowCount = 2` and `hideGridlines = True` matching Sheet 1 master.
+  - **Row Heights**: Set uniform 21px height across all 59,187 rows (headers and data rows) via `updateDimensionProperties`.
+  - **Column Widths**: Applied exact 57 column widths (pixelSize) extracted directly from Sheet 1 `CF_IF_Engine_Database` metadata (Cols A to BE).
+  - **Row 0 Section Banners & Merges**: Merged and styled 5 section banners with `SOLID_MEDIUM` (width 2) borders, bold 10pt Arial text, middle/center alignment, and exact background fills:
+    - Cols 0–16 (A–Q: INPUT): Soft Blue `#CFE2F3` (`rgb(0.812, 0.886, 0.953)`)
+    - Cols 17–19 (R–T: ENGINE STATS): Soft Green `#D9EAD3` (`rgb(0.851, 0.918, 0.827)`)
+    - Cols 20–33 (U–AH: TECH CRALWER STATUS): Soft Pink/Red `#F4CCCC` (`rgb(0.957, 0.800, 0.800)`)
+    - Cols 34–48 (AI–AW: LLM PREDICTIONS): Yellow `#FFFF00` (`rgb(1.000, 1.000, 0.000)`)
+    - Cols 49–56 (AX–BE: TRACNX APIs): Soft Purple `#D9D2E9` (`rgb(0.851, 0.824, 0.914)`)
+  - **Row 1 Column Headers**: Styled all 57 column headers with Peach/Cream `#FFF2CC` (`rgb(1.000, 0.949, 0.800)`) background, bold 10pt Arial text, middle/center alignment, and solid boundary borders.
+  - **Column Groups & Collapsing**: Added 3 dimension groups and collapsed them by default (`collapsed = True` at `depth = 1`):
+    - Group 1: Cols B–G (Indices 1–7)
+    - Group 2: Cols M–Q (Indices 12–17)
+    - Group 3: Cols Y–AF (Indices 24–32)
+  - **Data Rows Styling**: Applied column-by-column vertical top alignment, clip text wrap strategy, standard Arial 10pt typography, date/time formatting (`d/mmm/yyyy h:mm:ss`) on timestamp columns, centered alignment on status/ID/score columns, and medium section separator borders across all 59,135 data rows.
+Reason:
+User requested formatting target spreadsheet `https://docs.google.com/spreadsheets/d/1aVuS_KrevqrEaiG27Qig9QpcoiwZ0eSd9y4I5-zTUtc/edit?gid=0#gid=0` identically to Sheet 1 (`CF_IF_Engine_Database` in `1IWXqnR52IzpFewE0QS0tlJFT65nJE_fmIoJs8ps9nZo`).
+Related tests:
+- `Temp_Test/apply_sheet1_formatting.py`: Executed Google Sheets API batchUpdate with 125 formatting operations and collapsed dimension groups.
+- Verified live properties on spreadsheet via Google Sheets v4 API: confirmed frozenRowCount=2, hideGridlines=True, 5 merges, 3 collapsed column groups, 21px row heights, and matching column widths and cell colors.
+
 ## [2026-11-27] Enforce Strict Sequential Fleet Pre-Fetch Relay (Sheets 1 -> 2 -> 3 -> 4, Main Fleet Only)
 Files changed:
 - `common/advance_precrawl.py`:
