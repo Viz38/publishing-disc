@@ -140,9 +140,23 @@ def load_payload_rows_for_sheet(
             # Header row 1 is title, header row 2 is columns
             # Data starts at row 3 (index 2)
             transformed_rows = [raw_rows[0], raw_rows[1]]
-            # Budget column for this sheet: Sheet 1: Col I (idx 8), Sheet 2: Col J (idx 9),
-            # Sheet 3: Col K (idx 10), Sheet 4: Col L (idx 11)
-            sheet_col_idx = 7 + resolved_num
+            
+            # Detect schema: 12-column single sheet (Test Fleet) vs 15-column 4-sheet (Production Fleet)
+            header_col_count = len(raw_rows[1])
+            is_single_sheet_schema = (target_ws == TEST_BUDGET_WORKSHEET_NAME) or (header_col_count <= 12)
+            
+            if is_single_sheet_schema:
+                # Test Fleet: strictly 1 sheet (Sheet 1 Budget in Col I / idx 8)
+                sheet_col_idx = 8
+                payload_col_idx = 9            # Col J (New Updated Payload)
+                platform_payload_col_idx = 10  # Col K (Platform Payload)
+                platform_link_col_idx = 11     # Col L (Platform Link)
+            else:
+                # Production Fleet: 4 sheets (Sheet 1-4 Budget in Cols I-L / idx 8-11)
+                sheet_col_idx = 7 + resolved_num
+                payload_col_idx = 12           # Col M (New Updated Payload)
+                platform_payload_col_idx = 13  # Col N (Platform Payload)
+                platform_link_col_idx = 14     # Col O (Platform Link)
 
             for idx in range(2, len(raw_rows)):
                 r = raw_rows[idx]
@@ -163,10 +177,12 @@ def load_payload_rows_for_sheet(
                     if s_str.isdigit():
                         sheet_b_val = int(s_str)
                 
-                # If sheet specific budget cell was not pre-evaluated as int (e.g. raw formula),
-                # calculate it directly via 4-way budget splitting
+                # If sheet specific budget cell was not pre-evaluated as int:
                 if sheet_b_val is None:
-                    sheet_b_val = get_sheet_budget_slice(overall_b, resolved_num)
+                    if is_single_sheet_schema:
+                        sheet_b_val = overall_b
+                    else:
+                        sheet_b_val = get_sheet_budget_slice(overall_b, resolved_num)
 
                 # Build standard row compatible with existing ingestor/precrawl:
                 # Col 0: Filter Group Name
@@ -192,9 +208,9 @@ def load_payload_rows_for_sheet(
                     r[7] if len(r) > 7 else "All",
                     "",
                     "",
-                    r[12] if len(r) > 12 else "",
-                    r[13] if len(r) > 13 else "",
-                    r[14] if len(r) > 14 else "",
+                    r[payload_col_idx] if len(r) > payload_col_idx else "",
+                    r[platform_payload_col_idx] if len(r) > platform_payload_col_idx else "",
+                    r[platform_link_col_idx] if len(r) > platform_link_col_idx else "",
                 ]
                 transformed_rows.append(new_r)
 
