@@ -1,6 +1,28 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-27] Allocate 500 Test Domains & Configure Desktop-9048 for One-Shot Execution
+Files changed:
+- `Google Spreadsheet (Operations Dashboard - 1eVKXWnGNsHp8WmoqXo8Pz-mB6f7V7xGleMfd7CcahSA)` -> Tab `Test Fleet Budget Allocation`:
+  - Updated Sheet 1 Budget across active Bright Data Processing sub-filters to total exactly 500 domains:
+    - Row 10 (`Processed`): 100
+    - Row 11 (`Processed (DELETED/IRRELEVANT)`): 100
+    - Row 12 (`Unprocessed`): 300
+    - Verified total allocated budget via `load_payload_rows_for_sheet` = 500.
+- `common/bulk_pusher.py`:
+  - Updated `handle_5am_sheet_cleanup` to check `KEEP_SHEET_DATA` and `ONE_SHOT_MODE` environment flags, preserving all predictions and movement writeback in the test sheet (`1XT_GlvBf2BGO4cEiskpUsK2Fzc5PzB-tcRHFMubDXbk`) and preventing 11:30 PM daily sheet clearing.
+- `common/daily_lifecycle.py`:
+  - Updated `should_trigger_daily_guardian` to return `(False, "one_shot_mode_already_completed")` once tomorrow's one-shot test run finishes, halting continuous 24x7 re-runs.
+- `Sheet1/api.py`:
+  - Updated Section 5 self-healing watchdog to prevent automatic pipeline restarts when `ONE_SHOT_MODE` is active and pipeline status is `succeeded`.
+- `common/tracxn_domain_ingestor.py`:
+  - Fixed `NameError: name 'payload_ws' is not defined` when updating payload coverage cells when payloads are sourced dynamically from Operations Dashboard.
+Reason:
+User requested a one-day test run of 500 domains on the NIM fleet (Desktop-9048) to evaluate prediction accuracy tomorrow. Configured the fleet to run strictly once, process the 500 domains, keep all data in the Google Sheet, and permanently stop without further pre-crawls or 24x7 looping.
+Related tests:
+- `Temp_Test/update_test_budget.py`
+- `Temp_Test/test_one_shot_and_keep_data.py`
+
 ## [2026-11-27] Install Headless Midnight Safety Net Crontabs & Verify 24x7 Automation
 Files changed:
 - `Desktop-5080 (Primary Production Host)`:

@@ -141,6 +141,11 @@ def should_trigger_daily_guardian(
     if not saved_state:
         return (True, "no_previous_state")
 
+    is_one_shot = os.getenv("ONE_SHOT_MODE", "false").strip().lower() in ("true", "1", "yes")
+    if is_one_shot and saved_state:
+        if saved_state.get("status") in ("completed", "succeeded") or saved_state.get("termination_reason") == "completed":
+            return (False, "one_shot_mode_already_completed")
+
     current_date_str = current_dt.strftime("%Y-%m-%d")
     last_run_date = saved_state.get("date_ist")
     last_status = saved_state.get("status")

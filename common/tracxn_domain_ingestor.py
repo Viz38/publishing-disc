@@ -708,17 +708,18 @@ class TracxnDomainIngestor:
                 if custom_payload_template and "funnelId" not in custom_payload_template.get("filter", {}):
                     break
 
-            # Update coverage in payload tab: Col 15 (O), Col 16 (P), Col 17 (Q)
-            # 1-indexed row: idx + 1
-            payload_row_num = idx + 1
-            update_range = f"O{payload_row_num}:Q{payload_row_num}"
-            try:
-                retry_call(lambda: payload_ws.update(
-                    range_name=update_range,
-                    values=[[cf_coverage, backlog_coverage, domain_added_count]]
-                ))
-            except Exception as e:
-                logger.warning(f"[{s_name}] Could not update payload coverage cells: {e}")
+            # Update coverage in payload tab if local payload worksheet exists
+            payload_ws = locals().get("payload_ws")
+            if payload_ws:
+                payload_row_num = idx + 1
+                update_range = f"O{payload_row_num}:Q{payload_row_num}"
+                try:
+                    retry_call(lambda: payload_ws.update(
+                        range_name=update_range,
+                        values=[[cf_coverage, backlog_coverage, domain_added_count]]
+                    ), max_retries=2, delay=1)
+                except Exception as e:
+                    logger.warning(f"[{s_name}] Could not update payload coverage cells: {e}")
 
         # 4. Post-Ingestion Audit & Criteria Verification across candidate rows
         if new_rows_57:

@@ -268,21 +268,26 @@ async def _daily_5am_ist_watchdog():
                     asyncio.create_task(run_clear_and_fetch_task(settings.CF_SHEET_ID))
 
             # 5. Autonomous Self-Healing Pipeline Launcher (Runs outside maintenance cutoff)
+            is_one_shot = os.getenv("ONE_SHOT_MODE", "false").strip().lower() in ("true", "1", "yes")
             if not is_pre_cutoff_window(now_ist) and not is_5am_ist_cutoff(now_ist):
                 if state.get("active_pid") is None and state.get("current_task") is None:
-                    prog = state.get("progress", {})
-                    total_domains = prog.get("total", 0)
-                    current_done = prog.get("fully_completed", 0) or prog.get("current", 0)
-                    if total_domains > 0 and current_done < total_domains:
-                        now_ts = time.time()
-                        if now_ts - last_auto_start_attempt_ts >= 60:
-                            last_auto_start_attempt_ts = now_ts
-                            logger.info(
-                                f"🌟 [Self-Healing Watchdog] Unstarted domains detected in sheet "
-                                f"({current_done}/{total_domains} completed). Auto-starting pipeline from Row 3..."
-                            )
-                            pipeline_req = RunRequest(start_row=3, mode="full", sheet_id=settings.CF_SHEET_ID)
-                            asyncio.create_task(run_pipeline_task(pipeline_req))
+                    # In one-shot mode, do not self-heal or restart if pipeline succeeded
+                    if is_one_shot and state.get("status") == "succeeded":
+                        pass
+                    else:
+                        prog = state.get("progress", {})
+                        total_domains = prog.get("total", 0)
+                        current_done = prog.get("fully_completed", 0) or prog.get("current", 0)
+                        if total_domains > 0 and current_done < total_domains:
+                            now_ts = time.time()
+                            if now_ts - last_auto_start_attempt_ts >= 60:
+                                last_auto_start_attempt_ts = now_ts
+                                logger.info(
+                                    f"🌟 [Self-Healing Watchdog] Unstarted domains detected in sheet "
+                                    f"({current_done}/{total_domains} completed). Auto-starting pipeline from Row 3..."
+                                )
+                                pipeline_req = RunRequest(start_row=3, mode="full", sheet_id=settings.CF_SHEET_ID)
+                                asyncio.create_task(run_pipeline_task(pipeline_req))
 
             # Supervisor: check if active_pid died unexpectedly while state was running
             active_pid = state.get("active_pid")

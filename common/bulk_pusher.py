@@ -150,6 +150,15 @@ async def handle_5am_sheet_cleanup(
         )
         return False, "csv_only_mode"
 
+    if os.getenv("KEEP_SHEET_DATA", "false").strip().lower() in ("true", "1", "yes") or (
+        os.getenv("FLEET_ROLE", "").strip().lower() == "nim" and os.getenv("ONE_SHOT_MODE", "false").strip().lower() in ("true", "1", "yes")
+    ):
+        logging.info(
+            f"ℹ️ [11:30 PM Cutoff] KEEP_SHEET_DATA / ONE_SHOT_MODE active. "
+            f"Preserving existing sheet data in {sheet_id}."
+        )
+        return False, "keep_sheet_data_enabled"
+
     try:
         sheet = await client.open_by_key(sheet_id)
         worksheet = await sheet.worksheet(sheet_name)
