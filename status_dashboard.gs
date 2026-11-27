@@ -626,7 +626,7 @@ function renderMainFleetDashboard(ss, timestampStr, token) {
   sheet.setRowHeight(1, 40);
 
   sheet.getRange('A2:J2').merge();
-  sheet.getRange('A2').setValue('Last Synced: ' + timestampStr + ' (Auto Refreshed Every 15Min)  |  Fleet State: ' + activePipelines + '/4 Pipelines Active  |  10 Dedicated NIM Keys')
+  sheet.getRange('A2').setValue('Last Synced: ' + timestampStr + ' (Auto Refreshed Every 15Min)  |  Fleet State: ' + activePipelines + '/4 Pipelines Active  |  40 Dedicated NIM Keys (10 per Sheet)')
     .setBackground('#1E293B')
     .setFontColor('#94A3B8')
     .setFontFamily('Arial')
@@ -670,7 +670,7 @@ function renderMainFleetDashboard(ss, timestampStr, token) {
       rangeTitle: 'I4:J4',
       rangeVal: 'I5:J5',
       title: 'ACTIVE NIM KEYS',
-      val: maxActiveNimKeys + ' / 10 Active',
+      val: maxActiveNimKeys + ' / 40 Active',
       bg: '#EFF6FF'
     }
   ];
@@ -918,7 +918,7 @@ function renderMainFleetDashboard(ss, timestampStr, token) {
     avgRam,
     fleetOverallHealth,
     maxActiveTcKeys + ' / 10 Active Tokens',
-    maxActiveNimKeys + ' / 10 Active Keys'
+    maxActiveNimKeys + ' / 40 Active Keys'
   ];
 
   sheet.getRange(fleetTotalIdx, 1, 1, fleetHeaders.length).setValues([fleetSummaryRow])
@@ -1144,7 +1144,7 @@ function renderTestingFleetDashboard(ss, timestampStr, token) {
     }
 
     if (bestData && bestData.active_tc_keys) maxActiveTcKeys = Math.max(maxActiveTcKeys, bestData.active_tc_keys);
-    maxActiveNimKeys = 40; // Desktop-9048 is allocated all 40 dedicated keys
+    maxActiveNimKeys = 10; // Desktop-9048 is allocated 10 dedicated keys
 
     totalCurrent += completedCount;
     totalMax += tot;
@@ -1197,7 +1197,7 @@ function renderTestingFleetDashboard(ss, timestampStr, token) {
   sheet.setRowHeight(1, 40);
 
   sheet.getRange('A2:K2').merge();
-  sheet.getRange('A2').setValue('Last Synced: ' + timestampStr + ' (Auto Refreshed Every 15Min)  |  Fleet State: ' + activePipelines + '/1 Pipeline Active  |  Dedicated 40 NIM Keys (Zero Collision)')
+  sheet.getRange('A2').setValue('Last Synced: ' + timestampStr + ' (Auto Refreshed Every 15Min)  |  Fleet State: ' + activePipelines + '/1 Pipeline Active  |  Dedicated 10 NIM Keys (Zero Collision)')
     .setBackground('#1E293B')
     .setFontColor('#94A3B8')
     .setFontFamily('Arial')
@@ -1241,7 +1241,7 @@ function renderTestingFleetDashboard(ss, timestampStr, token) {
       rangeTitle: 'I4:K4',
       rangeVal: 'I5:K5',
       title: 'ACTIVE NIM KEYS',
-      val: '40 Dedicated Keys (14 Sum / 13 IF / 13 Feed)',
+      val: '10 Dedicated Keys (4 Sum / 3 IF / 3 Feed)',
       bg: '#EFF6FF'
     }
   ];
@@ -1456,7 +1456,7 @@ function renderTestingFleetDashboard(ss, timestampStr, token) {
     var workersStr = d.isOnline ? (workersCount + ' Workers (~' + workersCount + '/sheet)') : '0 Workers';
     var healthStr = d.isOnline ? (d.cpuUsage > 80 || d.ramUsage > 80 ? '⚠️ High Load' : '🟢 Healthy') : 'Offline';
     var tcTokensStr = d.isOnline ? (d.activeTcKeys + ' / 3 Active Tokens') : '0 / 3 Active Tokens';
-    var nimKeysStr = '40 Dedicated Keys (14 Sum / 13 IF / 13 Feed)';
+    var nimKeysStr = '10 Dedicated Keys (4 Sum / 3 IF / 3 Feed)';
 
     fleetRows.push([
       dName,
