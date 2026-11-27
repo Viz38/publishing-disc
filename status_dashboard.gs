@@ -1824,16 +1824,16 @@ function stopAllSheets() {
 
 /**
  * Headless 11:05 PM Automated Trigger for Fleet Advance Pre-Crawl.
- * Kicks off the automated Sequential Relay across Main Fleet (Sheet 1 -> 2 -> 3 -> 4)
+ * Kicks off the automated Sequential Relay across Main Fleet ONLY (Sheet 1 -> 2 -> 3 -> 4)
  * to guarantee 100% cross-sheet domain uniqueness in all edge cases.
- * Testing Fleet (Desktop-9048) runs in parallel on its isolated machine.
+ * Per user directive: Testing / NIM Fleet is excluded.
  */
 function triggerFleetAdvancePreCrawl() {
-  Logger.log('⏰ Starting automated 11:05 PM Sequential Fleet Advance Pre-Crawl Relay...');
+  Logger.log('⏰ Starting automated 11:05 PM Sequential Fleet Advance Pre-Crawl Relay (Main Fleet ONLY)...');
   var token = STATUS_CONFIG.AUTH_TOKEN;
   var results = [];
 
-  // 1. Kick off Main Fleet Sequential Relay starting at Sheet 1 (CF-1)
+  // Kick off Main Fleet Sequential Relay starting at Sheet 1 (CF-1)
   // Sheet 1 automatically triggers Sheet 2 upon completion, which triggers Sheet 3, which triggers Sheet 4.
   var mainTarget = (STATUS_CONFIG.TARGET_SHEETS && STATUS_CONFIG.TARGET_SHEETS.length > 0) ? STATUS_CONFIG.TARGET_SHEETS[0] : null;
   if (mainTarget) {
@@ -1858,29 +1858,6 @@ function triggerFleetAdvancePreCrawl() {
     }
   }
 
-  // 2. Launch Testing Fleet Pre-Crawl in parallel on Desktop-9048
-  var nimTarget = (STATUS_CONFIG.NIM_TARGET_SHEETS && STATUS_CONFIG.NIM_TARGET_SHEETS.length > 0) ? STATUS_CONFIG.NIM_TARGET_SHEETS[0] : null;
-  if (nimTarget) {
-    var nimUrl = nimTarget.endpoints[0].url;
-    var nimName = nimTarget.shortName || nimTarget.name;
-    Logger.log('▶ Launching Testing Fleet Advance Pre-Crawl on ' + nimName + ' (' + nimUrl + ')...');
-    try {
-      var nResp = UrlFetchApp.fetch(nimUrl + '/discovery/advance-precrawl', {
-        method: 'post',
-        contentType: 'application/json',
-        headers: { 'Authorization': 'Bearer ' + token },
-        payload: JSON.stringify({ sheet_id: nimTarget.sheetId }),
-        muteHttpExceptions: true
-      });
-      var nCode = nResp.getResponseCode();
-      Logger.log(nimName + ' Initiation (' + nCode + '): ' + nResp.getContentText());
-      results.push({ sheet: nimName, code: nCode, response: nResp.getContentText() });
-    } catch(nErr) {
-      Logger.log('❌ Error initiating Testing Fleet: ' + nErr.message);
-      results.push({ sheet: nimName, code: 500, error: nErr.message });
-    }
-  }
-
   return results;
 }
 
@@ -1888,11 +1865,11 @@ function launchFleetAdvancePreCrawlUi() {
   var ui = SpreadsheetApp.getUi();
   var confirm = ui.alert(
     '🌐 Launch Tomorrow\'s Sequential Pre-Crawl Relay',
-    'Are you sure you want to launch the advance pre-crawl for tomorrow?\n\n' +
+    'Are you sure you want to launch the advance pre-crawl for tomorrow across the Main Fleet?\n\n' +
     '• Main Fleet executes a STRICT SEQUENTIAL RELAY (Sheet 1 -> 2 -> 3 -> 4) to ensure 100% domain uniqueness.\n' +
     '• Each sheet reserves its budget from Production Budget Allocation and immediately excludes its domains from subsequent sheets.\n' +
-    '• Tech Crawler Job IDs are generated in parallel in the background on respective hosts.\n' +
-    '• Testing Fleet (NIM Sheet 1 on Desktop-9048) runs in parallel on its isolated machine.\n' +
+    '• Tech Crawler Job IDs are generated in the background on respective hosts.\n' +
+    '• Testing Fleet (NIM Fleet) is excluded.\n' +
     '• Current active pipelines will NOT be disrupted.',
     ui.ButtonSet.YES_NO
   );
