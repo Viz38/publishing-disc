@@ -1,6 +1,47 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-27] Master Production Budget Allocation & 4-Way Fleet Partitioning Engine
+Files changed:
+- `Google Spreadsheet (1eVKXWnGNsHp8WmoqXo8Pz-mB6f7V7xGleMfd7CcahSA)`:
+  - Created and formatted new master worksheet `"Production Budget Allocation"` (`gid=141654944`) containing all 321 unique payload definitions aggregated across Sheets 1-4.
+  - Added dynamic 4-way budget splitting formulas in Columns I, J, K, L (`Sheet 1 Budget`, `Sheet 2 Budget`, `Sheet 3 Budget`, `Sheet 4 Budget`) calculating fair integer partitions from Col F (`Overall Fleet Budget`).
+- `common/budget_allocator.py`:
+  - Implemented `calculate_4way_budget(overall_budget)` and `get_sheet_budget_slice(overall_budget, sheet_num)` ensuring exact integer conservation ($\sum B_i = B$) and balanced distribution ($\max(B_i) - \min(B_i) \le 1$).
+  - Implemented `load_payload_rows_for_sheet()` to fetch central allocations from the Operations Dashboard for Main Fleet Sheets 1-4 with resilient local fallback for testing/NIM sheets.
+- `common/tracxn_domain_ingestor.py`:
+  - Updated payload reading logic to use `load_payload_rows_for_sheet()` instead of reading local sheet payload tabs.
+- `common/advance_precrawl.py`:
+  - Updated pre-crawl domain fetcher to consume payload definitions and budget slices from `"Production Budget Allocation"` for Main Fleet sheets.
+Reason:
+User directive to centralize fleet budgets into a single master sheet `"Production Budget Allocation"` in `1eVKXWnGNsHp8WmoqXo8Pz-mB6f7V7xGleMfd7CcahSA`, allowing fleet-wide budget management while each of the 4 main fleet engines processes an equal 4-way partition.
+Related tests:
+- `Temp_Test/test_production_budget_allocation.py`: Unit tests for 4-way budget splitting math, remainder distributions, invariants, and sheet resolution (7 tests passed).
+- `Temp_Test/verify_live_budget_integration.py`: End-to-end integration test validating live loading of 321 master payloads across Sheets 1-4, row-by-row budget slice math, and NIM sheet isolation.
+
+## [2026-11-27] Operations Dashboard Fix: 2-Sheet Architecture, Persistent Supervisors & Exact Rolling Stage Count Model
+Files changed:
+- `Google Spreadsheet (1eVKXWnGNsHp8WmoqXo8Pz-mB6f7V7xGleMfd7CcahSA)`:
+  - Purged legacy `"Status"` worksheet (`gid=442005353`). The workbook now strictly contains only two sheets: `"Production Fleet"` (`gid=1570465616`) and `"Testing Fleet"` (`gid=2106361058`).
+- `status_dashboard.gs`:
+  - Enforced offline status boundary: A sheet or host displays `🔴 OFFLINE` strictly when the API endpoint is completely unreachable (`bestData === null`).
+  - Active/Idle/Completed resolution: When the API responds, idle pipelines display `⏸️ IDLE`, running engines display `🟢 RUNNING`, and fully completed runs display `✅ COMPLETED`.
+  - Rolling Stage Count Models:
+    - Main Fleet (10 Columns): $\text{TC } (\text{Resolved}/\text{Total}) \longrightarrow \text{NIM } (\text{Resolved}/\text{TC Success}) \longrightarrow \text{Gemini } (\text{Predictions}/\text{NIM Success}) \longrightarrow \text{Tracxn } (\text{Moved}/\text{Gemini Predictions})$.
+    - Testing Fleet (11 Columns): $\text{TC } (\text{Resolved}/\text{Total}) \longrightarrow \text{NIM Summary } (\text{Summarized}/\text{TC Success}) \longrightarrow \text{NIM Industry } (\text{IF Identified}/\text{Summary Success}) \longrightarrow \text{NIM Feed } (\text{Feed Identified}/\text{IF Resolved}) \longrightarrow \text{Tracxn } (\text{Moved}/\text{Feed Resolved})$.
+  - Table 2 Device Health: Accurately reflects host health (`🟢 Online` / `🟢 Healthy`) with live CPU% and RAM% telemetry without offline false-positives.
+  - Pushed to Apps Script container `11P99Kmn-Eg1m4dylSR924ekGcY0OMWcsVYiJrDo48ThEAZD4ynBsaqex` via clasp.
+- Fleet Host Systemd Services & API Supervisors:
+  - Enabled and restarted background API supervisors on Desktop-5080 (`discovery-cf1`, `discovery-cf2`), Desktop-5321 (`discovery-cf3`, `discovery-filterv2`), and Desktop-9048 (`runner.sh`).
+  - All 5 endpoints respond with HTTP 200 OK and live system/stage telemetry.
+Reason:
+User directive to fix Operations Dashboard `1eVKXWnGNsHp8WmoqXo8Pz-mB6f7V7xGleMfd7CcahSA` so that exact live counts are always displayed, false-offline badges are eliminated, the workbook strictly contains only "Production Fleet" and "Testing Fleet", and rolling stage count models are exact across both Main and NIM fleets.
+Related verification:
+- `Temp_Test/purge_legacy_status_tab.py`: Verified legacy tab purged, strictly 2 worksheets remain.
+- `Temp_Test/check_endpoints.py`: All 5 endpoints returning HTTP 200 OK.
+- `Temp_Test/render_both_dashboards.py`: Refreshed both dashboards via Sheets API v4.
+- `Temp_Test/verify_dashboard_values.py`: Verified exact cell ranges, formulas, and stage counts in both worksheets.
+
 ## [2026-11-27] Cross-Fleet 7-Day Cumulative Deduplication & Sequential Relay Exporter
 Files changed:
 - `common/fleet_deduplicator.py`:

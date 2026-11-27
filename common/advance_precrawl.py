@@ -251,8 +251,13 @@ def fetch_domains_for_sheet(
     km = key_manager or TracxnKeyManager()
     gc = get_gspread_client()
     sh = retry_call(lambda: gc.open_by_key(sheet_id))
-    payload_ws = retry_call(lambda: sh.worksheet("CF_IF Engine - Input Payload"))
-    payload_rows = retry_call(lambda: payload_ws.get_all_values())
+
+    # Read Payloads (from master 'Production Budget Allocation' for Main Fleet, or local tab fallback)
+    from common.budget_allocator import load_payload_rows_for_sheet
+    payload_rows, source_desc = retry_call(
+        lambda: load_payload_rows_for_sheet(gc, sheet_id, s_name)
+    )
+    logger.info(f"[{s_name}] Pre-crawl payloads loaded from {source_desc} ({len(payload_rows)-2} definition rows)")
 
     # Calculate total budget from payload tab if target_count is default or None
     # Advance pre-crawl prepares domains for the NEXT day's run (tomorrow in IST)
