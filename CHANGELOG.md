@@ -1,6 +1,31 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-27] Reallocate NIM Tokens: 40 Dedicated Keys to Main Fleet & 10 Dedicated Keys to NIM Fleet
+Files changed:
+- `common/key_manager.py`:
+  - Updated `filter_keys_for_fleet_role()` default `MAIN_FLEET_MAX_NIM_KEYS` from `10` to `40`, allowing the production Main Fleet to consume the full 40-token pool.
+- `.env.main`:
+  - Populated with 40 clean, active, non-blacklisted NVIDIA NIM API keys (39 keys migrated from testing pool + 1 verified fresh key `nvapi-uRTlF13c6...` replacing blacklisted stalled token `nvapi-qvDHzUksM...`).
+  - Added `MAIN_FLEET_MAX_NIM_KEYS="40"`.
+- `.env.nim`:
+  - Populated with 10 clean, active, non-blacklisted NVIDIA NIM API keys (`nvapi-HuJpLM...` to `nvapi-DgPJlW...`) dedicated for Desktop-9048 Sheet 1.
+- `status_dashboard.gs`:
+  - Production Fleet dashboard: updated header banner to `40 Dedicated NIM Keys (10 per Sheet)` and KPI cards/summary rows to `40 Active Keys`.
+  - Testing Fleet dashboard: updated header banner to `Dedicated 10 NIM Keys (Zero Collision)` and KPI cards/summary rows to `10 Dedicated Keys (4 Sum / 3 IF / 3 Feed)`.
+- `Desktop-5080` & `Desktop-5321` (`~/Desktop/publishing-disc/.env`):
+  - Deployed 40-token pool and restarted uvicorn pipelines across Sheet 1 (:8769), Sheet 2 (:8770), Sheet 3 (:8771), Sheet 4 (:8772).
+  - Verified each sheet reports `total_nim_keys: 40` and `active_nim_keys: 10` (round-robin interleaved, 0 collision).
+- `Desktop-9048` (`~/Desktop/publishing-disc/.env` & `Sheet1/.progress.json`):
+  - Deployed 10-token pool and restarted uvicorn pipeline on Sheet 1 (:8769).
+  - Verified pipeline reports `total_nim_keys: 10` and `active_nim_keys: 10`.
+Reason:
+User requested switching the NIM token pool so the Main Fleet operates with 40 unique tokens (10 per sheet across the 4 production sheets) for full-scale 24x7 production, and the NIM testing fleet operates with 10 dedicated tokens for its one-shot 500-domain accuracy test run.
+Related tests:
+- `Temp_Test/test_nim_key_switching.py`
+- `Temp_Test/deploy_main_fleet.py`
+- `Temp_Test/deploy_nim_fleet.py`
+
 ## [2026-11-27] Allocate 500 Test Domains & Configure Desktop-9048 for One-Shot Execution
 Files changed:
 - `Google Spreadsheet (Operations Dashboard - 1eVKXWnGNsHp8WmoqXo8Pz-mB6f7V7xGleMfd7CcahSA)` -> Tab `Test Fleet Budget Allocation`:
