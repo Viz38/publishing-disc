@@ -1,6 +1,30 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-27] Operations Dashboard: Strict 4-Sheet Workbook Enforcement & Permanent Pruning of Extraneous "Status" Tab
+Files changed:
+- `Google Spreadsheet (1eVKXWnGNsHp8WmoqXo8Pz-mB6f7V7xGleMfd7CcahSA)`:
+  - Deleted extraneous worksheet `"Status"` (`id: 1505348685`) via Google Sheets API.
+  - Locked workbook to strictly four designated worksheets:
+    1. `"Production Fleet"` (`id: 1570465616`)
+    2. `"Testing Fleet"` (`id: 2106361058`)
+    3. `"Production Budget Allocation"` (`id: 141654944`)
+    4. `"Test Fleet Budget Allocation"` (`id: 178208703`)
+- `status_dashboard.gs`:
+  - Implemented `enforceExactFourSheets(ss)` that runs at the beginning and end of every dashboard refresh lifecycle (`updateFleetDashboards()`) and during `onOpen()`.
+  - Added safe sheet focus activation (`ss.setActiveSheet(prodSheet)`) prior to deletion loops, eliminating permission and browser focus lockouts when removing non-whitelisted tabs.
+  - Defined explicit whitelist `ALLOWED_WORKBOOK_SHEETS`: strictly `['Production Fleet', 'Testing Fleet', 'Production Budget Allocation', 'Test Fleet Budget Allocation']`. Any other sheet (such as legacy `"Status"`) is automatically and safely pruned.
+  - Renamed primary entrypoint to `updateFleetDashboards()` while maintaining backward-compatible alias `updateStatusSheet()` for existing time-driven triggers.
+  - Deployed updated script directly to container-bound Apps Script project `11P99Kmn-Eg1m4dylSR924ekGcY0OMWcsVYiJrDo48ThEAZD4ynBsaqex` via `clasp push --force`.
+- `Temp_Test/test_dashboard_optimization.py`:
+  - Updated unit test `test_strict_four_sheets_enforcement` to validate presence of `enforceExactFourSheets`, allowed sheet names, and `ss.deleteSheet` calls. All 8/8 tests PASSED.
+Reason:
+User directive to eliminate the extraneous `"Status"` tab that was being recreated on refresh, rewrite `status_dashboard.gs` so strictly only `"Production Fleet"` and `"Testing Fleet"` are refreshed, and enforce that the workbook strictly contains only the 4 allowed sheets (`"Production Fleet"`, `"Testing Fleet"`, `"Production Budget Allocation"`, and `"Test Fleet Budget Allocation"`) and no more.
+Related tests:
+- `Temp_Test/test_dashboard_optimization.py`: 8/8 unit tests PASSED.
+- Live verification via `gspread`: Confirmed workbook `1eVKXWnGNsHp8WmoqXo8Pz-mB6f7V7xGleMfd7CcahSA` contains strictly the 4 designated sheets.
+- Fleet verification: All 5 engines confirmed 100% STOPPED and IDLE (`ZERO_MAIN_PY`).
+
 ## [2026-11-27] Multi-Fleet Budget Integration: Test Fleet Budget Allocation for NIM & Purge of Local Payload Tabs
 Files changed:
 - `common/budget_allocator.py`:
