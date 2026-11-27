@@ -1,6 +1,24 @@
 # CHANGELOG
 All notable changes to this project are documented here.
 
+## [2026-11-27] Bulk Move 10,692 Pruned Run Domains to Central Funnel (Backlog) & Writeback
+Files changed:
+- `Temp_Test/bulk_move_sheet_to_backlog.py`:
+  - High-concurrency async movement engine utilizing connection-pooled sessions across 16 active Tracxn API tokens.
+  - Resolved `domainProfileId` for 10,627 / 10,692 candidate leads via Tracxn `/api/2.2/domains` in batch queries (size: 100).
+  - Enforced strict single-token session locks across `force-assign` and `move` calls, eliminating 422 user mismatch rejections.
+  - Handled multi-state lifecycle recovery: automated `unsnooze` for leads in SNOOZED/MARKED_IRRELEVANT states, and automated single-domain `funneltransactions` lookup + assignment for leads previously routed to downstream Industry or Publishing funnels.
+  - Successfully moved 10,627 candidate leads to `Central Funnel (Backlog)` (`64197f01a6dcff6572453ead`).
+  - Recorded 100% of operations into append-only crash-resilient journal `Temp_Test/moved_to_backlog_journal.jsonl`.
+- `Google Spreadsheet (1aVuS_KrevqrEaiG27Qig9QpcoiwZ0eSd9y4I5-zTUtc)` -> Tab `Sheet1`:
+  - Populated **Column L (`Domain Profile ID`)** for all 10,692 rows (`Sheet1!L3:L10694`) with their verified Tracxn entity IDs.
+  - Populated **Column AY (`CF->IF Movement`)** with `DONE` (or `FAILED` for 65 unregistered domains) and **Column AZ (`Movement Time`)** with `27/Nov/2026 11:57:45`.
+Reason:
+User requested moving all remaining 10,692 candidate domains from the pruned 26 Nov run sheet into Central Funnel (Backlog) and writing back the resolved entity `domainProfileId` into Column L.
+Related tests:
+- `Temp_Test/bulk_move_sheet_to_backlog.py`: Ran full batch execution resulting in 10,627 OK, 0 API movement errors, 65 skipped due to `NO_DP_ID`.
+- Verified live spreadsheet writeback across multiple ranges (`L3:AZ7`, `L500:AZ504`, `L10690:AZ10694`).
+
 ## [2026-11-27] Apply Complete Sheet 1 Master Formatting to 26 Nov Run Spreadsheet
 Files changed:
 - `Google Spreadsheet (1aVuS_KrevqrEaiG27Qig9QpcoiwZ0eSd9y4I5-zTUtc)` -> Tab `Sheet1`:
